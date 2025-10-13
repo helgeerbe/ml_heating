@@ -5,4 +5,4 @@ scikit-learn
 joblib
 requests
 python-dotenv
-
+lightgbm
