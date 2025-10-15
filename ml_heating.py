@@ -11,12 +11,10 @@ import pickle
 import pandas as pd
 import numpy as np
 from sklearn.exceptions import NotFittedError
-from sklearn.linear_model import Ridge
-from sklearn.preprocessing import StandardScaler
-import joblib
 from influxdb_client import InfluxDBClient
 import requests
 from dotenv import load_dotenv
+from river import compose, preprocessing, ensemble, metrics
 
 load_dotenv()
 
@@ -35,14 +33,15 @@ INFLUX_ORG: str = os.getenv("INFLUX_ORG", "erbehome")
 INFLUX_BUCKET: str = os.getenv("INFLUX_BUCKET", "home_assistant/autogen")
 
 # Model and state files
-MODEL_FILE: str = os.getenv("MODEL_FILE", "/opt/ml_heating/ml_model.pkl")
-SCALER_FILE: str = os.getenv("SCALER_FILE", "/opt/ml_heating/ml_scaler.pkl")
+MODEL_FILE: str = os.getenv("MODEL_FILE", "/opt/ml_heating/river_model.pkl")
 STATE_FILE: str = os.getenv("STATE_FILE", "/opt/ml_heating/ml_state.pkl")
 HISTORY_STEPS: int = int(os.getenv("HISTORY_STEPS", "6"))
 HISTORY_STEP_MINUTES: int = int(os.getenv("HISTORY_STEP_MINUTES", "10"))
-PREDICTION_HORIZON_STEPS: int = int(os.getenv("PREDICTION_HORIZON_STEPS", "6"))
+PREDICTION_HORIZON_STEPS: int = int(
+    os.getenv("PREDICTION_HORIZON_STEPS", "24")
+)  # 24 steps * 5 min = 120 min
 PREDICTION_HORIZON_MINUTES: int = (
-    PREDICTION_HORIZON_STEPS * HISTORY_STEP_MINUTES
+    PREDICTION_HORIZON_STEPS * 5  # Now based on 5-minute intervals
 )
 
 # Target indoor temp
@@ -86,39 +85,81 @@ OPENWEATHERMAP_TEMP_ENTITY_ID: str = os.getenv(
 DEBUG: bool = os.getenv("DEBUG", "0") == "1"
 
 # InfluxDB client
-client: InfluxDBClient = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
+client: InfluxDBClient = InfluxDBClient(
+    url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG
+)
 query_api: Any = client.query_api()
 
-# Load or create model and scaler
+# Load or create model
 try:
-    model: Any = joblib.load(MODEL_FILE)
-    print("Model loaded")
-except FileNotFoundError:
-    model = Ridge(alpha=0.1, random_state=42)
-    print("New Ridge model created")
-
-try:
-    scaler: StandardScaler = joblib.load(SCALER_FILE)
-    print("Scaler loaded")
-except FileNotFoundError:
-    scaler = StandardScaler()
-    print("New Scaler created")
+    with open(MODEL_FILE, "rb") as f:
+        saved_data = pickle.load(f)
+        if isinstance(saved_data, dict):
+            model = saved_data['model']
+            mae = saved_data.get('mae', metrics.MAE())
+        else:
+            # Handle old model format
+            model = saved_data
+            mae = metrics.MAE()
+    print("Model and metrics loaded")
+except (FileNotFoundError, pickle.UnpicklingError):
+    model = compose.Pipeline(
+        preprocessing.StandardScaler(),
+        ensemble.RandomForestRegressor(n_models=10, seed=42)
+    )
+    mae = metrics.MAE()
+    print("New model and metrics created")
+except Exception as e:
+    print(f"Error loading model: {e}")
+    model = compose.Pipeline(
+        preprocessing.StandardScaler(),
+        ensemble.RandomForestRegressor(n_models=5, seed=42)
+    )
+    mae = metrics.MAE()
 
 
 # -----------------------------
 # Helper Functions
 # -----------------------------
 
-def get_ha_state(entity_id: str, is_binary: bool = False) -> Optional[Any]:
-    url = f"{HASS_URL}/api/states/{entity_id}"
+
+def get_all_ha_states() -> Dict[str, Any]:
+    """Fetches all states from Home Assistant in a single API call."""
+    url = f"{HASS_URL}/api/states"
     try:
         resp = requests.get(url, headers=HASS_HEADERS, timeout=10)
         resp.raise_for_status()
+        # Create a dictionary mapping entity_id to its state object
+        return {entity["entity_id"]: entity for entity in resp.json()}
     except requests.RequestException as exc:
-        warnings.warn(f"HA request error {entity_id}: {exc}")
+        warnings.warn(f"HA request error for all states: {exc}")
+        return {}
+
+
+def get_ha_state(
+    entity_id: str,
+    states_cache: Optional[Dict[str, Any]] = None,
+    is_binary: bool = False,
+) -> Optional[Any]:
+    """
+    Retrieves the state of a Home Assistant entity, using a cache if provided.
+    """
+    if states_cache is None:
+        # Fallback to individual request if no cache is provided
+        url = f"{HASS_URL}/api/states/{entity_id}"
+        try:
+            resp = requests.get(url, headers=HASS_HEADERS, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.RequestException as exc:
+            warnings.warn(f"HA request error {entity_id}: {exc}")
+            return None
+    else:
+        data = states_cache.get(entity_id)
+
+    if data is None:
         return None
 
-    data = resp.json()
     state = data.get("state")
     if state in (None, "unknown", "unavailable"):
         return None
@@ -263,7 +304,7 @@ def fetch_outlet_history(steps: int = HISTORY_STEPS) -> List[float]:
             result.append(float(np.mean(chunk)) if chunk else 40.0)
         return result[-steps:]
     except Exception:
-        return [40.0]*steps
+        return [40.0] * steps
 
 
 def fetch_indoor_history(steps: int = HISTORY_STEPS) -> List[float]:
@@ -302,7 +343,8 @@ def fetch_indoor_history(steps: int = HISTORY_STEPS) -> List[float]:
             result.append(float(np.mean(chunk)) if chunk else 21.0)
         return result[-steps:]
     except Exception:
-        return [21.0]*steps
+        return [21.0] * steps
+
 
 def load_state(path: str) -> Optional[Dict[str, Any]]:
     try:
@@ -378,7 +420,7 @@ def calculate_dynamic_boost(
     return final_boost
 
 
-def calculate_baseline_outlet_temp() -> float:
+def calculate_baseline_outlet_temp(states_cache: Dict[str, Any]) -> float:
     """
     Calculates the target outlet temperature based on the user's
     heating curve formula.
@@ -387,15 +429,15 @@ def calculate_baseline_outlet_temp() -> float:
     # Define the two points for the linear heating curve
     x1, y1 = -15.0, 64.0
     x2, y2 = 18.0, 31.0
-    
+
     delta_y = y1 - y2
     delta_x = x1 - x2
     m = delta_y / delta_x
     b = y2 - (m * x2)
 
     # --- Part 2: Calculate the target temperature input for the curve ---
-    outdoor_temp_actual = get_ha_state(OUTDOOR_TEMP_ENTITY_ID)
-    owm_temp_actual = get_ha_state(OPENWEATHERMAP_TEMP_ENTITY_ID)
+    outdoor_temp_actual = get_ha_state(OUTDOOR_TEMP_ENTITY_ID, states_cache)
+    owm_temp_actual = get_ha_state(OPENWEATHERMAP_TEMP_ENTITY_ID, states_cache)
     forecast_temps = get_hourly_forecast()
 
     # Ensure we have the necessary data
@@ -445,42 +487,42 @@ def calculate_baseline_outlet_temp() -> float:
 def get_feature_names() -> List[str]:
     """Generate the list of feature names."""
     history_features = [
-        f"{name}_hist_{i}" for name in ("outlet", "indoor")
-        for i in range(HISTORY_STEPS)
-    ]
-    delta_features = [
-        f"delta_{name}_{i}" for name in ("outlet", "indoor")
+        f"{name}_hist_{i}"
+        for name in ("outlet", "indoor")
         for i in range(HISTORY_STEPS)
     ]
     forecast_features = [
-        f"{name}_forecast_{i+1}h" for name in ("pv", "temp")
-        for i in range(4)
+        f"{name}_forecast_{i+1}h" for name in ("pv", "temp") for i in range(4)
     ]
     base_features = [
+        "temp_diff_indoor_outdoor",
+        "outlet_temp",
         "outdoor_temp",
         "pv_now",
         "tv_on",
-        "temp_diff",
         "hour_sin",
         "hour_cos",
-        "error_target_vs_actual",
+        "outlet_temp_change_from_last",
+        "outlet_indoor_diff",
+        "outlet_temp_sq",
+        "outlet_temp_cub",
     ]
-    return base_features + history_features + delta_features + forecast_features
+    return base_features + history_features + forecast_features
 
 
 def find_best_outlet_temp(
     model: Any,
-    scaler: StandardScaler,
     features: pd.DataFrame,
     target_temp: float,
     baseline_indoor: float,
+    states_cache: Dict[str, Any],
 ) -> float:
     # --- Get baseline from user's formula ---
-    baseline_outlet = calculate_baseline_outlet_temp()
+    baseline_outlet = calculate_baseline_outlet_temp(states_cache)
     best_temp, min_diff = baseline_outlet, float("inf")
 
     # --- Define a smart search range around the baseline ---
-    search_radius = 5.0
+    search_radius = 20.0
     min_temp = baseline_outlet - search_radius
     max_temp = baseline_outlet + search_radius
     step = 0.5
@@ -488,9 +530,6 @@ def find_best_outlet_temp(
     # Clamp the search range to reasonable values
     min_temp = max(18.0, min_temp)
     max_temp = min(65.0, max_temp)
-
-    outlet_hist_cols = [f"outlet_hist_{i}" for i in range(HISTORY_STEPS)]
-    delta_outlet_cols = [f"delta_outlet_{i}" for i in range(HISTORY_STEPS)]
 
     if DEBUG:
         print("--- Finding Best Outlet Temp ---")
@@ -504,41 +543,49 @@ def find_best_outlet_temp(
             print("Invalid search range, returning baseline.")
         return baseline_outlet
 
+    # --- Isolate features for the prediction loop ---
+    last_outlet_temp = features["outlet_hist_5"].iloc[0]
+    # The indoor_temp is not a feature anymore, but we need it for
+    # calculations
+    indoor_temp = baseline_indoor
+
     for temp_candidate in np.arange(min_temp, max_temp + step, step):
-        X_candidate_df = features.copy()
-
-        # 1. Shift outlet history and append candidate
-        new_outlet_history = (
-            X_candidate_df[outlet_hist_cols].values[0, 1:].tolist()
-            + [temp_candidate]
+        predicted_indoor = 0.0
+        
+        # --- Direct ML model for both heating and cooling ---
+        X_candidate_dict = features.iloc[0].to_dict()
+        
+        # Update features based on the temperature candidate
+        X_candidate_dict["outlet_temp"] = temp_candidate
+        X_candidate_dict["outlet_temp_sq"] = temp_candidate**2
+        X_candidate_dict["outlet_temp_cub"] = temp_candidate**3
+        X_candidate_dict["outlet_temp_change_from_last"] = (
+            temp_candidate - last_outlet_temp
         )
-        X_candidate_df[outlet_hist_cols] = new_outlet_history
-
-        # 2. Recalculate deltas
-        new_delta_outlet = np.diff(
-            new_outlet_history, prepend=new_outlet_history[0]
-        ).tolist()
-        X_candidate_df[delta_outlet_cols] = new_delta_outlet
-
-        if DEBUG and temp_candidate in (30.0, 40.0, 50.0):
-            print(f"    Outlet history tail: {new_outlet_history[-5:]}")
-            print(f"    Delta history tail: {new_delta_outlet[-5:]}")
+        X_candidate_dict["outlet_indoor_diff"] = temp_candidate - indoor_temp
 
         try:
-            X_candidate_scaled = scaler.transform(X_candidate_df)
-            predicted_delta = model.predict(X_candidate_scaled)[0]
+            # The model now directly predicts ΔT
+            predicted_delta = model.predict_one(X_candidate_dict)
             predicted_indoor = baseline_indoor + predicted_delta
             if DEBUG:
                 print(
                     f"  - Testing outlet {temp_candidate:.1f}°C -> "
-                    f"Predicted delta: {predicted_delta:.3f}°C, "
-                    f"indoor: {predicted_indoor:.2f}°C"
+                    f"Predicted ΔT: {predicted_delta:.3f}°C, "
+                    f"Indoor: {predicted_indoor:.2f}°C"
                 )
         except Exception:
             continue
         diff = abs(predicted_indoor - target_temp)
         if diff < min_diff:
             min_diff, best_temp = diff, float(temp_candidate)
+        elif diff == min_diff:
+            # If the difference is the same, prefer the temperature
+            # closer to the baseline to promote stability.
+            if abs(temp_candidate - baseline_outlet) < abs(
+                best_temp - baseline_outlet
+            ):
+                best_temp = float(temp_candidate)
     
     if DEBUG:
         print(f"--- Optimal float temp found: {best_temp:.1f}°C ---")
@@ -555,20 +602,18 @@ def find_best_outlet_temp(
         predictions = []
 
         for temp_candidate in temps_to_check:
-            X_candidate_df = features.copy()
-            new_outlet_history = (
-                X_candidate_df[outlet_hist_cols].values[0, 1:].tolist()
-                + [temp_candidate]
+            # Use the ML model for heating/cooling
+            X_candidate_dict = features.iloc[0].to_dict()
+            X_candidate_dict["outlet_temp"] = temp_candidate
+            X_candidate_dict["outlet_temp_change_from_last"] = (
+                temp_candidate - last_outlet_temp
             )
-            X_candidate_df[outlet_hist_cols] = new_outlet_history
-            new_delta_outlet = np.diff(
-                new_outlet_history, prepend=new_outlet_history[0]
-            ).tolist()
-            X_candidate_df[delta_outlet_cols] = new_delta_outlet
-            
+            X_candidate_dict["outlet_indoor_diff"] = (
+                temp_candidate - indoor_temp
+            )
+
             try:
-                X_candidate_scaled = scaler.transform(X_candidate_df)
-                predicted_delta = model.predict(X_candidate_scaled)[0]
+                predicted_delta = model.predict_one(X_candidate_dict)
                 predicted_indoor = baseline_indoor + predicted_delta
                 predictions.append((temp_candidate, predicted_indoor))
             except Exception:
@@ -595,17 +640,16 @@ def find_best_outlet_temp(
                 print("--- Smart Rounding ---")
                 for temp, indoor in predictions:
                     print(
-                        f"  - Candidate {temp}°C -> Predicted indoor: "
-                        f"{indoor:.2f}°C (Diff: {abs(indoor - target_temp):.2f})"
+                        f"  - Candidate {temp}°C -> "
+                        f"Predicted: {indoor:.2f}°C "
+                        f"(Diff: {abs(indoor - target_temp):.2f})"
                     )
                 print(f"  -> Chose: {final_temp}°C")
 
     return float(final_temp)
 
 
-def initial_train_model(
-    model: Any, scaler: StandardScaler, lookback_hours: int = 6
-) -> tuple[Any, StandardScaler]:
+def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
     """
     Train the model on the last `lookback_hours` of data to predict the
     change in indoor temperature `PREDICTION_HORIZON_STEPS` steps.
@@ -614,6 +658,7 @@ def initial_train_model(
     hp_outlet_temp_id = ACTUAL_OUTLET_TEMP_ENTITY_ID.split(".", 1)[-1]
     kuche_temperatur_id = INDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
     fernseher_id = TV_STATUS_ENTITY_ID.split(".", 1)[-1]
+    dhw_status_id = DHW_STATUS_ENTITY_ID.split(".", 1)[-1]
     outdoor_temp_id = OUTDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
     pv1_power_id = PV1_POWER_ENTITY_ID.split(".", 1)[-1]
     pv2_power_id = PV2_POWER_ENTITY_ID.split(".", 1)[-1]
@@ -630,6 +675,7 @@ def initial_train_model(
             r["entity_id"] == "{pv1_power_id}" or
             r["entity_id"] == "{pv2_power_id}" or
             r["entity_id"] == "{pv3_power_id}" or
+            r["entity_id"] == "{dhw_status_id}" or
             r["entity_id"] == "{fernseher_id}"
         )
         |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)
@@ -648,21 +694,32 @@ def initial_train_model(
         df.ffill(inplace=True)
         df.bfill(inplace=True)
     except Exception:
-        return model, scaler
-
+        # If the database query fails, we can't train. Return None for the model.
+        return model
     features_list, labels_list = [], []
     outlet_steps = indoor_steps = HISTORY_STEPS
     start_idx = max(outlet_steps, indoor_steps) - 1
 
+    pv_forecast = get_pv_forecast()
+    temp_forecast = get_hourly_forecast()
+
     for idx in range(start_idx, len(df) - PREDICTION_HORIZON_STEPS):
         row = df.iloc[idx]
+        # --- Skip if DHW is active ---
+        if row.get(dhw_status_id, 0.0) == 1.0:
+            continue
         next_row = df.iloc[idx + PREDICTION_HORIZON_STEPS]
         outdoor = row.get(outdoor_temp_id, np.nan)
         if pd.isna(outdoor):
             continue
         current_indoor_val = row.get(kuche_temperatur_id, np.nan)
+        outlet_temp_val = row.get(hp_outlet_temp_id, np.nan)
         future_indoor_val = next_row.get(kuche_temperatur_id, np.nan)
-        if pd.isna(current_indoor_val) or pd.isna(future_indoor_val):
+        if (
+            pd.isna(current_indoor_val)
+            or pd.isna(future_indoor_val)
+            or pd.isna(outlet_temp_val)
+        ):
             continue
         pv_now = sum(
             row.get(k, 0.0) for k in [
@@ -672,23 +729,31 @@ def initial_train_model(
         tv_on = 1.0 if row.get(fernseher_id, 0.0) == 1 else 0.0
 
         # --- New features ---
-        temp_diff = outdoor - current_indoor_val
+        temp_diff_indoor_outdoor = current_indoor_val - outdoor
+        outlet_indoor_diff = outlet_temp_val - current_indoor_val
         hour = row["_time"].hour
         hour_sin = np.sin(2 * np.pi * hour / 24)
         hour_cos = np.cos(2 * np.pi * hour / 24)
         # This is a simplification for training; in production, we'd use the live target.
         # This is a simplification for training. In production, we'd use the
-        # live target. For historical training, we assume the target was the
-        # setpoint at that time. A more advanced version could store
-        # historical targets. For now, we'll use a placeholder or a
-        # reasonable assumption. Let's assume the target was slightly above
-        # the actual, e.g., 21.5
+        # This is a simplification for training. In production, we'd use
+        # the live target. For historical training, we assume the target
+        # was the setpoint at that time. A more advanced version could
+        # store historical targets. For now, we'll use a placeholder or a
+        # reasonable assumption. Let's assume the target was slightly
+        # above the actual, e.g., 21.5
         # For historical training, we don't know the real target temp.
         # Assuming it was the same as the actual temp makes the error 0,
-        # preventing the model from learning from faulty error data.
-        # The real error will be used during live prediction.
-        assumed_target_temp = current_indoor_val
-        error_target_vs_actual = assumed_target_temp - current_indoor_val
+        # preventing the model from learning from faulty error data. The
+        # real error will be used during live prediction.
+        
+        # Get the previous outlet temperature to calculate the change
+        previous_outlet_temp_val = df.iloc[idx - 1].get(
+            hp_outlet_temp_id, outlet_temp_val
+        )
+        outlet_temp_change_from_last = outlet_temp_val - previous_outlet_temp_val
+        outlet_temp_sq = outlet_temp_val**2
+        outlet_temp_cub = outlet_temp_val**3
 
         outlet_hist_series = df.iloc[idx - outlet_steps + 1: idx + 1][
             hp_outlet_temp_id
@@ -710,26 +775,24 @@ def initial_train_model(
         outlet_hist = outlet_hist[-outlet_steps:]
         indoor_hist = indoor_hist[-indoor_steps:]
 
-        delta_outlet = np.diff(outlet_hist, prepend=outlet_hist[0]).tolist()
-        delta_indoor = np.diff(indoor_hist, prepend=indoor_hist[0]).tolist()
-
-        pv_forecast = get_pv_forecast()
-        temp_forecast = get_hourly_forecast()
+        # Forecasts are fetched outside the loop now
 
         features_values = (
             [
+                temp_diff_indoor_outdoor,
+                outlet_temp_val,
                 outdoor,
                 pv_now,
                 tv_on,
-                temp_diff,
                 hour_sin,
                 hour_cos,
-                error_target_vs_actual,
+                outlet_temp_change_from_last,
+                outlet_indoor_diff,
+                outlet_temp_sq,
+                outlet_temp_cub,
             ]
             + outlet_hist
             + indoor_hist
-            + delta_outlet
-            + delta_indoor
             + pv_forecast
             + temp_forecast
         )
@@ -739,92 +802,106 @@ def initial_train_model(
             if DEBUG:
                 print(
                     "Feature length mismatch: "
-                    f"expected {len(feature_names)}, got {len(features_values)}. "
-                    "Skipping sample."
+                    f"expected {len(feature_names)}, "
+                    f"got {len(features_values)}. Skipping sample."
                 )
             continue
 
-        label_delta = float(future_indoor_val) - float(current_indoor_val)
+        # --- Label ---
+        # The model now directly predicts the change in temperature (ΔT).
+        actual_delta = float(future_indoor_val) - float(current_indoor_val)
+
         features_list.append(features_values)
-        labels_list.append(label_delta)
+        labels_list.append(actual_delta)
 
     if features_list and labels_list:
         try:
             X = pd.DataFrame(features_list, columns=feature_names)
             y = np.array(labels_list)
 
-            # Scale features
-            X_scaled = scaler.fit_transform(X)
-            joblib.dump(scaler, SCALER_FILE)
-            print("Scaler fitted and saved.")
+            for i in range(len(X)):
+                features = X.iloc[i].to_dict()
+                label = y[i]
+                model.learn_one(features, label)
 
-            if DEBUG:
-                print("--- Initial Training Stats ---")
-                print(
-                    f"Samples: {len(y)} | Delta mean: {y.mean():.3f} | "
-                    f"Delta std: {y.std():.3f}"
-                )
-                print(f"First sample deltas (head 5): {y[:5].tolist()}")
-
-            model.fit(X_scaled, y.ravel())
+            with open(MODEL_FILE, "wb") as f:
+                pickle.dump({'model': model, 'mae': mae}, f)
 
             if DEBUG:
                 try:
-                    # For Ridge model, we look at coefficients
-                    if hasattr(model, "coef_"):
-                        importances = model.coef_
-                        feature_importance = pd.DataFrame(
-                            {"feature": X.columns, "importance": importances}
-                        )
-                        feature_importance[
-                            "abs_importance"
-                        ] = feature_importance["importance"].abs()
-                        sorted_importance = feature_importance.sort_values(
-                            by="abs_importance", ascending=False
-                        )
-                        print("Top 5 feature coefficients (absolute value):")
-                        print(sorted_importance.head(5))
-                    # Fallback for other models like LightGBM
-                    elif hasattr(model, "feature_importances_"):
-                        importances = model.feature_importances_
-                        top_idx = np.argsort(importances)[-5:][::-1]
-                        print("Top feature importances:")
-                        for idx in top_idx:
-                            print(
-                                f"  idx {int(idx)} -> {importances[idx]:.4f}"
+                    # For RandomForestRegressor, we can inspect feature importances
+                    # This is a bit more complex for River's online models
+                    # We'll try to get it from the underlying regressors
+                    if hasattr(model, 'models'):
+                        importances = pd.DataFrame()
+                        for i, regressor in enumerate(model.models):
+                            if hasattr(regressor, 'feature_importances_'):
+                                imp = regressor.feature_importances_()
+                                importances[f'tree_{i}'] = imp.values()
+                        
+                        if not importances.empty:
+                            importances['mean_importance'] = importances.mean(axis=1)
+                            importances.index = X.columns
+                            
+                            sorted_importance = importances.sort_values(
+                                by="mean_importance", ascending=False
                             )
-                except AttributeError:
-                    print(
-                        "Model does not expose feature importances or "
-                        "coefficients."
-                    )
+                            print(
+                                "Top 10 feature importances "
+                                "(mean across trees):"
+                            )
+                            print(
+                                sorted_importance['mean_importance'].head(10)
+                            )
 
-            joblib.dump(model, MODEL_FILE)
+                except Exception as e:
+                    print(f"Could not retrieve feature importances: {e}")
+
             print(
                 "Initial training done on last "
-                f"{lookback_hours}h of data ({len(features_list)} samples)."
+                f"{lookback_hours}h of data "
+                f"({len(features_list)} samples)."
             )
         except Exception:
+            # If training fails, the model will remain None.
+            # We'll return it at the end.
             pass
 
-    return model, scaler
+    # This single return statement handles all cases.
+    # It returns the trained model if successful, or None if any step failed.
+    return model, mae
 
 
-def main(poll_interval_seconds: int = 300) -> None:
+def main(
+    model: Optional[Any],
+    mae: metrics.MAE,
+    poll_interval_seconds: int = 300,
+) -> None:
+    # If initial training failed, models will be None.
+    # The loop will handle this by falling back to baseline.
     while True:
         try:
+            # --- Batch fetch all states from Home Assistant ---
+            all_states = get_all_ha_states()
+            if not all_states:
+                print("Could not fetch states from HA, skipping cycle.")
+                time.sleep(poll_interval_seconds)
+                continue
+
             dhw_state_data = get_ha_state(
-                DHW_STATUS_ENTITY_ID, is_binary=True
+                DHW_STATUS_ENTITY_ID, all_states, is_binary=True
             )
-            if dhw_state_data and dhw_state_data.get("state") == 'on':
+            if dhw_state_data and dhw_state_data.get("state") == "on":
                 print("DHW active, skipping cycle.")
                 time.sleep(poll_interval_seconds)
                 continue
 
             # --- Get critical sensor states with validation ---
-            target_indoor_temp = get_ha_state(TARGET_INDOOR_TEMP_ENTITY_ID)
-            actual_indoor = get_ha_state(INDOOR_TEMP_ENTITY_ID)
-            outdoor_temp = get_ha_state(OUTDOOR_TEMP_ENTITY_ID)
+            target_indoor_temp = get_ha_state(
+                TARGET_INDOOR_TEMP_ENTITY_ID, all_states
+            )
+            actual_indoor = get_ha_state(INDOOR_TEMP_ENTITY_ID, all_states)
+            outdoor_temp = get_ha_state(OUTDOOR_TEMP_ENTITY_ID, all_states)
 
             critical_sensors = {
                 "target_indoor": target_indoor_temp,
@@ -840,8 +917,8 @@ def main(poll_interval_seconds: int = 300) -> None:
 
             if invalid_sensors:
                 print(
-                    f"Invalid sensor data for: {', '.join(invalid_sensors)}. "
-                    "Skipping cycle."
+                    f"Invalid sensor data for: "
+                    f"{', '.join(invalid_sensors)}. Skipping cycle."
                 )
                 time.sleep(poll_interval_seconds)
                 continue
@@ -850,39 +927,65 @@ def main(poll_interval_seconds: int = 300) -> None:
             error_target_vs_actual = target_indoor_temp - actual_indoor
 
             # --- Online training ---
-            # Note: Online training for Ridge with a scaler is more complex.
-            # It would involve either partial_fit (if the model supports it)
-            # or collecting a batch of new data and refitting both the scaler
-            # and the model. For simplicity, we will rely on the periodic
-            # `initial_train_model` call, which now handles the scaler.
-            # The logic for LGBM online training is kept for reference but
-            # is not active with the Ridge model.
+            last_state = load_state(STATE_FILE)
+            if last_state:
+                print("Last state found, performing online training.")
+                try:
+                    last_features = last_state["features"]
+                    last_timestamp = pd.to_datetime(last_state["timestamp"])
+                    last_baseline_indoor = last_state["baseline_indoor"]
+
+                    # Calculate the time difference in minutes
+                    time_diff_minutes = (now_utc - last_timestamp).total_seconds() / 60
+
+                    # Check if the time difference is close to the prediction horizon
+                    if abs(time_diff_minutes - PREDICTION_HORIZON_MINUTES) < 10:
+                        # The actual change is the current indoor temp minus the baseline from the past
+                        actual_delta = actual_indoor - last_baseline_indoor
+                        
+                        # Get the prediction that was made for this moment
+                        predicted_delta = model.predict_one(last_features)
+
+                        # Update the MAE metric
+                        mae.update(y_true=actual_delta, y_pred=predicted_delta)
+
+                        # learn from the last state
+                        model.learn_one(last_features, actual_delta)
+                        print(
+                            "Model updated with one sample. "
+                            f"Current MAE: {mae.get():.4f}"
+                        )
+
+                        with open(MODEL_FILE, "wb") as f:
+                            pickle.dump({'model': model, 'mae': mae}, f)
+
+                except Exception as e:
+                    print(f"Error during online training: {e}")
             # --- End of online training ---
 
             # --- ML-based prediction path (with fallback) ---
-            try:
-                check_is_fitted(model)
-                check_is_fitted(scaler)
-                is_fitted = True
-            except NotFittedError:
+            # Check if models exist and are fitted
+            if model is None:
                 is_fitted = False
+            else:
+                is_fitted = True
 
-            # Fallback to baseline if model is not fitted
+            # Fallback to baseline if models are not fitted
             if not is_fitted:
                 print("Model not fitted, falling back to baseline.")
-                suggested_temp = calculate_baseline_outlet_temp()
+                suggested_temp = calculate_baseline_outlet_temp(all_states)
                 predicted_indoor = actual_indoor or target_indoor_temp
             else:
                 # --- Gather all features for ML model ---
                 tv_state_raw = get_ha_state(
-                    TV_STATUS_ENTITY_ID, is_binary=True
+                    TV_STATUS_ENTITY_ID, all_states, is_binary=True
                 )
                 is_tv_on = tv_state_raw and tv_state_raw.get("state") == "on"
                 tv_on = 1.0 if is_tv_on else 0.0
 
-                pv1 = get_ha_state(PV1_POWER_ENTITY_ID)
-                pv2 = get_ha_state(PV2_POWER_ENTITY_ID)
-                pv3 = get_ha_state(PV3_POWER_ENTITY_ID)
+                pv1 = get_ha_state(PV1_POWER_ENTITY_ID, all_states)
+                pv2 = get_ha_state(PV2_POWER_ENTITY_ID, all_states)
+                pv3 = get_ha_state(PV3_POWER_ENTITY_ID, all_states)
                 pv_now = sum(v for v in (pv1, pv2, pv3) if v is not None)
 
                 pv_forecasts = get_pv_forecast()
@@ -894,44 +997,45 @@ def main(poll_interval_seconds: int = 300) -> None:
                     indoor_history.pop(0)
                     indoor_history.append(float(actual_indoor))
 
-                temp_diff = outdoor_temp - actual_indoor
+                temp_diff_indoor_outdoor = actual_indoor - outdoor_temp
                 hour = now_utc.hour
                 hour_sin = np.sin(2 * np.pi * hour / 24)
                 hour_cos = np.cos(2 * np.pi * hour / 24)
 
                 feature_names = get_feature_names()
-                current_features_list = [
-                    float(outdoor_temp),
-                    pv_now,
-                    tv_on,
-                    temp_diff,
-                    hour_sin,
-                    hour_cos,
-                    error_target_vs_actual,
-                ] + (
-                    outlet_history
+                outlet_temp = (
+                    get_ha_state(ACTUAL_OUTLET_TEMP_ENTITY_ID, all_states)
+                    or outlet_history[-1]
+                )
+                
+                outlet_temp_change_from_last = outlet_temp - outlet_history[-1]
+
+                current_features_list = (
+                    [
+                        temp_diff_indoor_outdoor,
+                        outlet_temp,
+                        float(outdoor_temp),
+                        pv_now,
+                        tv_on,
+                        hour_sin,
+                        hour_cos,
+                        outlet_temp_change_from_last,
+                        outlet_temp - actual_indoor,
+                        outlet_temp**2,
+                        outlet_temp**3,
+                    ]
+                    + outlet_history
                     + indoor_history
-                    + np.diff(
-                        outlet_history, prepend=outlet_history[0]
-                    ).tolist()
-                    + np.diff(
-                        indoor_history, prepend=indoor_history[0]
-                    ).tolist()
                     + pv_forecasts
                     + temp_forecasts
                 )
 
                 # Fallback if feature lengths don't match
-                is_mismatched = hasattr(
-                    model, "n_features_in_"
-                ) and model.n_features_in_ != len(current_features_list)
-                if len(current_features_list) != len(
-                    feature_names
-                ) or is_mismatched:
+                if len(current_features_list) != len(feature_names):
                     print(
                         "Feature length mismatch, falling back to baseline."
                     )
-                    suggested_temp = calculate_baseline_outlet_temp()
+                    suggested_temp = calculate_baseline_outlet_temp(all_states)
                     predicted_indoor = actual_indoor or target_indoor_temp
                 else:
                     # --- This is the successful ML path ---
@@ -942,22 +1046,30 @@ def main(poll_interval_seconds: int = 300) -> None:
 
                     suggested_temp = find_best_outlet_temp(
                         model,
-                        scaler,
                         current_features_df,
                         target_indoor_temp,
                         baseline_current,
+                        all_states,
                     )
 
                     # Predict final indoor temp for logging
-                    scaled_features = scaler.transform(current_features_df)
-                    predicted_delta = float(model.predict(scaled_features)[0])
+                    final_features = current_features_df.iloc[0].to_dict()
+                    final_features["outlet_temp"] = suggested_temp
+                    final_features["outlet_temp_sq"] = suggested_temp**2
+                    final_features["outlet_temp_cub"] = suggested_temp**3
+                    final_features["outlet_temp_change_from_last"] = (
+                        suggested_temp - outlet_history[-1]
+                    )
+                    final_features["outlet_indoor_diff"] = (
+                        suggested_temp - baseline_current
+                    )
+
+                    predicted_delta = model.predict_one(final_features)
                     predicted_indoor = baseline_current + predicted_delta
 
                     # Save state only after a successful ML prediction
                     state_to_save = {
-                        "features": np.array(
-                            current_features_list
-                        ).reshape(1, -1),
+                        "features": final_features,
                         "timestamp": now_utc.isoformat(),
                         "baseline_indoor": (
                             float(actual_indoor)
@@ -995,14 +1107,22 @@ def main(poll_interval_seconds: int = 300) -> None:
             print("Error in main loop:", exc)
 
         time.sleep(poll_interval_seconds)
-
-
-def check_is_fitted(estimator):
-    """Checks if an estimator is fitted."""
-    if not hasattr(estimator, "n_features_in_"):
-        raise NotFittedError(f"{type(estimator).__name__} is not fitted yet.")
-
-
 if __name__ == "__main__":
-    model, scaler = initial_train_model(model, scaler, lookback_hours=24)
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="ML Heating Controller")
+    parser.add_argument(
+        "--train-only",
+        action="store_true",
+        help="Run the initial training and then exit.",
+    )
+    args = parser.parse_args()
+
+    # The models are now created inside the training function
+    model, mae = initial_train_model(model, lookback_hours=168)
+
+    if args.train_only:
+        print("Training complete. Exiting as requested by --train-only flag.")
+    else:
+        # Pass the potentially newly created models to main
+        main(model=model, mae=mae)
