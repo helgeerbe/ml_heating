@@ -33,7 +33,7 @@ INFLUX_ORG: str = os.getenv("INFLUX_ORG", "erbehome")
 INFLUX_BUCKET: str = os.getenv("INFLUX_BUCKET", "home_assistant/autogen")
 
 # Model and state files
-MODEL_FILE: str = os.getenv("MODEL_FILE", "/opt/ml_heating/river_model.pkl")
+MODEL_FILE: str = os.getenv("MODEL_FILE", "/opt/ml_heating/ml_model.pkl")
 STATE_FILE: str = os.getenv("STATE_FILE", "/opt/ml_heating/ml_state.pkl")
 HISTORY_STEPS: int = int(os.getenv("HISTORY_STEPS", "6"))
 HISTORY_STEP_MINUTES: int = int(os.getenv("HISTORY_STEP_MINUTES", "10"))
@@ -63,6 +63,10 @@ DEFROST_STATUS_ENTITY_ID: str = os.getenv(
 DISINFECTION_STATUS_ENTITY_ID: str = os.getenv(
     "DISINFECTION_STATUS_ENTITY_ID",
     "binary_sensor.hp_dhw_tank_disinfection_status",
+)
+DHW_BOOST_HEATER_STATUS_ENTITY_ID: str = os.getenv(
+    "DHW_BOOST_HEATER_STATUS_ENTITY_ID",
+    "binary_sensor.hp_dhw_boost_heater_status",
 )
 TV_STATUS_ENTITY_ID: str = os.getenv(
     "TV_STATUS_ENTITY_ID", "input_boolean.fernseher"
@@ -549,6 +553,12 @@ def get_feature_names() -> List[str]:
         "indoor_temp_gradient",
         "outlet_temp_gradient",
     ]
+    binary_features = [
+        "dhw_heating",
+        "defrosting",
+        "dhw_disinfection",
+        "dhw_boost_heater",
+    ]
     base_features = [
         "temp_diff_indoor_outdoor",
         "outlet_temp",
@@ -574,6 +584,7 @@ def get_feature_names() -> List[str]:
         + lag_features
         + delta_features
         + gradient_features
+        + binary_features
     )
 
 
@@ -762,29 +773,61 @@ def find_best_outlet_temp(
 
 
 def get_feature_importances(model: Any, feature_names: List[str]) -> Dict[str, float]:
-    """Get feature importances from a River model."""
+    """
+    Get feature importances from a River model by traversing the trees.
+    This is more robust for young models than relying on the internal
+    `feature_importances_` attribute.
+    """
     if not isinstance(model, compose.Pipeline):
+        if DEBUG:
+            print("DEBUG: Model is not a River pipeline, cannot get importances.")
         return {}
 
-    # The regressor is the second step of the pipeline
     regressor = model._last_step
-
     if not hasattr(regressor, "models"):
+        if DEBUG:
+            print("DEBUG: Regressor has no 'models' attribute.")
         return {}
 
-    importances: Dict[str, float] = {}
-    for i, tree in enumerate(regressor.models):
-        if hasattr(tree, "feature_importances_"):
-            for feature, importance in tree.feature_importances_.items():
-                importances[feature] = importances.get(feature, 0) + importance
+    if DEBUG:
+        print(f"DEBUG: Traversing {len(regressor.models)} trees for feature importances.")
 
-    # Normalize
-    total_importance = sum(importances.values())
-    if total_importance > 0:
-        for feature in importances:
-            importances[feature] /= total_importance
+    total_importances: Dict[str, int] = {}
+    for i, tree_model in enumerate(regressor.models):
+        if hasattr(tree_model, "regressor"):
+            actual_tree = tree_model.regressor
+            if hasattr(actual_tree, "_root"):
+                def traverse(node):
+                    if node is None:
+                        return
+                    if hasattr(node, "feature"):
+                        feature = node.feature
+                        total_importances[feature] = total_importances.get(feature, 0) + 1
+                        if hasattr(node, "children"):
+                            for child in node.children:
+                                traverse(child)
+                traverse(actual_tree._root)
 
-    return importances
+    if not total_importances:
+        if DEBUG:
+            print("DEBUG: No feature splits were found in any tree.")
+        return {}
+
+    if DEBUG:
+        print(f"DEBUG: Raw feature split counts: {total_importances}")
+
+    # Normalize the counts to get a percentage-like importance score
+    total_splits = sum(total_importances.values())
+    if total_splits > 0:
+        normalized_importances = {
+            feature: count / total_splits
+            for feature, count in total_importances.items()
+        }
+        return normalized_importances
+    else:
+        if DEBUG:
+            print("DEBUG: Total feature splits is 0, cannot normalize.")
+        return {}
 
 
 def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
@@ -826,6 +869,7 @@ def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
     dhw_status_id = DHW_STATUS_ENTITY_ID.split(".", 1)[-1]
     defrost_status_id = DEFROST_STATUS_ENTITY_ID.split(".", 1)[-1]
     disinfection_status_id = DISINFECTION_STATUS_ENTITY_ID.split(".", 1)[-1]
+    dhw_boost_heater_status_id = DHW_BOOST_HEATER_STATUS_ENTITY_ID.split(".", 1)[-1]
     outdoor_temp_id = OUTDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
     pv1_power_id = PV1_POWER_ENTITY_ID.split(".", 1)[-1]
     pv2_power_id = PV2_POWER_ENTITY_ID.split(".", 1)[-1]
@@ -843,9 +887,10 @@ def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
             r["entity_id"] == "{pv2_power_id}" or
             r["entity_id"] == "{pv3_power_id}" or
             r["entity_id"] == "{dhw_status_id}" or
-            r["entity_id"] == "{defrost_status_id}"
-            or r["entity_id"] == "{disinfection_status_id}"
-            or r["entity_id"] == "{fernseher_id}"
+            r["entity_id"] == "{defrost_status_id}" or
+            r["entity_id"] == "{disinfection_status_id}" or
+            r["entity_id"] == "{dhw_boost_heater_status_id}" or
+            r["entity_id"] == "{fernseher_id}"
         )
         |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)
         |> pivot(
@@ -879,6 +924,7 @@ def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
             row.get(dhw_status_id, 0.0) == 1.0
             or row.get(defrost_status_id, 0.0) == 1.0
             or row.get(disinfection_status_id, 0.0) == 1.0
+            or row.get(dhw_boost_heater_status_id, 0.0) == 1.0
         ):
             continue
         next_row = df.iloc[idx + PREDICTION_HORIZON_STEPS]
@@ -970,6 +1016,16 @@ def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
         indoor_temp_gradient = (current_indoor_val - indoor_temp_lag_60m) / 60
         outlet_temp_gradient = (outlet_temp_val - outlet_temp_lag_60m) / 60
 
+        # Binary features
+        dhw_heating = 1.0 if row.get(dhw_status_id, 0.0) == 1.0 else 0.0
+        defrosting = 1.0 if row.get(defrost_status_id, 0.0) == 1.0 else 0.0
+        dhw_disinfection = (
+            1.0 if row.get(disinfection_status_id, 0.0) == 1.0 else 0.0
+        )
+        dhw_boost_heater = (
+            1.0 if row.get(dhw_boost_heater_status_id, 0.0) == 1.0 else 0.0
+        )
+
         outlet_hist_series = df.iloc[idx - outlet_steps + 1: idx + 1][
             hp_outlet_temp_id
         ].ffill().bfill()
@@ -1035,8 +1091,14 @@ def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
                 indoor_temp_gradient,
                 outlet_temp_gradient,
             ]
+            + [
+                dhw_heating,
+                defrosting,
+                dhw_disinfection,
+                dhw_boost_heater,
+            ]
         )
-        
+
         # Ensure feature vector length matches feature names
         if len(features_values) != len(feature_names):
             if DEBUG:
@@ -1136,6 +1198,17 @@ def main(
                 time.sleep(poll_interval_seconds)
                 continue
 
+            dhw_boost_heater_state_data = get_ha_state(
+                DHW_BOOST_HEATER_STATUS_ENTITY_ID, all_states, is_binary=True
+            )
+            if (
+                dhw_boost_heater_state_data
+                and dhw_boost_heater_state_data.get("state") == "on"
+            ):
+                print("DHW boost heater active, skipping cycle.")
+                time.sleep(poll_interval_seconds)
+                continue
+
             # --- Get critical sensor states with validation ---
             target_indoor_temp = get_ha_state(
                 TARGET_INDOOR_TEMP_ENTITY_ID, all_states
@@ -1229,6 +1302,23 @@ def main(
                             key=lambda item: item[1],
                             reverse=True,
                         )
+                        # Prepare attributes for Home Assistant
+                        importance_attributes = {
+                            "state_class": "measurement",
+                            "unit_of_measurement": "%",
+                            "top_features": {
+                                f: round(v * 100, 2) for f, v in sorted_importances[:10]
+                            },
+                            "last_updated": now_utc.isoformat(),
+                        }
+                        # Set a dummy state, the real data is in the attributes
+                        set_ha_state(
+                            "sensor.ml_feature_importance",
+                            len(sorted_importances),
+                            importance_attributes,
+                            round_digits=None,
+                        )
+
                         for feature, importance in sorted_importances[:10]:
                             print(f"  - {feature}: {importance:.4f}")
 
@@ -1292,6 +1382,28 @@ def main(
                 indoor_temp_gradient = (actual_indoor - indoor_temp_lag_60m) / 60
                 outlet_temp_gradient = (outlet_temp - outlet_temp_lag_60m) / 60
 
+                # Binary features
+                dhw_heating_state = get_ha_state(
+                    DHW_STATUS_ENTITY_ID, all_states, is_binary=True
+                )
+                dhw_heating = 1.0 if dhw_heating_state and dhw_heating_state.get("state") == "on" else 0.0
+
+                defrosting_state = get_ha_state(
+                    DEFROST_STATUS_ENTITY_ID, all_states, is_binary=True
+                )
+                defrosting = 1.0 if defrosting_state and defrosting_state.get("state") == "on" else 0.0
+
+                dhw_disinfection_state = get_ha_state(
+                    DISINFECTION_STATUS_ENTITY_ID, all_states, is_binary=True
+                )
+                dhw_disinfection = 1.0 if dhw_disinfection_state and dhw_disinfection_state.get("state") == "on" else 0.0
+
+                dhw_boost_heater_state = get_ha_state(
+                    DHW_BOOST_HEATER_STATUS_ENTITY_ID, all_states, is_binary=True
+                )
+                dhw_boost_heater = 1.0 if dhw_boost_heater_state and dhw_boost_heater_state.get("state") == "on" else 0.0
+
+
                 current_features_list = (
                     [
                         temp_diff_indoor_outdoor,
@@ -1334,6 +1446,12 @@ def main(
                     + [
                         indoor_temp_gradient,
                         outlet_temp_gradient,
+                    ]
+                    + [
+                        dhw_heating,
+                        defrosting,
+                        dhw_disinfection,
+                        dhw_boost_heater,
                     ]
                 )
 
