@@ -11,7 +11,6 @@ import pickle
 
 import pandas as pd
 import numpy as np
-from sklearn.exceptions import NotFittedError
 from influxdb_client import InfluxDBClient
 import requests
 from dotenv import load_dotenv
@@ -62,7 +61,8 @@ DEFROST_STATUS_ENTITY_ID: str = os.getenv(
     "DEFROST_STATUS_ENTITY_ID", "binary_sensor.hp_defrosting_status"
 )
 DISINFECTION_STATUS_ENTITY_ID: str = os.getenv(
-    "DISINFECTION_STATUS_ENTITY_ID", "binary_sensor.hp_dhw_tank_disinfection_status"
+    "DISINFECTION_STATUS_ENTITY_ID",
+    "binary_sensor.hp_dhw_tank_disinfection_status",
 )
 TV_STATUS_ENTITY_ID: str = os.getenv(
     "TV_STATUS_ENTITY_ID", "input_boolean.fernseher"
@@ -90,6 +90,7 @@ OPENWEATHERMAP_TEMP_ENTITY_ID: str = os.getenv(
 
 # --- Debug ---
 DEBUG: bool = os.getenv("DEBUG", "0") == "1"
+CONFIDENCE_THRESHOLD: float = float(os.getenv("CONFIDENCE_THRESHOLD", "0.2"))
 
 # InfluxDB client
 client: InfluxDBClient = InfluxDBClient(
@@ -609,7 +610,7 @@ def find_best_outlet_temp(
     if min_temp > max_temp:
         if DEBUG:
             print("Invalid search range, returning baseline.")
-        return baseline_outlet
+        return baseline_outlet, 0.0
 
     # --- Isolate features for the prediction loop ---
     last_outlet_temp = features["outlet_hist_5"].iloc[0]
@@ -636,7 +637,7 @@ def find_best_outlet_temp(
     )
 
     # If confidence is low (high std dev), fall back to baseline
-    if confidence > 0.1:  # Threshold can be tuned
+    if confidence > CONFIDENCE_THRESHOLD:
         if DEBUG:
             print(
                 f"Model confidence low ({confidence:.3f}), "
@@ -764,16 +765,16 @@ def get_feature_importances(model: Any, feature_names: List[str]) -> Dict[str, f
     """Get feature importances from a River model."""
     if not isinstance(model, compose.Pipeline):
         return {}
-    
+
     # The regressor is the second step of the pipeline
     regressor = model._last_step
 
     if not hasattr(regressor, "models"):
         return {}
 
-    importances = {}
+    importances: Dict[str, float] = {}
     for i, tree in enumerate(regressor.models):
-        if hasattr(tree, 'feature_importances_'):
+        if hasattr(tree, "feature_importances_"):
             for feature, importance in tree.feature_importances_.items():
                 importances[feature] = importances.get(feature, 0) + importance
 
@@ -802,20 +803,22 @@ def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
         ]
         
         # Create a pipeline that scales all features except the unscaled ones
-        scaler = (
-            compose.Select(*[f for f in feature_names if f not in unscaled_features]) |
-            preprocessing.StandardScaler()
-        )
-        
+        scaler = compose.Select(
+            *[f for f in feature_names if f not in unscaled_features]
+        ) | preprocessing.StandardScaler()
+
         model = compose.Pipeline(
-            ('features', scaler),
-            ('learn', ensemble.AdaptiveRandomForestRegressor(
-                n_models=10,
-                max_depth=10,
-                seed=42,
-                drift_detector=drift.PageHinkley(),
-                warning_detector=drift.ADWIN()
-            ))
+            ("features", scaler),
+            (
+                "learn",
+                ensemble.AdaptiveRandomForestRegressor(
+                    n_models=10,
+                    max_depth=10,
+                    seed=42,
+                    drift_detector=drift.PageHinkley(),
+                    warning_detector=drift.ADWIN(),
+                ),
+            ),
         )
     hp_outlet_temp_id = ACTUAL_OUTLET_TEMP_ENTITY_ID.split(".", 1)[-1]
     kuche_temperatur_id = INDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
@@ -840,9 +843,9 @@ def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
             r["entity_id"] == "{pv2_power_id}" or
             r["entity_id"] == "{pv3_power_id}" or
             r["entity_id"] == "{dhw_status_id}" or
-            r["entity_id"] == "{defrost_status_id}" or
-            r["entity_id"] == "{disinfection_status_id}" or
-            r["entity_id"] == "{fernseher_id}"
+            r["entity_id"] == "{defrost_status_id}"
+            or r["entity_id"] == "{disinfection_status_id}"
+            or r["entity_id"] == "{fernseher_id}"
         )
         |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)
         |> pivot(
@@ -1101,6 +1104,7 @@ def main(
     # The loop will handle this by falling back to baseline.
     while True:
         try:
+            confidence = 0.0
             # --- Batch fetch all states from Home Assistant ---
             all_states = get_all_ha_states()
             if not all_states:
@@ -1179,11 +1183,9 @@ def main(
                         # The actual change is the current indoor temp minus
                         # the baseline from the past
                         actual_delta = actual_indoor - last_baseline_indoor
-                        
+
                         # Get the prediction that was made for this moment
-                        predicted_delta = model.predict_one(
-                            last_features
-                        )
+                        predicted_delta = model.predict_one(last_features)
 
                         # Update the MAE metric
                         mae.update(y_true=actual_delta, y_pred=predicted_delta)
@@ -1191,9 +1193,9 @@ def main(
 
                         # learn from the last state
                         model.learn_one(last_features, actual_delta)
-                        
+
                         with open(MODEL_FILE, "wb") as f:
-                            pickle.dump({'model': model, 'mae': mae, 'rmse': rmse}, f)
+                            pickle.dump({"model": model, "mae": mae, "rmse": rmse}, f)
 
                 except Exception as e:
                     print(f"Error during online training: {e}")
@@ -1337,14 +1339,9 @@ def main(
 
                 # Fallback if feature lengths don't match
                 if len(current_features_list) != len(feature_names):
-                        print(
-                            "Feature length mismatch, "
-                            "falling back to baseline."
-                        )
-                        suggested_temp = calculate_baseline_outlet_temp(
-                            all_states
-                        )
-                        predicted_indoor = actual_indoor or target_indoor_temp
+                    print("Feature length mismatch, " "falling back to baseline.")
+                    suggested_temp = calculate_baseline_outlet_temp(all_states)
+                    predicted_indoor = actual_indoor or target_indoor_temp
                 else:
                     # --- This is the successful ML path ---
                     current_features_df = pd.DataFrame(
