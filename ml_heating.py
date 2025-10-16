@@ -58,6 +58,12 @@ ACTUAL_OUTLET_TEMP_ENTITY_ID: str = os.getenv(
 DHW_STATUS_ENTITY_ID: str = os.getenv(
     "DHW_STATUS_ENTITY_ID", "binary_sensor.hp_dhw_heating_status"
 )
+DEFROST_STATUS_ENTITY_ID: str = os.getenv(
+    "DEFROST_STATUS_ENTITY_ID", "binary_sensor.hp_defrosting_status"
+)
+DISINFECTION_STATUS_ENTITY_ID: str = os.getenv(
+    "DISINFECTION_STATUS_ENTITY_ID", "binary_sensor.hp_dhw_tank_disinfection_status"
+)
 TV_STATUS_ENTITY_ID: str = os.getenv(
     "TV_STATUS_ENTITY_ID", "input_boolean.fernseher"
 )
@@ -815,6 +821,8 @@ def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
     kuche_temperatur_id = INDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
     fernseher_id = TV_STATUS_ENTITY_ID.split(".", 1)[-1]
     dhw_status_id = DHW_STATUS_ENTITY_ID.split(".", 1)[-1]
+    defrost_status_id = DEFROST_STATUS_ENTITY_ID.split(".", 1)[-1]
+    disinfection_status_id = DISINFECTION_STATUS_ENTITY_ID.split(".", 1)[-1]
     outdoor_temp_id = OUTDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
     pv1_power_id = PV1_POWER_ENTITY_ID.split(".", 1)[-1]
     pv2_power_id = PV2_POWER_ENTITY_ID.split(".", 1)[-1]
@@ -832,6 +840,8 @@ def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
             r["entity_id"] == "{pv2_power_id}" or
             r["entity_id"] == "{pv3_power_id}" or
             r["entity_id"] == "{dhw_status_id}" or
+            r["entity_id"] == "{defrost_status_id}" or
+            r["entity_id"] == "{disinfection_status_id}" or
             r["entity_id"] == "{fernseher_id}"
         )
         |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)
@@ -861,8 +871,12 @@ def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
 
     for idx in range(start_idx, len(df) - PREDICTION_HORIZON_STEPS):
         row = df.iloc[idx]
-        # --- Skip if DHW is active ---
-        if row.get(dhw_status_id, 0.0) == 1.0:
+        # --- Skip if DHW, defrosting, or disinfection is active ---
+        if (
+            row.get(dhw_status_id, 0.0) == 1.0
+            or row.get(defrost_status_id, 0.0) == 1.0
+            or row.get(disinfection_status_id, 0.0) == 1.0
+        ):
             continue
         next_row = df.iloc[idx + PREDICTION_HORIZON_STEPS]
         outdoor = row.get(outdoor_temp_id, np.nan)
@@ -1099,6 +1113,22 @@ def main(
             )
             if dhw_state_data and dhw_state_data.get("state") == "on":
                 print("DHW active, skipping cycle.")
+                time.sleep(poll_interval_seconds)
+                continue
+
+            defrost_state_data = get_ha_state(
+                DEFROST_STATUS_ENTITY_ID, all_states, is_binary=True
+            )
+            if defrost_state_data and defrost_state_data.get("state") == "on":
+                print("Defrosting active, skipping cycle.")
+                time.sleep(poll_interval_seconds)
+                continue
+
+            disinfection_state_data = get_ha_state(
+                DISINFECTION_STATUS_ENTITY_ID, all_states, is_binary=True
+            )
+            if disinfection_state_data and disinfection_state_data.get("state") == "on":
+                print("DHW disinfection active, skipping cycle.")
                 time.sleep(poll_interval_seconds)
                 continue
 
