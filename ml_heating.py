@@ -4,6 +4,7 @@
 import os
 import time
 import warnings
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Dict
 import pickle
@@ -14,7 +15,7 @@ from sklearn.exceptions import NotFittedError
 from influxdb_client import InfluxDBClient
 import requests
 from dotenv import load_dotenv
-from river import compose, preprocessing, ensemble, metrics
+from river import compose, preprocessing, ensemble, metrics, drift
 
 load_dotenv()
 
@@ -90,6 +91,9 @@ client: InfluxDBClient = InfluxDBClient(
 )
 query_api: Any = client.query_api()
 
+# Prediction smoothing
+prediction_history: deque = deque(maxlen=5)
+
 # Load or create model
 try:
     with open(MODEL_FILE, "rb") as f:
@@ -97,25 +101,32 @@ try:
         if isinstance(saved_data, dict):
             model = saved_data['model']
             mae = saved_data.get('mae', metrics.MAE())
+            rmse = saved_data.get('rmse', metrics.RMSE())
         else:
             # Handle old model format
             model = saved_data
             mae = metrics.MAE()
+            rmse = metrics.RMSE()
     print("Model and metrics loaded")
 except (FileNotFoundError, pickle.UnpicklingError):
-    model = compose.Pipeline(
-        preprocessing.StandardScaler(),
-        ensemble.RandomForestRegressor(n_models=10, seed=42)
-    )
+    unscaled_features = [
+        "outlet_temp",
+        "outlet_temp_sq",
+        "outlet_temp_cub",
+        "outlet_temp_change_from_last",
+        "outlet_indoor_diff",
+    ]
+    
+    # The pipeline will be created in initial_train_model
+    model = None
     mae = metrics.MAE()
+    rmse = metrics.RMSE()
     print("New model and metrics created")
 except Exception as e:
     print(f"Error loading model: {e}")
-    model = compose.Pipeline(
-        preprocessing.StandardScaler(),
-        ensemble.RandomForestRegressor(n_models=5, seed=42)
-    )
+    model = None
     mae = metrics.MAE()
+    rmse = metrics.RMSE()
 
 
 # -----------------------------
@@ -173,9 +184,22 @@ def get_ha_state(
         return state
 
 
-def set_ha_state(entity_id: str, value: float) -> None:
+def set_ha_state(
+    entity_id: str,
+    value: float,
+    attributes: Optional[Dict[str, Any]] = None,
+    round_digits: Optional[int] = 1,
+) -> None:
+    """Posts a state to the Home Assistant API, with optional rounding."""
     url = f"{HASS_URL}/api/states/{entity_id}"
-    payload = {"state": round(value, 1)}
+
+    # Round the value only if round_digits is specified
+    if round_digits is not None:
+        state_value = round(value, round_digits)
+    else:
+        state_value = value
+
+    payload = {"state": state_value, "attributes": attributes or {}}
     try:
         requests.post(url, headers=HASS_HEADERS, json=payload, timeout=10)
     except requests.RequestException as exc:
@@ -436,8 +460,12 @@ def calculate_baseline_outlet_temp(states_cache: Dict[str, Any]) -> float:
     b = y2 - (m * x2)
 
     # --- Part 2: Calculate the target temperature input for the curve ---
-    outdoor_temp_actual = get_ha_state(OUTDOOR_TEMP_ENTITY_ID, states_cache)
-    owm_temp_actual = get_ha_state(OPENWEATHERMAP_TEMP_ENTITY_ID, states_cache)
+    outdoor_temp_actual = get_ha_state(
+        OUTDOOR_TEMP_ENTITY_ID, states_cache
+    )
+    owm_temp_actual = get_ha_state(
+        OPENWEATHERMAP_TEMP_ENTITY_ID, states_cache
+    )
     forecast_temps = get_hourly_forecast()
 
     # Ensure we have the necessary data
@@ -494,6 +522,26 @@ def get_feature_names() -> List[str]:
     forecast_features = [
         f"{name}_forecast_{i+1}h" for name in ("pv", "temp") for i in range(4)
     ]
+    lag_features = [
+        "indoor_temp_lag_10m",
+        "indoor_temp_lag_30m",
+        "indoor_temp_lag_60m",
+        "outlet_temp_lag_10m",
+        "outlet_temp_lag_30m",
+        "outlet_temp_lag_60m",
+    ]
+    delta_features = [
+        "indoor_temp_delta_10m",
+        "indoor_temp_delta_30m",
+        "indoor_temp_delta_60m",
+        "outlet_temp_delta_10m",
+        "outlet_temp_delta_30m",
+        "outlet_temp_delta_60m",
+    ]
+    gradient_features = [
+        "indoor_temp_gradient",
+        "outlet_temp_gradient",
+    ]
     base_features = [
         "temp_diff_indoor_outdoor",
         "outlet_temp",
@@ -506,8 +554,20 @@ def get_feature_names() -> List[str]:
         "outlet_indoor_diff",
         "outlet_temp_sq",
         "outlet_temp_cub",
+        "month_sin",
+        "month_cos",
+        "day_of_week_sin",
+        "day_of_week_cos",
+        "is_weekend",
     ]
-    return base_features + history_features + forecast_features
+    return (
+        base_features
+        + history_features
+        + forecast_features
+        + lag_features
+        + delta_features
+        + gradient_features
+    )
 
 
 def find_best_outlet_temp(
@@ -516,9 +576,11 @@ def find_best_outlet_temp(
     target_temp: float,
     baseline_indoor: float,
     states_cache: Dict[str, Any],
-) -> float:
+) -> tuple[float, float]:
     # --- Get baseline from user's formula ---
-    baseline_outlet = calculate_baseline_outlet_temp(states_cache)
+    baseline_outlet = calculate_baseline_outlet_temp(
+        states_cache
+    )
     best_temp, min_diff = baseline_outlet, float("inf")
 
     # --- Define a smart search range around the baseline ---
@@ -548,6 +610,33 @@ def find_best_outlet_temp(
     # The indoor_temp is not a feature anymore, but we need it for
     # calculations
     indoor_temp = baseline_indoor
+
+    # --- Confidence Monitoring ---
+    # Get predictions from all trees in the forest for a baseline temp
+    X_baseline_dict = features.iloc[0].to_dict()
+    X_baseline_dict["outlet_temp"] = baseline_outlet
+    
+    regressor = model._last_step
+    tree_predictions = [
+        tree.predict_one(X_baseline_dict)
+        for tree in regressor.models
+    ]
+    confidence = np.std(tree_predictions)
+    set_ha_state(
+        "sensor.ml_model_confidence",
+        confidence,
+        {"state_class": "measurement"},
+        round_digits=None,
+    )
+
+    # If confidence is low (high std dev), fall back to baseline
+    if confidence > 0.1:  # Threshold can be tuned
+        if DEBUG:
+            print(
+                f"Model confidence low ({confidence:.3f}), "
+                "falling back to baseline."
+            )
+        return baseline_outlet, confidence
 
     for temp_candidate in np.arange(min_temp, max_temp + step, step):
         predicted_indoor = 0.0
@@ -589,6 +678,22 @@ def find_best_outlet_temp(
     
     if DEBUG:
         print(f"--- Optimal float temp found: {best_temp:.1f}°C ---")
+
+    # --- Prediction Smoothing (Exponential Moving Average) ---
+    if not prediction_history:
+        prediction_history.append(best_temp)
+    else:
+        last_smoothed = prediction_history[-1]
+        # Alpha can be tuned, 0.5 gives equal weight to new and old
+        alpha = 0.5
+        smoothed_temp = alpha * best_temp + (1 - alpha) * last_smoothed
+        prediction_history.append(smoothed_temp)
+
+    if DEBUG:
+        print("--- Prediction Smoothing ---")
+        print(f"  History: {[f'{t:.1f}' for t in prediction_history]}")
+        print(f"  Smoothed Temp: {prediction_history[-1]:.1f}°C")
+    best_temp = prediction_history[-1]
 
     # --- Smart Rounding to nearest integer ---
     floor_temp = np.floor(best_temp)
@@ -646,7 +751,33 @@ def find_best_outlet_temp(
                     )
                 print(f"  -> Chose: {final_temp}°C")
 
-    return float(final_temp)
+    return float(final_temp), confidence
+
+
+def get_feature_importances(model: Any, feature_names: List[str]) -> Dict[str, float]:
+    """Get feature importances from a River model."""
+    if not isinstance(model, compose.Pipeline):
+        return {}
+    
+    # The regressor is the second step of the pipeline
+    regressor = model._last_step
+
+    if not hasattr(regressor, "models"):
+        return {}
+
+    importances = {}
+    for i, tree in enumerate(regressor.models):
+        if hasattr(tree, 'feature_importances_'):
+            for feature, importance in tree.feature_importances_.items():
+                importances[feature] = importances.get(feature, 0) + importance
+
+    # Normalize
+    total_importance = sum(importances.values())
+    if total_importance > 0:
+        for feature in importances:
+            importances[feature] /= total_importance
+
+    return importances
 
 
 def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
@@ -655,6 +786,31 @@ def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
     change in indoor temperature `PREDICTION_HORIZON_STEPS` steps.
     """
     feature_names = get_feature_names()
+    if model is None:
+        unscaled_features = [
+            "outlet_temp",
+            "outlet_temp_sq",
+            "outlet_temp_cub",
+            "outlet_temp_change_from_last",
+            "outlet_indoor_diff",
+        ]
+        
+        # Create a pipeline that scales all features except the unscaled ones
+        scaler = (
+            compose.Select(*[f for f in feature_names if f not in unscaled_features]) |
+            preprocessing.StandardScaler()
+        )
+        
+        model = compose.Pipeline(
+            ('features', scaler),
+            ('learn', ensemble.AdaptiveRandomForestRegressor(
+                n_models=10,
+                max_depth=10,
+                seed=42,
+                drift_detector=drift.PageHinkley(),
+                warning_detector=drift.ADWIN()
+            ))
+        )
     hp_outlet_temp_id = ACTUAL_OUTLET_TEMP_ENTITY_ID.split(".", 1)[-1]
     kuche_temperatur_id = INDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
     fernseher_id = TV_STATUS_ENTITY_ID.split(".", 1)[-1]
@@ -695,10 +851,10 @@ def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
         df.bfill(inplace=True)
     except Exception:
         # If the database query fails, we can't train. Return None for the model.
-        return model
+        return model, mae, rmse
     features_list, labels_list = [], []
     outlet_steps = indoor_steps = HISTORY_STEPS
-    start_idx = max(outlet_steps, indoor_steps) - 1
+    start_idx = max(outlet_steps, indoor_steps, 12)  # 12 * 5m = 60m
 
     pv_forecast = get_pv_forecast()
     temp_forecast = get_hourly_forecast()
@@ -731,9 +887,17 @@ def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
         # --- New features ---
         temp_diff_indoor_outdoor = current_indoor_val - outdoor
         outlet_indoor_diff = outlet_temp_val - current_indoor_val
-        hour = row["_time"].hour
+        time = row["_time"]
+        hour = time.hour
         hour_sin = np.sin(2 * np.pi * hour / 24)
         hour_cos = np.cos(2 * np.pi * hour / 24)
+        month = time.month
+        month_sin = np.sin(2 * np.pi * (month - 1) / 12)
+        month_cos = np.cos(2 * np.pi * (month - 1) / 12)
+        day_of_week = time.weekday()
+        day_of_week_sin = np.sin(2 * np.pi * day_of_week / 7)
+        day_of_week_cos = np.cos(2 * np.pi * day_of_week / 7)
+        is_weekend = 1.0 if day_of_week >= 5 else 0.0
         # This is a simplification for training; in production, we'd use the live target.
         # This is a simplification for training. In production, we'd use the
         # This is a simplification for training. In production, we'd use
@@ -751,9 +915,43 @@ def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
         previous_outlet_temp_val = df.iloc[idx - 1].get(
             hp_outlet_temp_id, outlet_temp_val
         )
-        outlet_temp_change_from_last = outlet_temp_val - previous_outlet_temp_val
+        outlet_temp_change_from_last = (
+            outlet_temp_val - previous_outlet_temp_val
+        )
         outlet_temp_sq = outlet_temp_val**2
         outlet_temp_cub = outlet_temp_val**3
+
+        # Lag features (10m, 30m, 60m)
+        indoor_temp_lag_10m = df.iloc[idx - 2].get(
+            kuche_temperatur_id, current_indoor_val
+        )
+        indoor_temp_lag_30m = df.iloc[idx - 6].get(
+            kuche_temperatur_id, current_indoor_val
+        )
+        indoor_temp_lag_60m = df.iloc[idx - 12].get(
+            kuche_temperatur_id, current_indoor_val
+        )
+        outlet_temp_lag_10m = df.iloc[idx - 2].get(
+            hp_outlet_temp_id, outlet_temp_val
+        )
+        outlet_temp_lag_30m = df.iloc[idx - 6].get(
+            hp_outlet_temp_id, outlet_temp_val
+        )
+        outlet_temp_lag_60m = df.iloc[idx - 12].get(
+            hp_outlet_temp_id, outlet_temp_val
+        )
+
+        # Delta features
+        indoor_temp_delta_10m = current_indoor_val - indoor_temp_lag_10m
+        indoor_temp_delta_30m = current_indoor_val - indoor_temp_lag_30m
+        indoor_temp_delta_60m = current_indoor_val - indoor_temp_lag_60m
+        outlet_temp_delta_10m = outlet_temp_val - outlet_temp_lag_10m
+        outlet_temp_delta_30m = outlet_temp_val - outlet_temp_lag_30m
+        outlet_temp_delta_60m = outlet_temp_val - outlet_temp_lag_60m
+
+        # Gradient features
+        indoor_temp_gradient = (current_indoor_val - indoor_temp_lag_60m) / 60
+        outlet_temp_gradient = (outlet_temp_val - outlet_temp_lag_60m) / 60
 
         outlet_hist_series = df.iloc[idx - outlet_steps + 1: idx + 1][
             hp_outlet_temp_id
@@ -790,11 +988,36 @@ def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
                 outlet_indoor_diff,
                 outlet_temp_sq,
                 outlet_temp_cub,
+                month_sin,
+                month_cos,
+                day_of_week_sin,
+                day_of_week_cos,
+                is_weekend,
             ]
             + outlet_hist
             + indoor_hist
             + pv_forecast
             + temp_forecast
+            + [
+                indoor_temp_lag_10m,
+                indoor_temp_lag_30m,
+                indoor_temp_lag_60m,
+                outlet_temp_lag_10m,
+                outlet_temp_lag_30m,
+                outlet_temp_lag_60m,
+            ]
+            + [
+                indoor_temp_delta_10m,
+                indoor_temp_delta_30m,
+                indoor_temp_delta_60m,
+                outlet_temp_delta_10m,
+                outlet_temp_delta_30m,
+                outlet_temp_delta_60m,
+            ]
+            + [
+                indoor_temp_gradient,
+                outlet_temp_gradient,
+            ]
         )
         
         # Ensure feature vector length matches feature names
@@ -824,38 +1047,20 @@ def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
                 label = y[i]
                 model.learn_one(features, label)
 
+            # After training, calculate metrics
+            for i in range(len(X)):
+                features = X.iloc[i].to_dict()
+                label = y[i]
+                prediction = model.predict_one(features)
+                mae.update(y_true=label, y_pred=prediction)
+                rmse.update(y_true=label, y_pred=prediction)
+
             with open(MODEL_FILE, "wb") as f:
-                pickle.dump({'model': model, 'mae': mae}, f)
+                pickle.dump({'model': model, 'mae': mae, 'rmse': rmse}, f)
 
             if DEBUG:
-                try:
-                    # For RandomForestRegressor, we can inspect feature importances
-                    # This is a bit more complex for River's online models
-                    # We'll try to get it from the underlying regressors
-                    if hasattr(model, 'models'):
-                        importances = pd.DataFrame()
-                        for i, regressor in enumerate(model.models):
-                            if hasattr(regressor, 'feature_importances_'):
-                                imp = regressor.feature_importances_()
-                                importances[f'tree_{i}'] = imp.values()
-                        
-                        if not importances.empty:
-                            importances['mean_importance'] = importances.mean(axis=1)
-                            importances.index = X.columns
-                            
-                            sorted_importance = importances.sort_values(
-                                by="mean_importance", ascending=False
-                            )
-                            print(
-                                "Top 10 feature importances "
-                                "(mean across trees):"
-                            )
-                            print(
-                                sorted_importance['mean_importance'].head(10)
-                            )
-
-                except Exception as e:
-                    print(f"Could not retrieve feature importances: {e}")
+                print(f"MAE after training: {mae.get():.4f}")
+                print(f"RMSE after training: {rmse.get():.4f}")
 
             print(
                 "Initial training done on last "
@@ -869,12 +1074,13 @@ def initial_train_model(model: Any, lookback_hours: int = 168) -> Any:
 
     # This single return statement handles all cases.
     # It returns the trained model if successful, or None if any step failed.
-    return model, mae
+    return model, mae, rmse
 
 
 def main(
     model: Optional[Any],
     mae: metrics.MAE,
+    rmse: metrics.RMSE,
     poll_interval_seconds: int = 300,
 ) -> None:
     # If initial training failed, models will be None.
@@ -940,24 +1146,24 @@ def main(
 
                     # Check if the time difference is close to the prediction horizon
                     if abs(time_diff_minutes - PREDICTION_HORIZON_MINUTES) < 10:
-                        # The actual change is the current indoor temp minus the baseline from the past
+                        # The actual change is the current indoor temp minus
+                        # the baseline from the past
                         actual_delta = actual_indoor - last_baseline_indoor
                         
                         # Get the prediction that was made for this moment
-                        predicted_delta = model.predict_one(last_features)
+                        predicted_delta = model.predict_one(
+                            last_features
+                        )
 
                         # Update the MAE metric
                         mae.update(y_true=actual_delta, y_pred=predicted_delta)
+                        rmse.update(y_true=actual_delta, y_pred=predicted_delta)
 
                         # learn from the last state
                         model.learn_one(last_features, actual_delta)
-                        print(
-                            "Model updated with one sample. "
-                            f"Current MAE: {mae.get():.4f}"
-                        )
-
+                        
                         with open(MODEL_FILE, "wb") as f:
-                            pickle.dump({'model': model, 'mae': mae}, f)
+                            pickle.dump({'model': model, 'mae': mae, 'rmse': rmse}, f)
 
                 except Exception as e:
                     print(f"Error during online training: {e}")
@@ -967,15 +1173,33 @@ def main(
             # Check if models exist and are fitted
             if model is None:
                 is_fitted = False
+                confidence = 0.0
             else:
                 is_fitted = True
 
             # Fallback to baseline if models are not fitted
             if not is_fitted:
                 print("Model not fitted, falling back to baseline.")
-                suggested_temp = calculate_baseline_outlet_temp(all_states)
+                suggested_temp = calculate_baseline_outlet_temp(
+                    all_states
+                )
                 predicted_indoor = actual_indoor or target_indoor_temp
             else:
+                # --- Log feature importances ---
+                if DEBUG and isinstance(model, compose.Pipeline):
+                    feature_importances = get_feature_importances(
+                        model, get_feature_names()
+                    )
+                    if feature_importances:
+                        print("--- Feature Importances ---")
+                        sorted_importances = sorted(
+                            feature_importances.items(),
+                            key=lambda item: item[1],
+                            reverse=True,
+                        )
+                        for feature, importance in sorted_importances[:10]:
+                            print(f"  - {feature}: {importance:.4f}")
+
                 # --- Gather all features for ML model ---
                 tv_state_raw = get_ha_state(
                     TV_STATUS_ENTITY_ID, all_states, is_binary=True
@@ -1001,14 +1225,40 @@ def main(
                 hour = now_utc.hour
                 hour_sin = np.sin(2 * np.pi * hour / 24)
                 hour_cos = np.cos(2 * np.pi * hour / 24)
+                month = now_utc.month
+                month_sin = np.sin(2 * np.pi * (month - 1) / 12)
+                month_cos = np.cos(2 * np.pi * (month - 1) / 12)
+                day_of_week = now_utc.weekday()
+                day_of_week_sin = np.sin(2 * np.pi * day_of_week / 7)
+                day_of_week_cos = np.cos(2 * np.pi * day_of_week / 7)
+                is_weekend = 1.0 if day_of_week >= 5 else 0.0
 
                 feature_names = get_feature_names()
-                outlet_temp = (
-                    get_ha_state(ACTUAL_OUTLET_TEMP_ENTITY_ID, all_states)
-                    or outlet_history[-1]
-                )
+                outlet_temp = get_ha_state(
+                    ACTUAL_OUTLET_TEMP_ENTITY_ID, all_states
+                ) or outlet_history[-1]
                 
                 outlet_temp_change_from_last = outlet_temp - outlet_history[-1]
+
+                # Lag features
+                indoor_temp_lag_10m = indoor_history[-2]
+                indoor_temp_lag_30m = indoor_history[-4]
+                indoor_temp_lag_60m = indoor_history[0]
+                outlet_temp_lag_10m = outlet_history[-2]
+                outlet_temp_lag_30m = outlet_history[-4]
+                outlet_temp_lag_60m = outlet_history[0]
+
+                # Delta features
+                indoor_temp_delta_10m = actual_indoor - indoor_temp_lag_10m
+                indoor_temp_delta_30m = actual_indoor - indoor_temp_lag_30m
+                indoor_temp_delta_60m = actual_indoor - indoor_temp_lag_60m
+                outlet_temp_delta_10m = outlet_temp - outlet_temp_lag_10m
+                outlet_temp_delta_30m = outlet_temp - outlet_temp_lag_30m
+                outlet_temp_delta_60m = outlet_temp - outlet_temp_lag_60m
+
+                # Gradient features
+                indoor_temp_gradient = (actual_indoor - indoor_temp_lag_60m) / 60
+                outlet_temp_gradient = (outlet_temp - outlet_temp_lag_60m) / 60
 
                 current_features_list = (
                     [
@@ -1023,20 +1273,48 @@ def main(
                         outlet_temp - actual_indoor,
                         outlet_temp**2,
                         outlet_temp**3,
+                        month_sin,
+                        month_cos,
+                        day_of_week_sin,
+                        day_of_week_cos,
+                        is_weekend,
                     ]
                     + outlet_history
                     + indoor_history
                     + pv_forecasts
                     + temp_forecasts
+                    + [
+                        indoor_temp_lag_10m,
+                        indoor_temp_lag_30m,
+                        indoor_temp_lag_60m,
+                        outlet_temp_lag_10m,
+                        outlet_temp_lag_30m,
+                        outlet_temp_lag_60m,
+                    ]
+                    + [
+                        indoor_temp_delta_10m,
+                        indoor_temp_delta_30m,
+                        indoor_temp_delta_60m,
+                        outlet_temp_delta_10m,
+                        outlet_temp_delta_30m,
+                        outlet_temp_delta_60m,
+                    ]
+                    + [
+                        indoor_temp_gradient,
+                        outlet_temp_gradient,
+                    ]
                 )
 
                 # Fallback if feature lengths don't match
                 if len(current_features_list) != len(feature_names):
-                    print(
-                        "Feature length mismatch, falling back to baseline."
-                    )
-                    suggested_temp = calculate_baseline_outlet_temp(all_states)
-                    predicted_indoor = actual_indoor or target_indoor_temp
+                        print(
+                            "Feature length mismatch, "
+                            "falling back to baseline."
+                        )
+                        suggested_temp = calculate_baseline_outlet_temp(
+                            all_states
+                        )
+                        predicted_indoor = actual_indoor or target_indoor_temp
                 else:
                     # --- This is the successful ML path ---
                     current_features_df = pd.DataFrame(
@@ -1044,7 +1322,7 @@ def main(
                     )
                     baseline_current = actual_indoor or indoor_history[-1]
 
-                    suggested_temp = find_best_outlet_temp(
+                    suggested_temp, confidence = find_best_outlet_temp(
                         model,
                         current_features_df,
                         target_indoor_temp,
@@ -1085,6 +1363,7 @@ def main(
             )
             boosted_temp = suggested_temp + error_boost
             final_temp = min(boosted_temp, 65.0)
+            final_temp = max(final_temp, 18.0)
 
             if DEBUG:
                 print("--- Final Temp Calculation ---")
@@ -1093,20 +1372,48 @@ def main(
                 print(f"  Boosted Temp: {boosted_temp:.1f}°C")
                 print(f"  Final Temp (clamped at 65°C): {final_temp:.1f}°C")
 
-            set_ha_state("sensor.ml_vorlauftemperatur", final_temp)
-            set_ha_state("sensor.ml_predicted_indoor_temp", predicted_indoor)
+            temp_attributes = {
+                "state_class": "measurement",
+                "unit_of_measurement": "°C",
+                "device_class": "temperature",
+            }
+            set_ha_state(
+                "sensor.ml_vorlauftemperatur", final_temp, temp_attributes
+            )
+            set_ha_state(
+                "sensor.ml_predicted_indoor_temp",
+                predicted_indoor,
+                temp_attributes,
+            )
+            set_ha_state(
+                "sensor.ml_model_mae",
+                mae.get(),
+                {"state_class": "measurement"},
+                round_digits=None,
+            )
+            set_ha_state(
+                "sensor.ml_model_rmse",
+                rmse.get(),
+                {"state_class": "measurement"},
+                round_digits=None,
+            )
 
             print(
                 f"{now_utc.isoformat()} - Target: {target_indoor_temp}°C"
                 f" | Suggested: {final_temp:.1f}°C"
                 f" | Predicted: {predicted_indoor:.2f}°C"
                 f" | Actual: {actual_indoor or 'N/A'}"
+                f" | Confidence: {confidence:.3f}"
+                f" | MAE: {mae.get():.3f}"
+                f" | RMSE: {rmse.get():.3f}"
             )
 
         except Exception as exc:
             print("Error in main loop:", exc)
 
         time.sleep(poll_interval_seconds)
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -1119,10 +1426,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # The models are now created inside the training function
-    model, mae = initial_train_model(model, lookback_hours=168)
+    model, mae, rmse = initial_train_model(model, lookback_hours=168)
 
     if args.train_only:
         print("Training complete. Exiting as requested by --train-only flag.")
     else:
         # Pass the potentially newly created models to main
-        main(model=model, mae=mae)
+        main(model=model, mae=mae, rmse=rmse)

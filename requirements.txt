@@ -6,3 +6,4 @@ joblib
 requests
 python-dotenv
 lightgbm
+river
