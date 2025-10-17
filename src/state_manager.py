@@ -1,4 +1,11 @@
-"""This module handles loading and saving the application state."""
+"""
+This module handles the persistence of the application's state.
+
+The state includes data from the previous run, such as the features used for
+prediction and the resulting indoor temperature. This information is crucial for
+the online learning process, allowing the model to learn from its past
+performance in the next cycle.
+"""
 import logging
 import pickle
 from typing import Any, Dict
@@ -8,7 +15,11 @@ from . import config
 
 def load_state() -> Dict[str, Any]:
     """
-    Load state from a file or create a new one, matching the original script's logic.
+    Loads the application state from a pickle file.
+
+    If the file doesn't exist or is corrupted, it returns a fresh,
+    empty state dictionary. This ensures the application can always start,
+    even without a previous state.
     """
     try:
         with open(config.STATE_FILE, "rb") as f:
@@ -26,6 +37,7 @@ def load_state() -> Dict[str, Any]:
             config.STATE_FILE,
             e,
         )
+        # Return a default state structure if loading fails.
         return {
             "last_run_features": None,
             "last_indoor_temp": None,
@@ -36,7 +48,12 @@ def load_state() -> Dict[str, Any]:
 def save_state(
     last_run_features: Any, last_indoor_temp: float, prediction_history: list
 ) -> None:
-    """Save the application state to a file."""
+    """
+    Saves the application's current state to a pickle file.
+
+    This includes the feature set from the current run and the measured indoor
+    temperature, which will be used in the next cycle for online learning.
+    """
     state = {
         "last_run_features": last_run_features,
         "last_indoor_temp": last_indoor_temp,

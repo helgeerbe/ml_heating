@@ -1,4 +1,10 @@
-"""This module contains the InfluxDB service."""
+"""
+This module provides an interface for interacting with InfluxDB.
+
+It abstracts the complexities of writing Flux queries and handling the
+InfluxDB client, offering methods to fetch historical data, PV forecasts,
+and training data sets.
+"""
 from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
@@ -10,12 +16,17 @@ class InfluxService:
     """A service for interacting with InfluxDB."""
 
     def __init__(self, url, token, org):
-        """Initialize the service."""
+        """Initializes the InfluxDB client."""
         self.client = InfluxDBClient(url=url, token=token, org=org)
         self.query_api: QueryApi = self.client.query_api()
 
     def get_pv_forecast(self) -> list[float]:
-        """Get PV forecast from InfluxDB using the original query."""
+        """
+        Retrieves the PV (photovoltaic) power forecast for the next 4 hours.
+
+        It queries InfluxDB for two separate PV forecast entities, sums them,
+        and then aligns the data to hourly intervals.
+        """
         flux_query = """
             import "experimental"
 
@@ -66,11 +77,13 @@ class InfluxService:
         df["_time"] = pd.to_datetime(df["_time"], utc=True)
         df.sort_values("_time", inplace=True)
 
+        # Align forecast to the next 4 full hours.
         now_utc = pd.Timestamp(datetime.now(timezone.utc))
         first_anchor = now_utc.ceil("h")
         anchors = pd.date_range(start=first_anchor, periods=4, freq="h", tz="UTC")
 
         series = df.set_index("_time")["total"].sort_index()
+        # Find the nearest forecast value for each hourly anchor.
         matched = series.reindex(
             anchors, method="nearest", tolerance=pd.Timedelta("30min")
         )
@@ -81,7 +94,13 @@ class InfluxService:
     def fetch_history(
         self, entity_id: str, steps: int, default_value: float
     ) -> list[float]:
-        """Generic function to fetch history for an entity."""
+        """
+        Fetches historical data for a given entity_id.
+
+        It retrieves data for a specified number of steps, with each step's
+        duration defined in the config. It performs aggregation (mean) and
+        ensures the output has a fixed length, padding if necessary.
+        """
         minutes = steps * config.HISTORY_STEP_MINUTES
         entity_id_short = entity_id.split(".", 1)[-1]
         flux_query = f"""
@@ -108,15 +127,18 @@ class InfluxService:
                 if isinstance(df, list)
                 else df
             )
+            # Forward-fill and back-fill to handle any missing data points.
             df["value"] = df["value"].ffill().bfill()
             values = df["value"].tolist()
             
+            # Ensure the result has the desired number of steps.
             if len(values) < steps:
                 padding = [
                     values[-1] if values else default_value
                 ] * (steps - len(values))
                 values.extend(padding)
             
+            # Downsample if more data points than steps are returned.
             step = max(1, len(values) // steps)
             result = []
             for i in range(steps):
@@ -124,22 +146,29 @@ class InfluxService:
                 result.append(float(np.mean(chunk)) if chunk else default_value)
             return result[-steps:]
         except Exception:
+            # Return a default list if the query fails.
             return [default_value] * steps
 
     def fetch_outlet_history(self, steps: int) -> list[float]:
-        """Fetch the last N outlet temperature readings."""
+        """Fetches the historical heating outlet temperature."""
         return self.fetch_history(
             config.ACTUAL_OUTLET_TEMP_ENTITY_ID, steps, 40.0
         )
 
     def fetch_indoor_history(self, steps: int) -> list[float]:
-        """Fetch the last N indoor temperature readings."""
+        """Fetches the historical indoor temperature."""
         return self.fetch_history(
             config.INDOOR_TEMP_ENTITY_ID, steps, 21.0
         )
 
     def get_training_data(self, lookback_hours: int) -> pd.DataFrame:
-        """Fetches and reshapes data for model training."""
+        """
+        Fetches a comprehensive dataset for model training.
+
+        It queries multiple entities over a specified lookback period,
+        pivots the data into a wide format, and performs cleaning steps
+        like filling missing values.
+        """
         hp_outlet_temp_id = config.ACTUAL_OUTLET_TEMP_ENTITY_ID.split(".", 1)[
             -1
         ]
@@ -149,7 +178,9 @@ class InfluxService:
         fernseher_id = config.TV_STATUS_ENTITY_ID.split(".", 1)[-1]
         dhw_status_id = config.DHW_STATUS_ENTITY_ID.split(".", 1)[-1]
         defrost_status_id = config.DEFROST_STATUS_ENTITY_ID.split(".", 1)[-1]
-        disinfection_status_id = config.DISINFECTION_STATUS_ENTITY_ID.split(".", 1)[-1]
+        disinfection_status_id = config.DISINFECTION_STATUS_ENTITY_ID.split(
+            ".", 1
+        )[-1]
         dhw_boost_heater_status_id = (
             config.DHW_BOOST_HEATER_STATUS_ENTITY_ID.split(".", 1)[-1]
         )
@@ -200,7 +231,11 @@ class InfluxService:
 
 
 def create_influx_service():
-    """Create an InfluxDB service."""
+    """
+    Factory function to create an instance of the InfluxService.
+    
+    It reads the necessary connection details from the config module.
+    """
     return InfluxService(
         config.INFLUX_URL, config.INFLUX_TOKEN, config.INFLUX_ORG
     )

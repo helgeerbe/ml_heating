@@ -1,4 +1,11 @@
-"""This module contains the Home Assistant client."""
+"""
+This module provides a client for interacting with the Home Assistant API.
+
+It abstracts the details of making HTTP requests to Home Assistant for
+fetching sensor states, setting sensor values, and calling services. This
+centralizes all communication with Home Assistant, making the rest of the
+application cleaner and easier to manage.
+"""
 import logging
 import warnings
 from datetime import datetime, timezone
@@ -13,7 +20,14 @@ class HAClient:
     """A client for interacting with the Home Assistant API."""
 
     def __init__(self, url: str, token: str):
-        """Initialize the client."""
+        """
+        Initializes the Home Assistant client.
+
+        Args:
+            url: The base URL of the Home Assistant instance
+            (e.g., http://homeassistant.local:8123).
+            token: A long-lived access token for authentication.
+        """
         self.url = url
         self.headers = {
             "Authorization": f"Bearer {token}",
@@ -21,12 +35,24 @@ class HAClient:
         }
 
     def get_all_states(self) -> Dict[str, Any]:
-        """Fetches all states from Home Assistant in a single API call."""
+        """
+        Retrieves a snapshot of all entity states from Home Assistant.
+
+        This method is highly efficient as it fetches all states in a single
+        API call, which is much faster than querying entities one by one. The
+        result is cached by the caller for subsequent `get_state` calls within
+        the same update cycle.
+
+        Returns:
+            A dictionary where keys are entity_ids and values are the
+            corresponding state objects from Home Assistant. Returns an
+            empty dictionary if the request fails.
+        """
         url = f"{self.url}/api/states"
         try:
             resp = requests.get(url, headers=self.headers, timeout=10)
             resp.raise_for_status()
-            # Create a dictionary mapping entity_id to its state object
+            # Create a dictionary mapping entity_id to its state object for quick lookups.
             return {entity["entity_id"]: entity for entity in resp.json()}
         except requests.RequestException as exc:
             warnings.warn(f"HA request error for all states: {exc}")
@@ -39,11 +65,24 @@ class HAClient:
         is_binary: bool = False,
     ) -> Optional[Any]:
         """
-        Retrieves the state of a Home Assistant entity, using a cache if provided.
-        This version matches the logic of the original ml_heating.py script.
+        Retrieves the state of a specific Home Assistant entity.
+
+        This method prioritizes using a provided `states_cache` (from
+        `get_all_states`) for efficiency. If no cache is given, it makes a
+        direct API call as a fallback. It handles type conversion for
+        numerical and binary sensors.
+
+        Args:
+            entity_id: The full ID of the entity (e.g., 'sensor.temperature').
+            states_cache: A dictionary of all states, as returned by `get_all_states`.
+            is_binary: If True, treats the state as binary ('on'/'off').
+
+        Returns:
+            The processed state of the entity (float, bool, or string),
+            or None if the entity is not found or its state is invalid.
         """
         if states_cache is None:
-            # Fallback to individual request if no cache is provided
+            # Fallback to individual request if no cache is provided.
             url = f"{self.url}/api/states/{entity_id}"
             try:
                 resp = requests.get(url, headers=self.headers, timeout=10)
@@ -53,6 +92,7 @@ class HAClient:
                 warnings.warn(f"HA request error {entity_id}: {exc}")
                 return None
         else:
+            # Use the provided cache.
             data = states_cache.get(entity_id)
 
         if data is None:
@@ -77,16 +117,30 @@ class HAClient:
         attributes: Optional[Dict[str, Any]] = None,
         round_digits: Optional[int] = 1,
     ) -> None:
-        """Posts a state to the Home Assistant API, with optional rounding."""
+        """
+        Creates or updates the state of a sensor entity in Home Assistant.
+
+        This is the primary method for publishing the model's outputs (like
+        the target temperature or performance metrics) back to Home
+        Assistant, making them visible and usable in the HA frontend and
+        automations.
+
+        Args:
+            entity_id: The ID of the sensor to create/update.
+            value: The main state value for the sensor.
+            attributes: A dictionary of additional attributes for the sensor.
+            round_digits: The number of decimal places to round the state
+            value to.
+        """
         url = f"{self.url}/api/states/{entity_id}"
 
-        # Round the value only if round_digits is specified
+        # Round the value only if round_digits is specified.
         if round_digits is not None:
             state_value = round(value, round_digits)
         else:
             state_value = value
 
-        # Ensure the state is a string with a dot for the decimal separator
+        # The state must be sent as a string.
         payload = {
             "state": (
                 f"{state_value:.{round_digits}f}"
@@ -102,7 +156,16 @@ class HAClient:
             warnings.warn(f"HA state set failed for {entity_id}: {exc}")
 
     def get_hourly_forecast(self) -> List[float]:
-        """Get hourly weather forecast."""
+        """
+        Retrieves the hourly weather forecast via the Home Assistant service.
+
+        It calls the `weather.get_forecasts` service for the configured weather
+        entity and extracts the temperature forecasts for the next few hours.
+
+        Returns:
+            A list of forecasted temperatures, or a default list of zeros if
+            the call fails.
+        """
         svc_url = f"{self.url}/api/services/weather/get_forecasts"
         body = {"entity_id": ["weather.openweathermap"], "type": "hourly"}
 
@@ -117,6 +180,7 @@ class HAClient:
             resp.raise_for_status()
             data = resp.json()["service_response"]
         except Exception:
+            # Return a default value if the API call fails.
             return [0.0, 0.0, 0.0, 0.0]
 
         try:
@@ -124,6 +188,7 @@ class HAClient:
         except (KeyError, TypeError):
             return [0.0, 0.0, 0.0, 0.0]
 
+        # Extract the temperature from the first 4 forecast entries.
         result = []
         for entry in forecast_list[:4]:
             temp = entry.get("temperature") if isinstance(entry, dict) else None
@@ -133,21 +198,35 @@ class HAClient:
         return result
 
     def log_feature_importance(self, importances: Dict[str, float]):
-        """Logs feature importances to a Home Assistant sensor."""
+        """
+        Publishes the model's feature importances to a Home Assistant sensor.
+
+        This creates a sensor (`sensor.ml_feature_importance`) where the
+        state is the number of features, and an attribute `top_features`
+        lists the most influential features and their importance scores. This
+        is useful for monitoring and understanding the model's behavior.
+
+        Args:
+            importances: A dictionary mapping feature names to importance
+            scores.
+        """
         if not importances:
             return
 
+        # Sort features by importance (descending).
         sorted_importances = sorted(
             importances.items(), key=lambda item: item[1], reverse=True
         )
 
         attributes = get_sensor_attributes("sensor.ml_feature_importance")
+        # Store the top 10 features and their importance percentage.
         attributes["top_features"] = {
             f: round(v * 100, 2) for f, v in sorted_importances[:10]
         }
         attributes["last_updated"] = datetime.now(timezone.utc).isoformat()
 
         logging.debug("Logging feature importance")
+        # The state of the sensor is the total number of features.
         self.set_state(
             "sensor.ml_feature_importance",
             len(sorted_importances),
@@ -158,10 +237,23 @@ class HAClient:
     def log_model_metrics(
         self, confidence: float, mae: float, rmse: float
     ) -> None:
-        """Logs model metrics to Home Assistant sensors."""
+        """
+        Publishes key model performance metrics to dedicated HA sensors.
+
+        This creates sensors for model confidence, Mean Absolute Error (MAE),
+        and Root Mean Squared Error (RMSE), allowing for real-time tracking
+        of the model's performance and uncertainty from within Home
+        Assistant.
+
+        Args:
+            confidence: The model's confidence score (std dev of tree
+            predictions).
+            mae: The current Mean Absolute Error.
+            rmse: The current Root Mean Squared Error.
+        """
         now_utc = datetime.now(timezone.utc).isoformat()
 
-        # Log Confidence
+        # Log Confidence (standard deviation of tree predictions)
         logging.debug("Logging confidence")
         attributes_confidence = get_sensor_attributes(
             config.CONFIDENCE_ENTITY_ID
@@ -174,7 +266,7 @@ class HAClient:
             round_digits=4,
         )
 
-        # Log MAE
+        # Log Mean Absolute Error (MAE)
         logging.debug("Logging MAE")
         attributes_mae = get_sensor_attributes(config.MAE_ENTITY_ID)
         attributes_mae["last_updated"] = now_utc
@@ -185,7 +277,7 @@ class HAClient:
             round_digits=4,
         )
 
-        # Log RMSE
+        # Log Root Mean Squared Error (RMSE)
         logging.debug("Logging RMSE")
         attributes_rmse = get_sensor_attributes(config.RMSE_ENTITY_ID)
         attributes_rmse["last_updated"] = now_utc
@@ -198,7 +290,20 @@ class HAClient:
 
 
 def get_sensor_attributes(entity_id: str) -> Dict[str, Any]:
-    """Returns a dictionary of attributes for a given sensor entity_id."""
+    """
+    Provides a standardized set of attributes for the sensors created by this script.
+
+    This function acts as a central repository for sensor metadata like
+    `friendly_name`, `unit_of_measurement`, `device_class`, and `icon`.
+    This ensures that all sensors created by the application have a
+    consistent and user-friendly appearance in the Home Assistant frontend.
+
+    Args:
+        entity_id: The ID of the sensor for which to get attributes.
+
+    Returns:
+        A dictionary of attributes for that sensor.
+    """
     base_attributes = {
         "state_class": "measurement",
     }
@@ -248,5 +353,10 @@ def get_sensor_attributes(entity_id: str) -> Dict[str, Any]:
 
 
 def create_ha_client():
-    """Create a Home Assistant client."""
+    """
+    Factory function to create an instance of the HAClient.
+
+    It simplifies the creation of a client by reading the required URL and
+    token directly from the application's configuration module.
+    """
     return HAClient(config.HASS_URL, config.HASS_TOKEN)

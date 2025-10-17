@@ -1,4 +1,11 @@
-"""This module is responsible for building the feature set for the model."""
+"""
+This module is responsible for creating the feature set used by the ML model.
+
+Feature engineering is a critical step in machine learning. This module
+gathers raw data from various sources (Home Assistant, InfluxDB), calculates
+new features, and assembles them into a structured format (a pandas DataFrame)
+that the model can consume for both training and prediction.
+"""
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -12,7 +19,14 @@ from .influx_service import InfluxService
 
 
 def get_feature_names() -> List[str]:
-    """Generate the list of feature names for the lean enhanced model."""
+    """
+    Returns a definitive list of all feature names used by the model.
+
+    This function is crucial for ensuring consistency between the features
+    created during training and prediction. It centralizes the feature
+    definitions, making the system easier to maintain and debug.
+    """
+    # Features related to future forecasts (PV power and temperature).
     forecast_features = [
         f"{name}_forecast_{i+1}h" for name in ("pv", "temp") for i in range(4)
     ]
@@ -93,10 +107,26 @@ def build_features(
     influx_service: InfluxService,
     all_states: Dict[str, Any],
 ) -> Optional[Tuple[pd.DataFrame, list[float]]]:
-    """Build the feature DataFrame for the model prediction."""
+    """
+    Constructs the feature DataFrame for a real-time prediction.
+
+    This function is called during each main loop cycle. It fetches live data,
+    historical data, and forecasts to build a single-row DataFrame
+    representing the current state of the environment.
+
+    Args:
+        ha_client: The Home Assistant client instance.
+        influx_service: The InfluxDB service instance.
+        all_states: A dictionary of all current states from Home Assistant.
+
+    Returns:
+        A tuple containing the feature DataFrame and the outlet history,
+        or (None, None) if feature building fails.
+    """
     now = datetime.now(timezone.utc)
 
-    # --- Get current sensor values ---
+    # --- 1. Gather Raw Data ---
+    # Fetch current sensor values from Home Assistant's state cache.
     actual_indoor = ha_client.get_state(config.INDOOR_TEMP_ENTITY_ID, all_states)
     outdoor_temp = ha_client.get_state(config.OUTDOOR_TEMP_ENTITY_ID, all_states)
     outlet_temp = ha_client.get_state(config.ACTUAL_OUTLET_TEMP_ENTITY_ID, all_states)
@@ -122,8 +152,13 @@ def build_features(
         logging.error("Missing critical sensor data. Cannot build features.")
         return None, None
 
-    # --- Calculate engineered features ---
+    # --- 2. Engineer Features ---
+    # Create new features from the raw data to provide more context for the model.
+
+    # Temperature difference between inside and outside.
     temp_diff_indoor_outdoor = actual_indoor - outdoor_temp
+
+    # Cyclical time-based features to capture daily, monthly, and weekly patterns.
     hour = now.hour
     hour_sin = np.sin(2 * np.pi * hour / 24)
     hour_cos = np.cos(2 * np.pi * hour / 24)
@@ -140,12 +175,21 @@ def build_features(
         return None, None
     outlet_temp_change_from_last = outlet_temp - outlet_history[-1]
 
-    # --- Aggregated History Features ---
+    # --- 3. Advanced Feature Engineering ---
+
+    # Statistical features from historical data to capture trends,
+    # variability, and momentum.
     outlet_hist_series = pd.Series(outlet_history)
     indoor_hist_series = pd.Series(indoor_history)
 
     outlet_hist_mean = outlet_hist_series.mean()
     outlet_hist_std = outlet_hist_series.std()
+    outlet_hist_trend = (
+        (outlet_hist_series.iloc[-1] - outlet_hist_series.iloc[0])
+        / len(outlet_hist_series)
+        if len(outlet_hist_series) > 1
+        else 0
+    )
     outlet_hist_trend = (
         (outlet_hist_series.iloc[-1] - outlet_hist_series.iloc[0])
         / len(outlet_hist_series)
@@ -170,14 +214,12 @@ def build_features(
     indoor_hist_q25 = indoor_hist_series.quantile(0.25)
     indoor_hist_q75 = indoor_hist_series.quantile(0.75)
 
-    # --- Interaction Feature ---
+    # Interaction features capture combined effects.
     outdoor_temp_x_outlet_temp = outdoor_temp * outlet_temp
 
-    # Lag, Delta, and Gradient features based on history
-    # Note: History has HISTORY_STEPS items.
-    # For 10min steps, history has 6 items.
-    # Lag 10m is the previous value, index -2 if current is -1.
-    # Let's assume history is a list of recent values, not including current.
+    # Lag features provide a snapshot of past states.
+    # Delta features show the change over different time windows.
+    # Gradient features calculate the rate of change.
     indoor_temp_lag_10m = indoor_history[-1]
     indoor_temp_lag_30m = indoor_history[-3]
     indoor_temp_lag_60m = indoor_history[0]
@@ -199,7 +241,7 @@ def build_features(
         config.HISTORY_STEPS * config.HISTORY_STEP_MINUTES
     )
 
-    # Binary features
+    # Binary flags for system states (e.g., defrosting).
     binary_entities = {
         "dhw_heating": config.DHW_STATUS_ENTITY_ID,
         "defrosting": config.DEFROST_STATUS_ENTITY_ID,
@@ -211,7 +253,8 @@ def build_features(
         state_data = ha_client.get_state(entity_id, all_states, is_binary=True)
         binary_features_values[name] = 1.0 if state_data else 0.0
 
-    # --- Assemble feature list ---
+    # --- 4. Assemble the DataFrame ---
+    # Combine all engineered features into a list in the correct order.
     current_features_list = (
         [
             temp_diff_indoor_outdoor,
@@ -283,6 +326,7 @@ def build_features(
         )
         return None, None
 
+    # Create the final DataFrame with named columns.
     return pd.DataFrame([current_features_list], columns=feature_names), outlet_history
 
 
@@ -290,8 +334,23 @@ def build_features_for_training(
     df: pd.DataFrame,
     idx: int,
 ) -> Optional[Dict[str, Any]]:
-    """Builds a feature dictionary from a historical DataFrame row."""
+    """
+    Builds a feature dictionary for a single time step from a historical DataFrame.
+
+    This function is used during the initial training process. It iterates
+    through a large historical dataset and constructs a feature set for each
+    row, similar to `build_features` but operating on historical data rather
+    than live data.
+
+    Args:
+        df: The historical data DataFrame from InfluxDB.
+        idx: The index of the current row to process.
+
+    Returns:
+        A dictionary of features for the given time step, or None if not possible.
+    """
     if idx < config.HISTORY_STEPS:
+        # Need enough historical data to build lag/delta features.
         return None
 
     row = df.iloc[idx]
@@ -374,7 +433,9 @@ def build_features_for_training(
     binary_features_values = {}
     for name, entity_id in binary_entities.items():
         entity_short_id = entity_id.split(".", 1)[-1]
-        binary_features_values[name] = 1.0 if row.get(entity_short_id) == "on" else 0.0
+        binary_features_values[name] = (
+            1.0 if row.get(entity_short_id) == "on" else 0.0
+        )
 
     # --- Forecasts (assuming they are in the DataFrame) ---
     pv_forecasts = [
