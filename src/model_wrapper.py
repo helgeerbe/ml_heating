@@ -267,8 +267,8 @@ def find_best_outlet_temp(
         outlet_history: A list of recent actual outlet temperatures.
 
     Returns:
-        A tuple containing the final recommended outlet temperature, the model's
-        confidence score, and the updated prediction history.
+        A tuple with the final outlet temperature, model confidence, and the
+        updated prediction history.
     """
     logging.debug("--- Finding Best Outlet Temp ---")
     logging.debug(f"Target indoor temp: {target_temp:.1f}°C")
@@ -352,6 +352,9 @@ def find_best_outlet_temp(
         smoothed_temp = alpha * best_temp + (1 - alpha) * last_smoothed
         prediction_history.append(smoothed_temp)
 
+    if len(prediction_history) > 50:
+        del prediction_history[:-50]
+
     logging.debug("--- Prediction Smoothing ---")
     history_formatted = [f"{t:.1f}" for t in prediction_history]
     logging.debug(f"  History: {history_formatted}")
@@ -428,7 +431,7 @@ def get_feature_importances(model: compose.Pipeline) -> Dict[str, float]:
         model: The trained River pipeline.
 
     Returns:
-        A dictionary mapping feature names to their normalized importance scores.
+        Dict mapping each feature name to its normalized importance score.
     """
     regressor = model.steps.get("learn")
     if not regressor:
