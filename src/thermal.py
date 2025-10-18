@@ -135,8 +135,8 @@ def calculate_dynamic_boost(
 
     # Clamp the final temperature to a reasonable range around the baseline.
     # This prevents extreme values if the model or boost are off.
-    lower_bound = baseline_temp - 10
-    upper_bound = baseline_temp + 12
+    lower_bound = max(18.0, baseline_temp * 0.5) # TODO: find a better lower bound
+    upper_bound = min(65.0, baseline_temp * 1.5) # TODO: find a better upper bound
     final_temp = np.clip(boosted_temp, lower_bound, upper_bound)
     logging.debug(
         "  Final Temp (clamped to %.1f-%.1f°C): %.1f°C",
