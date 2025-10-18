@@ -64,16 +64,16 @@ def calculate_baseline_outlet_temp(
     final_outlet = np.clip(outlet, 16.0, 65.0)
     rounded_outlet = round(final_outlet)
 
-    logging.debug("--- Baseline Calculation ---")
-    logging.debug(
+    logging.info("--- Baseline Calculation ---")
+    logging.info(
         f"  Outdoor Temp: {outdoor_temp:.2f}°C, OWM Temp: {owm_temp:.2f}°C"
     )
-    logging.debug(
+    logging.info(
         f"  2h Forecast: {forecast_temps[2]:.2f}°C -> "
         f"Delta: {temp_forecast_delta:.2f}°C"
     )
-    logging.debug(f"  Target for Curve: {target_temp_for_curve:.2f}°C")
-    logging.debug(
+    logging.info(f"  Target for Curve: {target_temp_for_curve:.2f}°C")
+    logging.info(
         (
             f"  Calculated: {outlet:.2f}°C -> Clamped: {final_outlet:.1f}°C -> "
             f"Rounded: {rounded_outlet:.1f}°C"
@@ -115,8 +115,8 @@ def calculate_dynamic_boost(
         The final, adjusted, and rounded outlet temperature to be sent to the
         boiler.
     """
-    logging.debug("--- Final Temp Calculation ---")
-    logging.debug(f"  Model Suggested: {suggested_temp:.1f}°C")
+    logging.info("--- Final Temp Calculation ---")
+    logging.info(f"  Model Suggested: {suggested_temp:.1f}°C")
 
     # Calculate the boost based on the indoor temperature error.
     boost = 0.0
@@ -129,16 +129,16 @@ def calculate_dynamic_boost(
     if outdoor_temp > 15:
         boost = min(boost, 0)
 
-    logging.debug(f"  Dynamic Boost Applied: {boost:.2f}°C")
+    logging.info(f"  Dynamic Boost Applied: {boost:.2f}°C")
     boosted_temp = suggested_temp + boost
-    logging.debug(f"  Boosted Temp: {boosted_temp:.1f}°C")
+    logging.info(f"  Boosted Temp: {boosted_temp:.1f}°C")
 
     # Clamp the final temperature to a reasonable range around the baseline.
     # This prevents extreme values if the model or boost are off.
     lower_bound = max(18.0, baseline_temp * 0.5) # TODO: find a better lower bound
     upper_bound = min(65.0, baseline_temp * 1.5) # TODO: find a better upper bound
     final_temp = np.clip(boosted_temp, lower_bound, upper_bound)
-    logging.debug(
+    logging.info(
         "  Final Temp (clamped to %.1f-%.1f°C): %.1f°C",
         lower_bound,
         upper_bound,

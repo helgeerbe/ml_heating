@@ -407,14 +407,14 @@ def find_best_outlet_temp(
                     min_int_diff, best_int_temp = diff, temp
             final_temp = best_int_temp
 
-            logging.debug("--- Smart Rounding ---")
+            logging.info("--- Smart Rounding ---")
             for temp, indoor in predictions:
-                logging.debug(
+                logging.info(
                     f"  - Candidate {temp}°C -> "
                     f"Predicted: {indoor:.2f}°C "
                     f"(Diff: {abs(indoor - target_temp):.2f})"
                 )
-            logging.debug(f"  -> Chose: {final_temp}°C")
+            logging.info(f"  -> Chose: {final_temp}°C")
 
     return final_temp, confidence, prediction_history
 
