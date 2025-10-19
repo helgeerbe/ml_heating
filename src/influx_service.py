@@ -8,9 +8,9 @@ and training data sets.
 from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
-from influxdb_client import InfluxDBClient, QueryApi
+import logging
+from influxdb_client import InfluxDBClient, QueryApi, Point
 from . import config
-
 
 class InfluxService:
     """A service for interacting with InfluxDB."""
@@ -19,6 +19,7 @@ class InfluxService:
         """Initializes the InfluxDB client."""
         self.client = InfluxDBClient(url=url, token=token, org=org)
         self.query_api: QueryApi = self.client.query_api()
+        self.write_api = self.client.write_api()
 
     def get_pv_forecast(self) -> list[float]:
         """
@@ -229,6 +230,47 @@ class InfluxService:
         except Exception:
             return pd.DataFrame()
 
+    def write_feature_importances(
+        self, importances: dict, bucket: str = None, org: str = None, measurement: str = "feature_importance"
+    ) -> None:
+        """
+        Write feature importances as a single InfluxDB point.
+
+        The measurement will be `feature_importance` (configurable). Each
+        feature name is written as a field with its importance score.
+
+        Args:
+            importances: Mapping of feature name -> importance (float).
+            bucket: Target bucket name. If None, uses config.INFLUX_FEATURES_BUCKET.
+            org: Influx organization. If None, uses config.INFLUX_ORG.
+            measurement: Measurement name to write into.
+        """
+        if not importances:
+            logging.debug("No importances to write to InfluxDB.")
+            return
+
+        write_bucket = bucket or getattr(config, "INFLUX_FEATURES_BUCKET", None) or config.INFLUX_BUCKET
+        write_org = org or getattr(config, "INFLUX_ORG", None)
+
+        try:
+            p = Point(measurement).tag("source", "ml_heating")
+            # Add model timestamp
+            p = p.field("exported", int(datetime.now(timezone.utc).timestamp()))
+            # Add each feature as a field (field keys must be strings)
+            for feature, val in importances.items():
+                # Influx field names may contain dots; replace with underscore for safety
+                field_key = feature.replace(".", "_")
+                try:
+                    p = p.field(field_key, float(val))
+                except Exception:
+                    # If conversion fails, store 0.0 and log
+                    logging.exception("Failed to convert importance for %s", feature)
+                    p = p.field(field_key, 0.0)
+
+            self.write_api.write(bucket=write_bucket, org=write_org, record=p)
+            logging.debug("Wrote feature importances to Influx bucket '%s' (measurement=%s)", write_bucket, measurement)
+        except Exception as e:
+            logging.exception("Failed to write feature importances to InfluxDB: %s", e)
 
 def create_influx_service():
     """

@@ -79,6 +79,9 @@ def main(args):
                 importances.items(), key=lambda item: item[1], reverse=True
             ):
                 logging.info(f"  - {feature}: {importance:.4f}")
+            influx_service.write_feature_importances(
+                importances, bucket=config.INFLUX_FEATURES_BUCKET
+            )
     if args.train_only:
         logging.warning(
             "Training complete. Exiting as requested by --train-only flag."
@@ -276,6 +279,9 @@ def main(args):
                 ):
                     logging.info(f"  - {feature}: {importance:.4f}")
             ha_client.log_feature_importance(importances)
+            influx_service.write_feature_importances(
+                importances, bucket=config.INFLUX_FEATURES_BUCKET
+            )
 
             log_message = (
                 "Target: %.1f°C | Suggested: %.1f°C | Final: %.1f°C | "

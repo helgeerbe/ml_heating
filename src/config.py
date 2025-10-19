@@ -38,6 +38,8 @@ INFLUX_TOKEN: str = os.getenv("INFLUX_TOKEN", "")
 INFLUX_ORG: str = os.getenv("INFLUX_ORG", "erbehome")
 INFLUX_BUCKET: str = os.getenv("INFLUX_BUCKET", "home_assistant/autogen")
 
+INFLUX_FEATURES_BUCKET: str = os.getenv("INFLUX_FEATURES_BUCKET", "ml_heating_features")
+
 # --- File Paths ---
 # Defines where the application's persistent data is stored.
 # MODEL_FILE: The trained machine learning model.
