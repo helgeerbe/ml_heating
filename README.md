@@ -111,6 +111,49 @@ These metrics are continuously updated and sent to Home Assistant, providing a r
     -   Model performance metrics (Confidence, MAE, RMSE).
     -   Feature importances.
 
+## Feature importance exported to InfluxDB
+
+Feature importance snapshots are exported to InfluxDB for visualization and inspection.
+
+- Bucket: `ml_heating_features`  
+- Measurement: `feature_importance`  
+- Schema:
+  - Each feature is stored as a separate field (float), for example `temp_forecast_3h`, `indoor_hist_mean`, `outlet_temp_lag_60m`, etc.
+  - `exported` — integer UNIX epoch seconds marking when the snapshot was written (provenance / run id).
+  - `_time` — the snapshot timestamp (when the point was written).
+- Configuration:
+  - Set the feature export bucket in your `.env`:
+    ```ini
+    INFLUX_FEATURE_BUCKET=ml_heating_features
+    ```
+- Visualization tips:
+  - Table views may show locale-specific decimals (e.g. `0,03`); charts may apply unit suffixes — set the Y-axis unit to `number`/`none` to display raw floats.
+  - Use Flux to scale or format on-read (example: multiply by 100 to show percent) rather than rewriting stored data.
+
+Quick Flux examples
+- List measurements in the feature bucket:
+```flux
+import "influxdata/influxdb/schema"
+schema.measurements(bucket: "ml_heating_features")
+```
+
+- Inspect recent feature rows:
+```flux
+from(bucket:"ml_heating_features")
+  |> range(start: -7d)
+  |> filter(fn: (r) => r._measurement == "feature_importance")
+  |> keep(columns: ["_time","_field","_value","exported"])
+  |> sort(columns: ["_time"], desc: true)
+  |> limit(n: 50)
+```
+
+- Convert `exported` to human readable time in Python:
+```python
+import datetime
+ts = 1760904513
+print(datetime.datetime.utcfromtimestamp(ts).isoformat() + "Z")
+```
+
 ## Installation and Setup
 
 ### 1. Create a Virtual Environment
