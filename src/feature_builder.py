@@ -90,6 +90,7 @@ def get_feature_names() -> List[str]:
         "indoor_hist_q25",
         "indoor_hist_q75",
         "outdoor_temp_x_outlet_temp",
+        "error_x_outlet_temp",
     ]
     return (
         base_features
@@ -106,6 +107,7 @@ def build_features(
     ha_client: HAClient,
     influx_service: InfluxService,
     all_states: Dict[str, Any],
+    target_indoor_temp: float,
 ) -> Optional[Tuple[pd.DataFrame, list[float]]]:
     """
     Constructs the feature DataFrame for a real-time prediction.
@@ -148,7 +150,7 @@ def build_features(
     outlet_history = influx_service.fetch_outlet_history(config.HISTORY_STEPS)
     indoor_history = influx_service.fetch_indoor_history(config.HISTORY_STEPS)
 
-    if None in [actual_indoor, outdoor_temp, outlet_temp]:
+    if None in [actual_indoor, outdoor_temp, outlet_temp, target_indoor_temp]:
         logging.error("Missing critical sensor data. Cannot build features.")
         return None, None
 
@@ -216,6 +218,7 @@ def build_features(
 
     # Interaction features capture combined effects.
     outdoor_temp_x_outlet_temp = outdoor_temp * outlet_temp
+    error_x_outlet_temp = (target_indoor_temp - actual_indoor) * outlet_temp
 
     # Lag features provide a snapshot of past states.
     # Delta features show the change over different time windows.
@@ -313,6 +316,7 @@ def build_features(
             indoor_hist_q25,
             indoor_hist_q75,
             outdoor_temp_x_outlet_temp,
+            error_x_outlet_temp,
         ]
     )
 
@@ -357,6 +361,7 @@ def build_features_for_training(
     now = pd.to_datetime(df.index[idx])
 
     # --- Get entity IDs ---
+    target_indoor_temp_id = config.TARGET_INDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
     actual_indoor_id = config.INDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
     outdoor_temp_id = config.OUTDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
     outlet_temp_id = config.ACTUAL_OUTLET_TEMP_ENTITY_ID.split(".", 1)[-1]
@@ -366,13 +371,14 @@ def build_features_for_training(
     pv3_id = config.PV3_POWER_ENTITY_ID.split(".", 1)[-1]
 
     # --- Get current values from the row ---
+    target_indoor_temp = row.get(target_indoor_temp_id)
     actual_indoor = row.get(actual_indoor_id)
     outdoor_temp = row.get(outdoor_temp_id)
     outlet_temp = row.get(outlet_temp_id)
     tv_on = 1.0 if row.get(tv_id, "off") == "on" else 0.0
     pv_now = row.get(pv1_id, 0.0) + row.get(pv2_id, 0.0) + row.get(pv3_id, 0.0)
 
-    if pd.isna(actual_indoor) or pd.isna(outdoor_temp) or pd.isna(outlet_temp):
+    if pd.isna(actual_indoor) or pd.isna(outdoor_temp) or pd.isna(outlet_temp) or pd.isna(target_indoor_temp):
         return None
 
     # --- Time-based features ---
@@ -488,6 +494,7 @@ def build_features_for_training(
         "indoor_hist_q25": indoor_hist_series.quantile(0.25),
         "indoor_hist_q75": indoor_hist_series.quantile(0.75),
         "outdoor_temp_x_outlet_temp": outdoor_temp * outlet_temp,
+        "error_x_outlet_temp": (target_indoor_temp - actual_indoor) * outlet_temp,
         "indoor_temp_lag_10m": indoor_temp_lag_10m,
         "indoor_temp_lag_30m": indoor_temp_lag_30m,
         "indoor_temp_lag_60m": indoor_temp_lag_60m,

@@ -177,6 +177,9 @@ class InfluxService:
         kuche_temperatur_id = config.INDOOR_TEMP_ENTITY_ID.split(".", 1)[
             -1
         ]
+        target_indoor_temp_id = config.TARGET_INDOOR_TEMP_ENTITY_ID.split(".", 1)[
+            -1
+        ]
         fernseher_id = config.TV_STATUS_ENTITY_ID.split(".", 1)[-1]
         dhw_status_id = config.DHW_STATUS_ENTITY_ID.split(".", 1)[-1]
         defrost_status_id = config.DEFROST_STATUS_ENTITY_ID.split(".", 1)[-1]
@@ -198,6 +201,7 @@ class InfluxService:
             |> filter(fn: (r) =>
                 r["entity_id"] == "{hp_outlet_temp_id}" or
                 r["entity_id"] == "{kuche_temperatur_id}" or
+                r["entity_id"] == "{target_indoor_temp_id}" or
                 r["entity_id"] == "{outdoor_temp_id}" or
                 r["entity_id"] == "{pv1_power_id}" or
                 r["entity_id"] == "{pv2_power_id}" or

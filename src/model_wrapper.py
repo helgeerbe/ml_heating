@@ -47,6 +47,7 @@ def create_model() -> compose.Pipeline:
         "outlet_temp_change_from_last",
         "outlet_indoor_diff",
         "outdoor_temp_x_outlet_temp",
+        "error_x_outlet_temp",
     ]
 
     scaled_features = [f for f in feature_names if f not in unscaled_features]
@@ -320,6 +321,9 @@ def find_best_outlet_temp(
         x_candidate["outdoor_temp_x_outlet_temp"] = (
             x_base["outdoor_temp"] * temp_candidate
         )
+        x_candidate["error_x_outlet_temp"] = (
+            target_temp - current_temp
+        ) * temp_candidate
 
         predicted_delta = model.predict_one(x_candidate)
         predicted_indoor = current_temp + predicted_delta
@@ -384,6 +388,9 @@ def find_best_outlet_temp(
             x_candidate["outdoor_temp_x_outlet_temp"] = (
                 x_base["outdoor_temp"] * temp_candidate
             )
+            x_candidate["error_x_outlet_temp"] = (
+                target_temp - current_temp
+            ) * temp_candidate
 
             try:
                 predicted_delta = model.predict_one(x_candidate)

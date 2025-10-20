@@ -184,7 +184,7 @@ def main(args):
             # feature vector. This vector is the input the model will use to
             # make its next prediction.
             features, outlet_history = build_features(
-                ha_client, influx_service, all_states
+                ha_client, influx_service, all_states, target_indoor_temp
             )
             if features is None:
                 logging.warning("Feature building failed, skipping cycle.")
