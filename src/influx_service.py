@@ -10,6 +10,7 @@ import pandas as pd
 import numpy as np
 import logging
 from influxdb_client import InfluxDBClient, QueryApi, Point
+from influxdb_client.client.write_api import SYNCHRONOUS
 from . import config
 
 class InfluxService:
@@ -19,7 +20,7 @@ class InfluxService:
         """Initializes the InfluxDB client."""
         self.client = InfluxDBClient(url=url, token=token, org=org)
         self.query_api: QueryApi = self.client.query_api()
-        self.write_api = self.client.write_api()
+        self.write_api = self.client.write_api(write_options=SYNCHRONOUS)
 
     def get_pv_forecast(self) -> list[float]:
         """
