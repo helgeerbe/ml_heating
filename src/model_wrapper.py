@@ -238,7 +238,7 @@ def find_best_outlet_temp(
     baseline_outlet_temp: float,
     prediction_history: list,
     outlet_history: list[float],
-) -> tuple[float, float, list]:
+) -> tuple[float, float, list, float]:
     """
     The core optimization function to find the ideal heating outlet temperature.
 
@@ -283,16 +283,23 @@ def find_best_outlet_temp(
     # disagree, indicating high uncertainty.
     regressor = model.steps["learn"]
     tree_preds = [tree.predict_one(x_base) for tree in regressor]
-    confidence = np.std(tree_preds)
+    # Raw uncertainty (σ) as the standard deviation of tree predictions in °C
+    sigma = float(np.std(tree_preds))
 
-    # If confidence is low, fall back to the simple baseline temperature.
-    if confidence > config.CONFIDENCE_THRESHOLD:
+    # Normalize σ to a 0..1 confidence score where 1.0 == perfect agreement
+    # (all trees predict the same). This mapping is monotonic: larger σ -> lower
+    # confidence.
+    confidence = 1.0 / (1.0 + sigma)
+
+    # If normalized confidence is below the configured threshold, fall back.
+    if confidence < config.CONFIDENCE_THRESHOLD:
         logging.warning(
-            "Model confidence low (%.3f > %.3f), falling back to baseline.",
+            "Model confidence low (σ=%.3f°C, confidence=%.3f < %.3f), falling back to baseline.",
+            sigma,
             confidence,
             config.CONFIDENCE_THRESHOLD,
         )
-        return baseline_outlet_temp, confidence, prediction_history
+        return baseline_outlet_temp, confidence, prediction_history, sigma
 
     # --- Search for Optimal Temperature ---
     # Search in a radius around the baseline temperature.
@@ -302,7 +309,7 @@ def find_best_outlet_temp(
     step = 0.5
 
     if min_search_temp > max_search_temp:
-        return baseline_outlet_temp, 0.0, prediction_history
+        return baseline_outlet_temp, 0.0, prediction_history, 0.0
 
     last_outlet_temp = outlet_history[-1]
 
@@ -423,7 +430,7 @@ def find_best_outlet_temp(
                 )
             logging.info(f"  -> Chose: {final_temp}°C")
 
-    return final_temp, confidence, prediction_history
+    return final_temp, confidence, prediction_history, sigma
 
 
 def get_feature_importances(model: compose.Pipeline) -> Dict[str, float]:

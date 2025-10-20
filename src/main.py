@@ -20,6 +20,7 @@ bootstrap the model using historical data from InfluxDB.
 import argparse
 import logging
 import time
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
@@ -104,6 +105,24 @@ def main(args):
 
             if not all_states:
                 logging.warning("Could not fetch states from HA, skipping cycle.")
+                # Emit NETWORK_ERROR state to Home Assistant
+                try:
+                    ha_client = create_ha_client()
+                    attributes_state = get_sensor_attributes("sensor.ml_heating_state")
+                    attributes_state.update(
+                        {
+                            "state_description": "Network Error - could not fetch HA states",
+                            "last_updated": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
+                    ha_client.set_state(
+                        "sensor.ml_heating_state",
+                        3,
+                        attributes_state,
+                        round_digits=None,
+                    )
+                except Exception:
+                    logging.debug("Failed to write NETWORK_ERROR state to HA.", exc_info=True)
                 time.sleep(300)
                 continue
 
@@ -121,9 +140,29 @@ def main(args):
                 for entity in blocking_entities
             )
             if is_blocking:
-                logging.info(
-                    "Blocking process active (DHW/Defrost), skipping."
-                )
+                logging.info("Blocking process active (DHW/Defrost), skipping.")
+                try:
+                    blocking_reasons = [
+                        e for e in blocking_entities
+                        if ha_client.get_state(e, all_states, is_binary=True)
+                    ]
+                    attributes_state = get_sensor_attributes("sensor.ml_heating_state")
+                    attributes_state.update(
+                        {
+                            "state_description": "Blocking activity - Skipping",
+                            "blocking_reasons": blocking_reasons,
+                            "fallback_used": False,
+                            "last_updated": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
+                    ha_client.set_state(
+                        "sensor.ml_heating_state",
+                        2,
+                        attributes_state,
+                        round_digits=None,
+                    )
+                except Exception:
+                    logging.debug("Failed to write BLOCKED state to HA.", exc_info=True)
                 time.sleep(300)
                 continue
 
@@ -149,9 +188,34 @@ def main(args):
                 owm_temp,
             ]
             if any(v is None for v in critical_sensors):
-                logging.warning(
-                    "One or more critical sensors unavailable, skipping."
-                )
+                logging.warning("One or more critical sensors unavailable, skipping.")
+                try:
+                    missing = []
+                    names = [
+                        config.TARGET_INDOOR_TEMP_ENTITY_ID,
+                        config.INDOOR_TEMP_ENTITY_ID,
+                        config.OUTDOOR_TEMP_ENTITY_ID,
+                        config.OPENWEATHERMAP_TEMP_ENTITY_ID,
+                    ]
+                    for ent, val in zip(names, critical_sensors):
+                        if val is None:
+                            missing.append(ent)
+                    attributes_state = get_sensor_attributes("sensor.ml_heating_state")
+                    attributes_state.update(
+                        {
+                            "state_description": "No data - missing critical sensors",
+                            "missing_sensors": missing,
+                            "last_updated": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
+                    ha_client.set_state(
+                        "sensor.ml_heating_state",
+                        4,
+                        attributes_state,
+                        round_digits=None,
+                    )
+                except Exception:
+                    logging.debug("Failed to write NO_DATA state to HA.", exc_info=True)
                 time.sleep(300)
                 continue
 
@@ -217,6 +281,7 @@ def main(args):
                 suggested_temp,
                 confidence,
                 prediction_history,
+                sigma,
             ) = find_best_outlet_temp(
                 model,
                 features,
@@ -251,6 +316,14 @@ def main(args):
                 final_temp - outlet_history[-1]
             )
             final_features["outlet_indoor_diff"] = final_temp - actual_indoor
+            # Update interaction features so the final prediction uses the same
+            # feature construction as the candidate evaluations in the search.
+            final_features["outdoor_temp_x_outlet_temp"] = (
+                final_features.get("outdoor_temp", outdoor_temp) * final_temp
+            )
+            final_features["error_x_outlet_temp"] = (
+                (target_indoor_temp - actual_indoor) * final_temp
+            )
             predicted_delta = model.predict_one(
                 final_features.to_dict(orient="records")[0]
             )
@@ -287,6 +360,35 @@ def main(args):
                 importances, bucket=config.INFLUX_FEATURES_BUCKET
             )
 
+            # --- Update ML State sensor ---
+            try:
+                fallback_used = confidence < config.CONFIDENCE_THRESHOLD
+                attributes_state = get_sensor_attributes("sensor.ml_heating_state")
+                attributes_state.update(
+                    {
+                        "state_description": "Confidence - Too Low"
+                        if fallback_used
+                        else "OK - Prediction done",
+                        "confidence": round(confidence, 4),
+                        "sigma": round(sigma, 4),
+                        "mae": round(mae.get(), 4),
+                        "rmse": round(rmse.get(), 4),
+                        "suggested_temp": round(suggested_temp, 2),
+                        "final_temp": round(final_temp, 2),
+                        "predicted_indoor": round(predicted_indoor, 2),
+                        "fallback_used": bool(fallback_used),
+                        "last_prediction_time": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+                ha_client.set_state(
+                    "sensor.ml_heating_state",
+                    1 if fallback_used else 0,
+                    attributes_state,
+                    round_digits=None,
+                )
+            except Exception:
+                logging.debug("Failed to write ML state to HA.", exc_info=True)
+
             log_message = (
                 "Target: %.1f°C | Suggested: %.1f°C | Final: %.1f°C | "
                 "Actual Indoor: %.2f°C | Predicted Indoor: %.2f°C | "
@@ -312,6 +414,24 @@ def main(args):
 
         except Exception as e:
             logging.error("Error in main loop: %s", e, exc_info=True)
+            try:
+                ha_client = create_ha_client()
+                attributes_state = get_sensor_attributes("sensor.ml_heating_state")
+                attributes_state.update(
+                    {
+                        "state_description": "Model error",
+                        "last_error": str(e),
+                        "last_updated": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+                ha_client.set_state(
+                    "sensor.ml_heating_state",
+                    7,
+                    attributes_state,
+                    round_digits=None,
+                )
+            except Exception:
+                logging.debug("Failed to write MODEL_ERROR state to HA.", exc_info=True)
 
         time.sleep(300)
 

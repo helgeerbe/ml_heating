@@ -346,6 +346,12 @@ def get_sensor_attributes(entity_id: str) -> Dict[str, Any]:
             "unit_of_measurement": "%",
             "icon": "mdi:format-list-numbered",
         },
+        "sensor.ml_heating_state": {
+            "unique_id": "ml_heating_state",
+            "friendly_name": "ML Heating State",
+            "unit_of_measurement": "state",
+            "icon": "mdi:information-outline",
+        },
     }
     attributes = base_attributes.copy()
     attributes.update(sensor_specific_attributes.get(entity_id, {}))

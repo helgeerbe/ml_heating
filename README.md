@@ -102,6 +102,39 @@ The `ARFRegressor` from the `river` library was specifically chosen for several 
 
 These metrics are continuously updated and sent to Home Assistant, providing a real-time view of the model's performance.
 
+### ML State Sensor
+
+The application publishes a numeric state sensor `sensor.ml_heating_state` that summarizes the controller's status each cycle and provides attributes with diagnostics. Use the numeric state for automations and the attributes for human-readable context.
+
+State codes (numeric)
+- 0 = OK — Prediction done
+- 1 = LOW_CONFIDENCE — Confidence too low; fallback used
+- 2 = BLOCKED — Blocking activity detected (DHW, defrosting, disinfection, boost) — skipping this cycle
+- 3 = NETWORK_ERROR — Failed to fetch Home Assistant states or network calls
+- 4 = NO_DATA — Missing critical sensors or insufficient history for features
+- 5 = TRAINING — Running initial training / warm-up
+- 6 = FALLBACK_BASELINE — Forced baseline/safety fallback (distinct from LOW_CONFIDENCE)
+- 7 = MODEL_ERROR — Exception occurred during prediction/learning
+
+Typical attributes
+- `state_description`: short human string (e.g., "Confidence - Too Low")
+- `confidence`: normalized 0..1 float (1.0 = perfect agreement)
+- `sigma`: raw per-tree stddev in °C
+- `mae`, `rmse`: current metric floats
+- `suggested_temp`, `final_temp`, `predicted_indoor`: recent numeric values
+- `fallback_used`: bool
+- `blocking_reasons`: list of active blockers (when applicable)
+- `missing_sensors`: list of missing critical entities (when applicable)
+- `last_prediction_time` / `last_updated`: ISO timestamps
+- `last_error`: short error message (for MODEL_ERROR / NETWORK_ERROR)
+
+Example automation use-cases
+- Alert if state == 3 (NETWORK_ERROR) or repeated MODEL_ERROR.
+- Tally LOW_CONFIDENCE occurrences to gauge model reliability.
+- Use `blocking_reasons` to explain skipped cycles in logs or dashboards.
+
+This sensor makes it easy to monitor model health and reason about fallback behaviour directly from Home Assistant.
+
 ## Data Flow
 
 1.  **Get Data from Home Assistant:** The script fetches current sensor values (indoor/outdoor temps, etc.) and blocking statuses (DHW, defrost) from Home Assistant.
@@ -189,7 +222,18 @@ nano .env
 -   **`INFLUX_BUCKET`**: The InfluxDB bucket where Home Assistant data is stored.
 -   **`MODEL_FILE` / `STATE_FILE`**: Paths to store the trained model and application state. The defaults are usually fine.
 -   **Entity IDs**: The script is pre-configured with many entity IDs. You **must** review and update these to match the `entity_id`s in your Home Assistant setup.
--   **`CONFIDENCE_THRESHOLD`**: A key tuning parameter. A higher value makes the model more "adventurous" but less reliable. A lower value makes it more conservative and more likely to use the fallback heating curve. The default is `0.2`.
+-   **`CONFIDENCE_THRESHOLD`**: The model uses a *normalized* confidence in the range (0..1], where `1.0` means perfect agreement between trees (σ = 0 °C). The code maps the per-tree standard deviation σ (in °C) to confidence using:
+    ```python
+    confidence = 1.0 / (1.0 + sigma)
+    ```
+    To pick an appropriate threshold, decide the maximum tolerated σ (°C) and convert:
+    ```
+    threshold = 1.0 / (1.0 + sigma_max)
+    ```
+    Examples:
+    - Tolerate σ_max = 1.0°C → `CONFIDENCE_THRESHOLD = 0.5`
+    - Tolerate σ_max = 0.5°C → `CONFIDENCE_THRESHOLD ≈ 0.667`
+    The sample files use `0.5` as a reasonable starting point.
 
 ### 4. Initial Training (Recommended)
 
