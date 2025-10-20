@@ -434,16 +434,25 @@ def get_feature_importances(model: compose.Pipeline) -> Dict[str, float]:
     frequently a feature is used to make a split in the decision trees. This
     provides insight into what factors the model considers most influential.
 
+    This function ensures that all possible features are included in the
+    output, even if their importance is zero.
+
     Args:
         model: The trained River pipeline.
 
     Returns:
-        Dict mapping each feature name to its normalized importance score.
+        A dictionary mapping every feature name to its normalized
+        importance score.
     """
+    # Initialize a dictionary with all feature names set to 0.0 importance.
+    # This ensures that even unused features are included in the final output.
+    all_feature_names = get_feature_names()
+    feature_importances = {name: 0.0 for name in all_feature_names}
+
     regressor = model.steps.get("learn")
     if not regressor:
         logging.debug("Regressor not found for feature importance.")
-        return {}
+        return feature_importances
 
     logging.debug("Traversing trees for feature importances.")
 
@@ -478,16 +487,18 @@ def get_feature_importances(model: compose.Pipeline) -> Dict[str, float]:
 
     if not total_importances:
         logging.debug("No feature splits were found in any tree.")
-        return {}
+        return feature_importances
 
     logging.debug(f"Raw feature split counts: {dict(total_importances)}")
 
     # Normalize the counts to get a percentage-like importance score.
     total_splits = sum(total_importances.values())
     if total_splits > 0:
-        return {
-            f: count / total_splits for f, count in total_importances.items()
-        }
+        # Update the dictionary with the calculated importances.
+        for feature, count in total_importances.items():
+            if feature in feature_importances:
+                feature_importances[feature] = count / total_splits
+        return feature_importances
 
     logging.debug("Total feature splits is 0, cannot normalize.")
-    return {}
+    return feature_importances
