@@ -57,6 +57,10 @@ def main(args):
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
+    # Suppress verbose logging from underlying libraries.
+    logging.getLogger("requests").setLevel(logging.INFO)
+    logging.getLogger("urllib3").setLevel(logging.INFO)
+
     # --- Initialization ---
     # Load the persisted model, metrics, and application state from files.
     # If they don't exist, create new instances.

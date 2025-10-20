@@ -52,6 +52,7 @@ The model uses a rich set of features engineered from various data sources to un
 -   **Polynomial & Interaction Features:**
     -   `outlet_temp_sq`, `outlet_temp_cub`: The square and cube of the outlet temperature to help the model learn non-linear relationships.
     -   `outdoor_temp_x_outlet_temp`: An interaction term to capture how the effect of the outlet temperature might change depending on the outdoor temperature.
+    -   `error_x_outlet_temp`: An interaction term between the current temperature error (`target - actual`) and the outlet temperature.
 
 -   **Aggregated History Features:**
     -   Statistical summaries of the recent history of indoor and outlet temperatures, including `mean`, `std` (standard deviation), `min`, `max`, `trend`, and quartiles (`q25`, `q75`).
@@ -248,4 +249,4 @@ To run the script continuously in the background, create a systemd service file.
 
 -   `--initial-train`: Runs the initial training process on historical data from InfluxDB before starting the main loop.
 -   `--train-only`: Runs the initial training process and then exits. Useful for warming up the model without starting the control loop.
--   `--debug`: Enables verbose debug logging.
+-   `--debug`: Enables verbose debug logging. Note that this may cause very noisy output from underlying libraries like `urllib3`. The application attempts to suppress this, but some messages may still appear.
