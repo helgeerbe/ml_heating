@@ -177,15 +177,10 @@ class InfluxService:
         kuche_temperatur_id = config.INDOOR_TEMP_ENTITY_ID.split(".", 1)[
             -1
         ]
-        target_indoor_temp_id = config.TARGET_INDOOR_TEMP_ENTITY_ID.split(".", 1)[
-            -1
-        ]
         fernseher_id = config.TV_STATUS_ENTITY_ID.split(".", 1)[-1]
         dhw_status_id = config.DHW_STATUS_ENTITY_ID.split(".", 1)[-1]
         defrost_status_id = config.DEFROST_STATUS_ENTITY_ID.split(".", 1)[-1]
-        disinfection_status_id = config.DISINFECTION_STATUS_ENTITY_ID.split(
-            ".", 1
-        )[-1]
+        disinfection_status_id = config.DISINFECTION_STATUS_ENTITY_ID.split(".", 1)[-1]
         dhw_boost_heater_status_id = (
             config.DHW_BOOST_HEATER_STATUS_ENTITY_ID.split(".", 1)[-1]
         )
@@ -201,7 +196,6 @@ class InfluxService:
             |> filter(fn: (r) =>
                 r["entity_id"] == "{hp_outlet_temp_id}" or
                 r["entity_id"] == "{kuche_temperatur_id}" or
-                r["entity_id"] == "{target_indoor_temp_id}" or
                 r["entity_id"] == "{outdoor_temp_id}" or
                 r["entity_id"] == "{pv1_power_id}" or
                 r["entity_id"] == "{pv2_power_id}" or
@@ -229,6 +223,7 @@ class InfluxService:
             )
             df["_time"] = pd.to_datetime(df["_time"], utc=True)
             df.sort_values("_time", inplace=True)
+
             df.ffill(inplace=True)
             df.bfill(inplace=True)
             return df
@@ -236,7 +231,11 @@ class InfluxService:
             return pd.DataFrame()
 
     def write_feature_importances(
-        self, importances: dict, bucket: str = None, org: str = None, measurement: str = "feature_importance"
+        self,
+        importances: dict,
+        bucket: str = None,
+        org: str = None,
+        measurement: str = "feature_importance",
     ) -> None:
         """
         Write feature importances as a single InfluxDB point.
@@ -254,33 +253,50 @@ class InfluxService:
             logging.debug("No importances to write to InfluxDB.")
             return
 
-        write_bucket = bucket or getattr(config, "INFLUX_FEATURES_BUCKET", None) or config.INFLUX_BUCKET
+        write_bucket = (
+            bucket
+            or getattr(config, "INFLUX_FEATURES_BUCKET", None)
+            or config.INFLUX_BUCKET
+        )
         write_org = org or getattr(config, "INFLUX_ORG", None)
 
         try:
             p = Point(measurement).tag("source", "ml_heating")
             # Add model timestamp
-            p = p.field("exported", int(datetime.now(timezone.utc).timestamp()))
+            p = p.field(
+                "exported", int(datetime.now(timezone.utc).timestamp())
+            )
             # Add each feature as a field (field keys must be strings)
             for feature, val in importances.items():
-                # Influx field names may contain dots; replace with underscore for safety
+                # Influx field names may contain dots; replace with
+                # underscore for safety
                 field_key = feature.replace(".", "_")
                 try:
                     p = p.field(field_key, float(val))
                 except Exception:
                     # If conversion fails, store 0.0 and log
-                    logging.exception("Failed to convert importance for %s", feature)
+                    logging.exception(
+                        "Failed to convert importance for %s", feature
+                    )
                     p = p.field(field_key, 0.0)
 
             self.write_api.write(bucket=write_bucket, org=write_org, record=p)
-            logging.debug("Wrote feature importances to Influx bucket '%s' (measurement=%s)", write_bucket, measurement)
+            logging.debug(
+                "Wrote feature importances to Influx bucket '%s' "
+                "(measurement=%s)",
+                write_bucket,
+                measurement,
+            )
         except Exception as e:
-            logging.exception("Failed to write feature importances to InfluxDB: %s", e)
+            logging.exception(
+                "Failed to write feature importances to InfluxDB: %s", e
+            )
+
 
 def create_influx_service():
     """
     Factory function to create an instance of the InfluxService.
-    
+
     It reads the necessary connection details from the config module.
     """
     return InfluxService(

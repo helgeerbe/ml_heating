@@ -52,7 +52,6 @@ The model uses a rich set of features engineered from various data sources to un
 -   **Polynomial & Interaction Features:**
     -   `outlet_temp_sq`, `outlet_temp_cub`: The square and cube of the outlet temperature to help the model learn non-linear relationships.
     -   `outdoor_temp_x_outlet_temp`: An interaction term to capture how the effect of the outlet temperature might change depending on the outdoor temperature.
-    -   `error_x_outlet_temp`: An interaction term between the current temperature error (`target - actual`) and the outlet temperature.
 
 -   **Aggregated History Features:**
     -   Statistical summaries of the recent history of indoor and outlet temperatures, including `mean`, `std` (standard deviation), `min`, `max`, `trend`, and quartiles (`q25`, `q75`).
@@ -88,11 +87,13 @@ The `ARFRegressor` from the `river` library was specifically chosen for several 
 
 ### Prediction Mechanism
 
-1.  **Find Best Temperature:** The core `find_best_outlet_temp` function searches a range of possible outlet temperatures (e.g., 25°C to 45°C). For each candidate temperature, it runs a prediction to estimate the resulting indoor temperature. It selects the temperature that is predicted to get closest to the user's target.
-2.  **Prediction Smoothing:** To avoid rapid changes, the chosen temperature is smoothed using an exponential moving average with the previous prediction.
-3.  **Smart Rounding:** The system predicts the outcome for both the `floor` and `ceil` of the smoothed temperature and chooses the integer value that yields a better result.
-4.  **Dynamic Boost:** A final boost is added based on the current temperature error (`target_indoor_temp - actual_indoor_temp`) to make the system more responsive.
-5.  **Fallback:** Before making a prediction, the model calculates the standard deviation of the predictions from its internal decision trees. If this value (a measure of uncertainty) is above `CONFIDENCE_THRESHOLD`, the system discards the ML prediction and falls back to the `baseline_outlet_temp` calculated from a traditional heating curve.
+The prediction process is orchestrated by the `find_best_outlet_temp` function and follows a multi-step pipeline to ensure both accuracy and stability:
+
+1.  **Fallback:** Before making a prediction, the model calculates its confidence by measuring the standard deviation of predictions from its internal decision trees. If this uncertainty is above `CONFIDENCE_THRESHOLD`, the system discards the ML prediction and immediately falls back to the `baseline_outlet_temp` calculated from a traditional heating curve.
+2.  **Find Best Temperature:** If confidence is sufficient, the function searches a range of possible outlet temperatures (e.g., 25°C to 45°C). For each candidate temperature, it runs a prediction to estimate the resulting indoor temperature. It selects the temperature that is predicted to get closest to the user's target.
+3.  **Prediction Smoothing:** To avoid rapid, inefficient changes, the best temperature from the search is smoothed using an exponential moving average with the previous prediction.
+4.  **Dynamic Boost:** A corrective boost is applied to the smoothed temperature. This adjustment is based on the current error (`target_indoor_temp - actual_indoor_temp`) and helps the system react more quickly to changes.
+5.  **Smart Rounding:** The boosted temperature is then rounded intelligently. The system predicts the outcome for both the `floor` and `ceil` integer values and chooses the one that is predicted to yield an indoor temperature closer to the target. This ensures the final output is a whole number, as required by the heat pump.
 
 ### Metrics: Confidence, MAE, and RMSE
 

@@ -90,7 +90,6 @@ def get_feature_names() -> List[str]:
         "indoor_hist_q25",
         "indoor_hist_q75",
         "outdoor_temp_x_outlet_temp",
-        "error_x_outlet_temp",
     ]
     return (
         base_features
@@ -192,12 +191,6 @@ def build_features(
         if len(outlet_hist_series) > 1
         else 0
     )
-    outlet_hist_trend = (
-        (outlet_hist_series.iloc[-1] - outlet_hist_series.iloc[0])
-        / len(outlet_hist_series)
-        if len(outlet_hist_series) > 1
-        else 0
-    )
     outlet_hist_min = outlet_hist_series.min()
     outlet_hist_max = outlet_hist_series.max()
     outlet_hist_q25 = outlet_hist_series.quantile(0.25)
@@ -218,7 +211,6 @@ def build_features(
 
     # Interaction features capture combined effects.
     outdoor_temp_x_outlet_temp = outdoor_temp * outlet_temp
-    error_x_outlet_temp = (target_indoor_temp - actual_indoor) * outlet_temp
 
     # Lag features provide a snapshot of past states.
     # Delta features show the change over different time windows.
@@ -237,12 +229,12 @@ def build_features(
     outlet_temp_delta_30m = outlet_temp - outlet_temp_lag_30m
     outlet_temp_delta_60m = outlet_temp - outlet_temp_lag_60m
 
-    indoor_temp_gradient = (actual_indoor - indoor_history[0]) / (
-        config.HISTORY_STEPS * config.HISTORY_STEP_MINUTES
-    )
-    outlet_temp_gradient = (outlet_temp - outlet_history[0]) / (
-        config.HISTORY_STEPS * config.HISTORY_STEP_MINUTES
-    )
+    indoor_temp_gradient = (
+        actual_indoor - indoor_history[0]
+    ) / (config.HISTORY_STEPS * config.HISTORY_STEP_MINUTES)
+    outlet_temp_gradient = (
+        outlet_temp - outlet_history[0]
+    ) / (config.HISTORY_STEPS * config.HISTORY_STEP_MINUTES)
 
     # Binary flags for system states (e.g., defrosting).
     binary_entities = {
@@ -316,7 +308,6 @@ def build_features(
             indoor_hist_q25,
             indoor_hist_q75,
             outdoor_temp_x_outlet_temp,
-            error_x_outlet_temp,
         ]
     )
 
@@ -361,7 +352,6 @@ def build_features_for_training(
     now = pd.to_datetime(df.index[idx])
 
     # --- Get entity IDs ---
-    target_indoor_temp_id = config.TARGET_INDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
     actual_indoor_id = config.INDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
     outdoor_temp_id = config.OUTDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
     outlet_temp_id = config.ACTUAL_OUTLET_TEMP_ENTITY_ID.split(".", 1)[-1]
@@ -371,14 +361,13 @@ def build_features_for_training(
     pv3_id = config.PV3_POWER_ENTITY_ID.split(".", 1)[-1]
 
     # --- Get current values from the row ---
-    target_indoor_temp = row.get(target_indoor_temp_id)
     actual_indoor = row.get(actual_indoor_id)
     outdoor_temp = row.get(outdoor_temp_id)
     outlet_temp = row.get(outlet_temp_id)
     tv_on = 1.0 if row.get(tv_id, "off") == "on" else 0.0
     pv_now = row.get(pv1_id, 0.0) + row.get(pv2_id, 0.0) + row.get(pv3_id, 0.0)
 
-    if pd.isna(actual_indoor) or pd.isna(outdoor_temp) or pd.isna(outlet_temp) or pd.isna(target_indoor_temp):
+    if pd.isna(actual_indoor) or pd.isna(outdoor_temp) or pd.isna(outlet_temp):
         return None
 
     # --- Time-based features ---
@@ -394,7 +383,7 @@ def build_features_for_training(
     is_weekend = 1.0 if day_of_week >= 5 else 0.0
 
     # --- History and Lag Features ---
-    history_slice = df.iloc[idx - config.HISTORY_STEPS : idx]
+    history_slice = df.iloc[idx - config.HISTORY_STEPS:idx]
     outlet_history = history_slice[outlet_temp_id].tolist()
     indoor_history = history_slice[actual_indoor_id].tolist()
 
@@ -422,9 +411,9 @@ def build_features_for_training(
     outlet_temp_delta_30m = outlet_temp - outlet_temp_lag_30m
     outlet_temp_delta_60m = outlet_temp - outlet_temp_lag_60m
 
-    indoor_temp_gradient = (actual_indoor - indoor_history[0]) / (
-        config.HISTORY_STEPS * config.HISTORY_STEP_MINUTES
-    )
+    indoor_temp_gradient = (
+        actual_indoor - indoor_history[0]
+    ) / (config.HISTORY_STEPS * config.HISTORY_STEP_MINUTES)
     outlet_temp_gradient = (
         outlet_temp - outlet_history[0]
     ) / (config.HISTORY_STEPS * config.HISTORY_STEP_MINUTES)
@@ -494,7 +483,6 @@ def build_features_for_training(
         "indoor_hist_q25": indoor_hist_series.quantile(0.25),
         "indoor_hist_q75": indoor_hist_series.quantile(0.75),
         "outdoor_temp_x_outlet_temp": outdoor_temp * outlet_temp,
-        "error_x_outlet_temp": (target_indoor_temp - actual_indoor) * outlet_temp,
         "indoor_temp_lag_10m": indoor_temp_lag_10m,
         "indoor_temp_lag_30m": indoor_temp_lag_30m,
         "indoor_temp_lag_60m": indoor_temp_lag_60m,

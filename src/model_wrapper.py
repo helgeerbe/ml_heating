@@ -8,7 +8,7 @@ uses the River library for online machine learning.
 import logging
 import pickle
 from collections import defaultdict
-from typing import Any, Dict, Optional, Tuple
+from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
@@ -35,11 +35,11 @@ def create_model() -> compose.Pipeline:
     """
     feature_names = get_feature_names()
 
-    # We separate features because the 'outlet_temp' and its derivatives are the
-    # variables we are searching over. Scaling them would complicate the search
-    # process, as we would need to inverse-transform them constantly. Other
-    # features are scaled to bring them to a similar magnitude, which generally
-    # helps the model learn more effectively.
+    # We separate features because the 'outlet_temp' and its derivatives are
+    # the variables we are searching over. Scaling them would complicate the
+    # search process, as we would need to inverse-transform them constantly.
+    # Other features are scaled to bring them to a similar magnitude, which
+    # generally helps the model learn more effectively.
     unscaled_features = [
         "outlet_temp",
         "outlet_temp_sq",
@@ -47,7 +47,6 @@ def create_model() -> compose.Pipeline:
         "outlet_temp_change_from_last",
         "outlet_indoor_diff",
         "outdoor_temp_x_outlet_temp",
-        "error_x_outlet_temp",
     ]
 
     scaled_features = [f for f in feature_names if f not in unscaled_features]
@@ -192,7 +191,8 @@ def initial_train(
         if features is None:
             continue
 
-        # The label is the change in indoor temperature over the prediction horizon.
+        # The label is the change in indoor temperature over the prediction
+        # horizon.
         current_indoor = df.iloc[idx].get(
             config.INDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
         )
@@ -210,8 +210,8 @@ def initial_train(
     if features_list:
         logging.info("Training with %d samples", len(features_list))
 
-        # We let the scaler and the regressor learn online. We give the model a
-        # head start (warm-up period) before tracking metrics, as the very
+        # We let the scaler and the regressor learn online. We give the model
+        # a head start (warm-up period) before tracking metrics, as the very
         # first predictions can be unstable while the model is still naive.
         logging.info("Performing initial model training...")
         regressor_warm_up_samples = 100
@@ -238,6 +238,8 @@ def find_best_outlet_temp(
     baseline_outlet_temp: float,
     prediction_history: list,
     outlet_history: list[float],
+    error_target_vs_actual: float,
+    outdoor_temp: float,
 ) -> tuple[float, float, list, float]:
     """
     The core optimization function to find the ideal heating outlet temperature.
@@ -286,15 +288,15 @@ def find_best_outlet_temp(
     # Raw uncertainty (σ) as the standard deviation of tree predictions in °C
     sigma = float(np.std(tree_preds))
 
-    # Normalize σ to a 0..1 confidence score where 1.0 == perfect agreement
-    # (all trees predict the same). This mapping is monotonic: larger σ -> lower
-    # confidence.
+    # Normalize σ to a 0..1 confidence score where 1.0 == perfect agreement.
+    # This mapping is monotonic: larger σ -> lower confidence.
     confidence = 1.0 / (1.0 + sigma)
 
     # If normalized confidence is below the configured threshold, fall back.
     if confidence < config.CONFIDENCE_THRESHOLD:
         logging.warning(
-            "Model confidence low (σ=%.3f°C, confidence=%.3f < %.3f), falling back to baseline.",
+            "Model confidence low (σ=%.3f°C, confidence=%.3f < %.3f), "
+            "falling back to baseline.",
             sigma,
             confidence,
             config.CONFIDENCE_THRESHOLD,
@@ -325,12 +327,10 @@ def find_best_outlet_temp(
             temp_candidate - last_outlet_temp
         )
         x_candidate["outlet_indoor_diff"] = temp_candidate - current_temp
+        outdoor_temp = x_base["outdoor_temp"]
         x_candidate["outdoor_temp_x_outlet_temp"] = (
-            x_base["outdoor_temp"] * temp_candidate
+            outdoor_temp * temp_candidate
         )
-        x_candidate["error_x_outlet_temp"] = (
-            target_temp - current_temp
-        ) * temp_candidate
 
         predicted_delta = model.predict_one(x_candidate)
         predicted_indoor = current_temp + predicted_delta
@@ -346,9 +346,10 @@ def find_best_outlet_temp(
         # Tie-breaking: if two temps are equally good, choose the one
         # closer to the original baseline.
         elif diff == min_diff:
-            if abs(
+            is_closer = abs(
                 temp_candidate - baseline_outlet_temp
-            ) < abs(best_temp - baseline_outlet_temp):
+            ) < abs(best_temp - baseline_outlet_temp)
+            if is_closer:
                 best_temp = temp_candidate
 
     logging.debug(f"--- Optimal float temp found: {best_temp:.1f}°C ---")
@@ -372,6 +373,40 @@ def find_best_outlet_temp(
     logging.debug(f"  Smoothed Temp: {prediction_history[-1]:.1f}°C")
     best_temp = prediction_history[-1]
 
+    # --- Dynamic Boost ---
+    # Apply a corrective boost based on the current indoor temperature error.
+    boost = 0.0
+    if error_target_vs_actual > 0.1:  # If the room is too cold
+        boost = min(
+            error_target_vs_actual * 2.0, 5.0
+        )  # Boost, capped at 5°C
+    elif error_target_vs_actual < -0.1:  # If the room is too warm
+        boost = max(
+            error_target_vs_actual * 1.5, -5.0
+        )  # Reduce, capped at -5°C
+
+    # Disable boost if it's warm outside, as solar gain might be sufficient.
+    if outdoor_temp > 15:
+        boost = min(boost, 0)
+
+    logging.info("--- Dynamic Boost ---")
+    logging.info(f"  Model Suggested (Smoothed): {best_temp:.1f}°C")
+    logging.info(f"  Dynamic Boost Applied: {boost:.2f}°C")
+    boosted_temp = best_temp + boost
+    logging.info(f"  Boosted Temp: {boosted_temp:.1f}°C")
+
+    # Clamp the boosted temperature to a reasonable range around the baseline
+    # to prevent extreme values.
+    lower_bound = max(18.0, baseline_outlet_temp * 0.8)
+    upper_bound = min(55.0, baseline_outlet_temp * 1.2)
+    best_temp = np.clip(boosted_temp, lower_bound, upper_bound)
+    logging.info(
+        "  Clamped Boosted Temp (to %.1f-%.1f°C): %.1f°C",
+        lower_bound,
+        upper_bound,
+        best_temp,
+    )
+
     # --- Smart Rounding ---
     # Instead of simple rounding, check which integer (floor or ceil) gives a
     # better predicted outcome.
@@ -392,12 +427,10 @@ def find_best_outlet_temp(
                 temp_candidate - last_outlet_temp
             )
             x_candidate["outlet_indoor_diff"] = temp_candidate - current_temp
+            outdoor_temp = x_base["outdoor_temp"]
             x_candidate["outdoor_temp_x_outlet_temp"] = (
-                x_base["outdoor_temp"] * temp_candidate
+                outdoor_temp * temp_candidate
             )
-            x_candidate["error_x_outlet_temp"] = (
-                target_temp - current_temp
-            ) * temp_candidate
 
             try:
                 predicted_delta = model.predict_one(x_candidate)
@@ -411,9 +444,8 @@ def find_best_outlet_temp(
         else:
             # Choose the integer temp that results in an indoor temp
             # closest to the target.
-            best_int_temp, min_int_diff = (
-                predictions[0][0],
-                abs(predictions[0][1] - target_temp),
+            best_int_temp, min_int_diff = predictions[0][0], abs(
+                predictions[0][1] - target_temp
             )
             for temp, indoor in predictions:
                 diff = abs(indoor - target_temp)
@@ -452,7 +484,8 @@ def get_feature_importances(model: compose.Pipeline) -> Dict[str, float]:
         importance score.
     """
     # Initialize a dictionary with all feature names set to 0.0 importance.
-    # This ensures that even unused features are included in the final output.
+    # This ensures that even unused features are included in the final
+    # output.
     all_feature_names = get_feature_names()
     feature_importances = {name: 0.0 for name in all_feature_names}
 
