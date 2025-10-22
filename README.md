@@ -22,6 +22,7 @@ The primary goal of this project is to improve upon traditional heating curves b
 -   **Prediction Smoothing:** Smooths the model's predictions over time to prevent rapid, inefficient fluctuations in the heating system.
 -   **Smart Rounding:** Intelligently chooses between rounding up or down by predicting which integer temperature will result in an indoor temperature closer to the target.
 -   **Confidence-Based Fallback:** The model assesses its own confidence in a prediction. If the confidence is low, it safely falls back to a traditional, reliable heating curve calculation.
+-   **Fireplace Mode:** When a fireplace or other significant secondary heat source is active, the model can be configured to use a different temperature sensor (e.g., the average of other rooms) for learning and prediction. This prevents the model from incorrectly learning that the main heating system is more powerful than it is.
 -   **Feature Importance:** Logs which factors (features) are most influential in the model's decisions, providing insight into what the model is learning.
 -   **Systemd Service:** Can be run as a background service for continuous, unattended operation.
 
@@ -66,7 +67,7 @@ The model uses a rich set of features engineered from various data sources to un
 
 This project uses an **online machine learning** approach, which means the model learns incrementally from a stream of live data.
 
-1.  **Initial Training (Optional):** When first run with the `--initial-train` flag, the model is "warmed up" using up to 168 hours of historical data from InfluxDB. This gives it a solid baseline understanding of the home's thermal dynamics.
+1.  **Initial Training (Optional):** When first run with the `--initial-train` flag, the model is "warmed up" using historical data from InfluxDB. The duration of this lookback period is configurable via the `TRAINING_LOOKBACK_HOURS` environment variable (default is 168 hours, or 7 days). This gives the model a solid baseline understanding of the home's thermal dynamics.
 2.  **Live Learning Cycle:**
     -   The system sets a target outlet temperature.
     -   It waits for a cycle (e.g., 5 minutes).
@@ -222,6 +223,7 @@ nano .env
 -   **`INFLUX_ORG`**: Your InfluxDB organization name.
 -   **`INFLUX_BUCKET`**: The InfluxDB bucket where Home Assistant data is stored.
 -   **`MODEL_FILE` / `STATE_FILE`**: Paths to store the trained model and application state. The defaults are usually fine.
+-   **`TRAINING_LOOKBACK_HOURS`**: The number of hours of historical data to use for the initial training. Defaults to 168 (7 days).
 -   **Entity IDs**: The script is pre-configured with many entity IDs. You **must** review and update these to match the `entity_id`s in your Home Assistant setup.
 -   **`CONFIDENCE_THRESHOLD`**: The model uses a *normalized* confidence in the range (0..1], where `1.0` means perfect agreement between trees (σ = 0 °C). The code maps the per-tree standard deviation σ (in °C) to confidence using:
     ```python

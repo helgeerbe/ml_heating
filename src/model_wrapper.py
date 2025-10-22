@@ -176,8 +176,10 @@ def initial_train(
         influx_service: The service for querying historical data.
     """
     logging.info("--- Initial Model Training ---")
-    # Fetch up to 168 hours (1 week) of historical data.
-    df = influx_service.get_training_data(lookback_hours=168)
+    # Fetch historical data based on the configured lookback period.
+    df = influx_service.get_training_data(
+        lookback_hours=config.TRAINING_LOOKBACK_HOURS
+    )
     if df.empty or len(df) < 240:  # Need at least 20 hours of data
         logging.warning("Not enough data for initial training. Skipping.")
         return

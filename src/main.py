@@ -189,6 +189,12 @@ def main(args):
             actual_indoor = ha_client.get_state(
                 config.INDOOR_TEMP_ENTITY_ID, all_states
             )
+            avg_other_rooms_temp = ha_client.get_state(
+                config.AVG_OTHER_ROOMS_TEMP_ENTITY_ID, all_states
+            )
+            fireplace_on = ha_client.get_state(
+                config.FIREPLACE_STATUS_ENTITY_ID, all_states, is_binary=True
+            )
             outdoor_temp = ha_client.get_state(
                 config.OUTDOOR_TEMP_ENTITY_ID, all_states
             )
@@ -201,6 +207,7 @@ def main(args):
                 actual_indoor,
                 outdoor_temp,
                 owm_temp,
+                avg_other_rooms_temp,
             ]
             if any(v is None for v in critical_sensors):
                 logging.warning(
@@ -249,10 +256,23 @@ def main(args):
             # model, allowing it to continuously adapt to changing conditions.
             last_run_features = state.get("last_run_features")
             last_indoor_temp = state.get("last_indoor_temp")
+            last_avg_other_rooms_temp = state.get("last_avg_other_rooms_temp")
+            last_fireplace_on = state.get("last_fireplace_on", False)
+
             prediction_history = state.get("prediction_history", [])
             if last_run_features is not None and last_indoor_temp is not None:
+                # Decide which temperature to use for learning based on the fireplace state of the last run
+                if last_fireplace_on and last_avg_other_rooms_temp is not None:
+                    learning_temp_current = avg_other_rooms_temp
+                    learning_temp_last = last_avg_other_rooms_temp
+                    logging.info("Fireplace was on. Learning based on avg other rooms temp.")
+                else:
+                    learning_temp_current = actual_indoor
+                    learning_temp_last = last_indoor_temp
+                    logging.info("Fireplace was off. Learning based on main indoor temp.")
+
                 # Calculate the true temperature change since the last run.
-                actual_delta = actual_indoor - last_indoor_temp
+                actual_delta = learning_temp_current - learning_temp_last
                 logging.info(
                     "Learning from last cycle's delta_t: %.3f", actual_delta
                 )
@@ -272,6 +292,15 @@ def main(args):
             # historical data from InfluxDB, etc.) and transforms them into a
             # feature vector. This vector is the input the model will use to
             # make its next prediction.
+            
+            # Decide which indoor temperature to use for feature building and prediction
+            if fireplace_on:
+                prediction_indoor_temp = avg_other_rooms_temp
+                logging.info("Fireplace is ON. Using average temperature of other rooms for prediction.")
+            else:
+                prediction_indoor_temp = actual_indoor
+                logging.info("Fireplace is OFF. Using main indoor temp for prediction.")
+
             features, outlet_history = build_features(
                 ha_client, influx_service, all_states, target_indoor_temp
             )
@@ -298,7 +327,7 @@ def main(args):
                 ha_client.get_hourly_forecast(),
             )
             # Find the best outlet temperature by simulating different values.
-            error_target_vs_actual = target_indoor_temp - actual_indoor
+            error_target_vs_actual = target_indoor_temp - prediction_indoor_temp
             (
                 suggested_temp,
                 confidence,
@@ -307,7 +336,7 @@ def main(args):
             ) = find_best_outlet_temp(
                 model,
                 features,
-                actual_indoor,
+                prediction_indoor_temp,
                 target_indoor_temp,
                 baseline_outlet_temp,
                 prediction_history,
@@ -328,7 +357,7 @@ def main(args):
             final_features["outlet_temp_change_from_last"] = (
                 final_temp - outlet_history[-1]
             )
-            final_features["outlet_indoor_diff"] = final_temp - actual_indoor
+            final_features["outlet_indoor_diff"] = final_temp - prediction_indoor_temp
             # Update interaction features so the final prediction uses the same
             # feature construction as the candidate evaluations in the search.
             final_features["outdoor_temp_x_outlet_temp"] = (
@@ -337,7 +366,7 @@ def main(args):
             predicted_delta = model.predict_one(
                 final_features.to_dict(orient="records")[0]
             )
-            predicted_indoor = actual_indoor + predicted_delta
+            predicted_indoor = prediction_indoor_temp + predicted_delta
 
             # --- Step 4: Update Home Assistant and Log ---
             # The calculated `final_temp` is sent to Home Assistant to
@@ -431,7 +460,14 @@ def main(args):
             # The features and indoor temperature from the *current* run are
             # saved to a file. This data will be loaded at the start of the
             # next loop iteration to be used in the "Online Learning" step.
-            save_state(features, actual_indoor, prediction_history)
+            state_to_save = {
+                "last_run_features": features,
+                "last_indoor_temp": actual_indoor,
+                "last_avg_other_rooms_temp": avg_other_rooms_temp,
+                "last_fireplace_on": fireplace_on,
+                "prediction_history": prediction_history,
+            }
+            save_state(**state_to_save)
 
         except Exception as e:
             logging.error("Error in main loop: %s", e, exc_info=True)

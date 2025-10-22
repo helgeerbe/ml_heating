@@ -62,6 +62,8 @@ PREDICTION_HORIZON_STEPS: int = int(
 PREDICTION_HORIZON_MINUTES: int = (
     PREDICTION_HORIZON_STEPS * 5
 )
+# The number of hours of historical data to use for initial training.
+TRAINING_LOOKBACK_HOURS: int = int(os.getenv("TRAINING_LOOKBACK_HOURS", "168"))
 
 # --- Core Entity IDs ---
 # These are the most critical entities for the script's operation.
@@ -135,6 +137,12 @@ HEATING_STATUS_ENTITY_ID: str = os.getenv(
 )
 OPENWEATHERMAP_TEMP_ENTITY_ID: str = os.getenv(
     "OPENWEATHERMAP_TEMP_ENTITY_ID", "sensor.openweathermap_temperature"
+)
+AVG_OTHER_ROOMS_TEMP_ENTITY_ID: str = os.getenv(
+    "AVG_OTHER_ROOMS_TEMP_ENTITY_ID", "sensor.avg_other_rooms_temp"
+)
+FIREPLACE_STATUS_ENTITY_ID: str = os.getenv(
+    "FIREPLACE_STATUS_ENTITY_ID", "binary_sensor.fireplace_active"
 )
 
 # --- Tuning & Debug Parameters ---

@@ -42,12 +42,12 @@ def load_state() -> Dict[str, Any]:
             "last_run_features": None,
             "last_indoor_temp": None,
             "prediction_history": [],
+            "last_avg_other_rooms_temp": None,
+            "last_fireplace_on": False,
         }
 
 
-def save_state(
-    last_run_features: Any, last_indoor_temp: float, prediction_history: list
-) -> None:
+def save_state(**kwargs: Any) -> None:
     """
     Saves the application's current state to a pickle file.
 
@@ -55,9 +55,11 @@ def save_state(
     temperature, which will be used in the next cycle for online learning.
     """
     state = {
-        "last_run_features": last_run_features,
-        "last_indoor_temp": last_indoor_temp,
-        "prediction_history": prediction_history,
+        "last_run_features": kwargs.get("last_run_features"),
+        "last_indoor_temp": kwargs.get("last_indoor_temp"),
+        "prediction_history": kwargs.get("prediction_history", []),
+        "last_avg_other_rooms_temp": kwargs.get("last_avg_other_rooms_temp"),
+        "last_fireplace_on": kwargs.get("last_fireplace_on", False),
     }
     try:
         with open(config.STATE_FILE, "wb") as f:

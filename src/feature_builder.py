@@ -55,6 +55,7 @@ def get_feature_names() -> List[str]:
         "defrosting",
         "dhw_disinfection",
         "dhw_boost_heater",
+        "fireplace_on",
     ]
     base_features = [
         "temp_diff_indoor_outdoor",
@@ -242,6 +243,7 @@ def build_features(
         "defrosting": config.DEFROST_STATUS_ENTITY_ID,
         "dhw_disinfection": config.DISINFECTION_STATUS_ENTITY_ID,
         "dhw_boost_heater": config.DHW_BOOST_HEATER_STATUS_ENTITY_ID,
+        "fireplace_on": config.FIREPLACE_STATUS_ENTITY_ID,
     }
     binary_features_values = {}
     for name, entity_id in binary_entities.items():
@@ -424,6 +426,7 @@ def build_features_for_training(
         "defrosting": config.DEFROST_STATUS_ENTITY_ID,
         "dhw_disinfection": config.DISINFECTION_STATUS_ENTITY_ID,
         "dhw_boost_heater": config.DHW_BOOST_HEATER_STATUS_ENTITY_ID,
+        "fireplace_on": config.FIREPLACE_STATUS_ENTITY_ID,
     }
     binary_features_values = {}
     for name, entity_id in binary_entities.items():
