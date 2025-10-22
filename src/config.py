@@ -144,8 +144,14 @@ OPENWEATHERMAP_TEMP_ENTITY_ID: str = os.getenv(
 #   indicates disagreement among the trees (low confidence). If the model's
 #   confidence score exceeds this threshold, the system will use the safe
 #   baseline temperature instead of the model's prediction.
+# SMOOTHING_ALPHA: The smoothing factor for the exponential moving average
+#   applied to the model's temperature predictions. A lower value (e.g., 0.1)
+#   results in more aggressive smoothing and less volatile output. A higher
+#   value (e.g., 0.8) makes the output more responsive to the latest raw
+#   prediction.
 DEBUG: bool = os.getenv("DEBUG", "0") == "1"
 CONFIDENCE_THRESHOLD: float = float(os.getenv("CONFIDENCE_THRESHOLD", "0.2"))
+SMOOTHING_ALPHA: float = float(os.getenv("SMOOTHING_ALPHA", "0.3"))
 
 # --- Metrics Entity IDs ---
 # These entities are created in Home Assistant to allow real-time monitoring

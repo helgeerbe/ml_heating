@@ -352,7 +352,7 @@ def find_best_outlet_temp(
             if is_closer:
                 best_temp = temp_candidate
 
-    logging.debug(f"--- Optimal float temp found: {best_temp:.1f}°C ---")
+    logging.info(f"--- Optimal float temp found: {best_temp:.1f}°C ---")
 
     # --- Prediction Smoothing ---
     # Apply exponential smoothing to the predictions to reduce volatility.
@@ -360,8 +360,10 @@ def find_best_outlet_temp(
         prediction_history.append(best_temp)
     else:
         last_smoothed = prediction_history[-1]
-        alpha = 0.5  # Smoothing factor
-        smoothed_temp = alpha * best_temp + (1 - alpha) * last_smoothed
+        smoothed_temp = (
+            config.SMOOTHING_ALPHA * best_temp
+            + (1 - config.SMOOTHING_ALPHA) * last_smoothed
+        )
         prediction_history.append(smoothed_temp)
 
     if len(prediction_history) > 50:
