@@ -282,9 +282,11 @@ def find_best_outlet_temp(
     x_base = features.to_dict(orient="records")[0]
 
     # --- Confidence Monitoring ---
-    # The confidence is the standard deviation of the predictions from the
-    # individual trees in the random forest. A high std dev means the trees
-    # disagree, indicating high uncertainty.
+    # The model's uncertainty is measured by `sigma`, the standard deviation
+    # of predictions from the internal trees. A higher `sigma` means more
+    # disagreement and thus lower confidence. This `sigma` is converted to a
+    # `confidence` score between 0 (max uncertainty) and 1 (perfect
+    # certainty).
     regressor = model.steps["learn"]
     tree_preds = [tree.predict_one(x_base) for tree in regressor]
     # Raw uncertainty (σ) as the standard deviation of tree predictions in °C

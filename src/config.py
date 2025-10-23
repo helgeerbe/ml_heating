@@ -63,7 +63,9 @@ PREDICTION_HORIZON_MINUTES: int = (
     PREDICTION_HORIZON_STEPS * 5
 )
 # The number of hours of historical data to use for initial training.
-TRAINING_LOOKBACK_HOURS: int = int(os.getenv("TRAINING_LOOKBACK_HOURS", "168"))
+TRAINING_LOOKBACK_HOURS: int = int(
+    os.getenv("TRAINING_LOOKBACK_HOURS", "168")
+)
 
 # --- Core Entity IDs ---
 # These are the most critical entities for the script's operation.
@@ -78,7 +80,8 @@ TRAINING_LOOKBACK_HOURS: int = int(os.getenv("TRAINING_LOOKBACK_HOURS", "168"))
 # PREDICTED_INDOOR_TEMP_ENTITY_ID: The sensor for the model's indoor temp
 # prediction.
 TARGET_INDOOR_TEMP_ENTITY_ID: str = os.getenv(
-    "TARGET_INDOOR_TEMP_ENTITY_ID", "input_number.hp_auto_correct_target"
+    "TARGET_INDOOR_TEMP_ENTITY_ID",
+    "input_number.hp_auto_correct_target",
 )
 INDOOR_TEMP_ENTITY_ID: str = os.getenv(
     "INDOOR_TEMP_ENTITY_ID", "sensor.kuche_temperatur"
@@ -92,8 +95,7 @@ TARGET_OUTLET_TEMP_ENTITY_ID: str = os.getenv(
 )
 # The entity for the predicted indoor temperature sensor.
 PREDICTED_INDOOR_TEMP_ENTITY_ID: str = os.getenv(
-    "PREDICTED_INDOOR_TEMP_ENTITY_ID",
-    "sensor.ml_predicted_indoor_temp",
+    "PREDICTED_INDOOR_TEMP_ENTITY_ID", "sensor.ml_predicted_indoor_temp"
 )
 
 # --- Blocking & Status Entity IDs ---
@@ -147,11 +149,10 @@ FIREPLACE_STATUS_ENTITY_ID: str = os.getenv(
 
 # --- Tuning & Debug Parameters ---
 # DEBUG: Set to "1" to enable verbose logging for development.
-# CONFIDENCE_THRESHOLD: A critical tuning parameter. It's the standard
-#   deviation of predictions from the model's internal trees. A high value
-#   indicates disagreement among the trees (low confidence). If the model's
-#   confidence score exceeds this threshold, the system will use the safe
-#   baseline temperature instead of the model's prediction.
+# CONFIDENCE_THRESHOLD: A critical tuning parameter. If the model's
+#   normalized confidence score (0-1) drops below this threshold, the system
+#   will fall back to the baseline temperature. A lower threshold means the
+#   system is more tolerant of model uncertainty.
 # SMOOTHING_ALPHA: The smoothing factor for the exponential moving average
 #   applied to the model's temperature predictions. A lower value (e.g., 0.1)
 #   results in more aggressive smoothing and less volatile output. A higher
