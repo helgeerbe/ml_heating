@@ -202,36 +202,33 @@ def main(args):
                 config.OPENWEATHERMAP_TEMP_ENTITY_ID, all_states
             )
 
-            critical_sensors = [
-                target_indoor_temp,
-                actual_indoor,
-                outdoor_temp,
-                owm_temp,
-                avg_other_rooms_temp,
+            critical_sensors = {
+                config.TARGET_INDOOR_TEMP_ENTITY_ID: target_indoor_temp,
+                config.INDOOR_TEMP_ENTITY_ID: actual_indoor,
+                config.OUTDOOR_TEMP_ENTITY_ID: outdoor_temp,
+                config.OPENWEATHERMAP_TEMP_ENTITY_ID: owm_temp,
+                config.AVG_OTHER_ROOMS_TEMP_ENTITY_ID: avg_other_rooms_temp,
+            }
+            missing_sensors = [
+                name for name, value in critical_sensors.items() if value is None
             ]
-            if any(v is None for v in critical_sensors):
+
+            if missing_sensors:
                 logging.warning(
-                    "One or more critical sensors unavailable, skipping."
+                    "Critical sensors unavailable: %s. Skipping.",
+                    ", ".join(missing_sensors),
                 )
                 try:
-                    missing = []
-                    names = [
-                        config.TARGET_INDOOR_TEMP_ENTITY_ID,
-                        config.INDOOR_TEMP_ENTITY_ID,
-                        config.OUTDOOR_TEMP_ENTITY_ID,
-                        config.OPENWEATHERMAP_TEMP_ENTITY_ID,
-                    ]
-                    for ent, val in zip(names, critical_sensors):
-                        if val is None:
-                            missing.append(ent)
                     attributes_state = get_sensor_attributes(
                         "sensor.ml_heating_state"
                     )
                     attributes_state.update(
                         {
                             "state_description": "No data - missing critical sensors",
-                            "missing_sensors": missing,
-                            "last_updated": datetime.now(timezone.utc).isoformat(),
+                            "missing_sensors": missing_sensors,
+                            "last_updated": datetime.now(
+                                timezone.utc
+                            ).isoformat(),
                         }
                     )
                     ha_client.set_state(
@@ -292,14 +289,16 @@ def main(args):
             # historical data from InfluxDB, etc.) and transforms them into a
             # feature vector. This vector is the input the model will use to
             # make its next prediction.
-            
-            # Decide which indoor temperature to use for feature building and prediction
             if fireplace_on:
                 prediction_indoor_temp = avg_other_rooms_temp
-                logging.info("Fireplace is ON. Using average temperature of other rooms for prediction.")
+                logging.info(
+                    "Fireplace is ON. Using average temperature of other rooms for prediction."
+                )
             else:
                 prediction_indoor_temp = actual_indoor
-                logging.info("Fireplace is OFF. Using main indoor temp for prediction.")
+                logging.info(
+                    "Fireplace is OFF. Using main indoor temp for prediction."
+                )
 
             features, outlet_history = build_features(
                 ha_client, influx_service, all_states, target_indoor_temp
@@ -357,12 +356,14 @@ def main(args):
             final_features["outlet_temp_change_from_last"] = (
                 final_temp - outlet_history[-1]
             )
-            final_features["outlet_indoor_diff"] = final_temp - prediction_indoor_temp
+            final_features["outlet_indoor_diff"] = (
+                final_temp - prediction_indoor_temp
+            )
             # Update interaction features so the final prediction uses the same
             # feature construction as the candidate evaluations in the search.
-            final_features["outdoor_temp_x_outlet_temp"] = (
-                final_features.get("outdoor_temp", outdoor_temp) * final_temp
-            )
+            final_features["outdoor_temp_x_outlet_temp"] = final_features.get(
+                "outdoor_temp", outdoor_temp
+            ) * final_temp
             predicted_delta = model.predict_one(
                 final_features.to_dict(orient="records")[0]
             )
