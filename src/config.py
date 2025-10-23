@@ -158,9 +158,13 @@ FIREPLACE_STATUS_ENTITY_ID: str = os.getenv(
 #   results in more aggressive smoothing and less volatile output. A higher
 #   value (e.g., 0.8) makes the output more responsive to the latest raw
 #   prediction.
+# CYCLE_INTERVAL_MINUTES: The time in minutes between each full cycle of
+#   learning and prediction. A longer interval (e.g., 10-15 mins) provides a
+#   clearer learning signal, while a shorter one is more responsive.
 DEBUG: bool = os.getenv("DEBUG", "0") == "1"
 CONFIDENCE_THRESHOLD: float = float(os.getenv("CONFIDENCE_THRESHOLD", "0.2"))
 SMOOTHING_ALPHA: float = float(os.getenv("SMOOTHING_ALPHA", "0.3"))
+CYCLE_INTERVAL_MINUTES: int = int(os.getenv("CYCLE_INTERVAL_MINUTES", "10"))
 
 # --- Metrics Entity IDs ---
 # These entities are created in Home Assistant to allow real-time monitoring

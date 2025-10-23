@@ -497,7 +497,7 @@ def main(args):
                     "Failed to write MODEL_ERROR state to HA.", exc_info=True
                 )
 
-        time.sleep(300)
+        time.sleep(config.CYCLE_INTERVAL_MINUTES * 60)
 
 
 if __name__ == "__main__":

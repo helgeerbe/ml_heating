@@ -224,6 +224,7 @@ nano .env
 -   **`INFLUX_BUCKET`**: The InfluxDB bucket where Home Assistant data is stored.
 -   **`MODEL_FILE` / `STATE_FILE`**: Paths to store the trained model and application state. The defaults are usually fine.
 -   **`TRAINING_LOOKBACK_HOURS`**: The number of hours of historical data to use for the initial training. Defaults to 168 (7 days).
+-   **`CYCLE_INTERVAL_MINUTES`**: The time in minutes between each full cycle of learning and prediction. A longer interval (e.g., 10-15 mins) provides a clearer learning signal, while a shorter one is more responsive. Defaults to 10.
 -   **Entity IDs**: The script is pre-configured with many entity IDs. You **must** review and update these to match the `entity_id`s in your Home Assistant setup.
 -   **`CONFIDENCE_THRESHOLD`**: The model uses a *normalized* confidence in the range (0..1], where `1.0` means perfect agreement between trees (σ = 0 °C). The code maps the per-tree standard deviation σ (in °C) to confidence using:
     ```python
