@@ -275,8 +275,8 @@ def find_best_outlet_temp(
         A tuple with the final outlet temperature, model confidence, and the
         updated prediction history.
     """
-    logging.debug("--- Finding Best Outlet Temp ---")
-    logging.debug(f"Target indoor temp: {target_temp:.1f}°C")
+    logging.info("--- Finding Best Outlet Temp ---")
+    logging.info(f"Target indoor temp: {target_temp:.1f}°C")
     best_temp, min_diff = baseline_outlet_temp, float("inf")
 
     x_base = features.to_dict(orient="records")[0]
@@ -339,7 +339,7 @@ def find_best_outlet_temp(
         predicted_delta = model.predict_one(x_candidate)
         predicted_indoor = current_temp + predicted_delta
 
-        logging.debug(
+        logging.info(
             f"  - Test {temp_candidate:.1f}°C -> "
             f"Pred ΔT: {predicted_delta:.3f}°C, "
             f"Indoor: {predicted_indoor:.2f}°C"
