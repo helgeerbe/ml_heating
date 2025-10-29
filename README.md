@@ -22,6 +22,7 @@ The primary goal of this project is to improve upon traditional heating curves b
 -   **Prediction Smoothing:** Smooths the model's predictions over time to prevent rapid, inefficient fluctuations in the heating system.
 -   **Smart Rounding:** Intelligently chooses between rounding up or down by predicting which integer temperature will result in an indoor temperature closer to the target.
 -   **Confidence-Based Fallback:** The model assesses its own confidence in a prediction. If the confidence is low, it safely falls back to a traditional, reliable heating curve calculation.
+-   **Gradual Temperature Control:** Prevents abrupt changes to the heat pump's setpoint by limiting the maximum temperature change allowed in a single cycle (`MAX_TEMP_CHANGE_PER_CYCLE`). This helps avoid inefficient start/stop cycles.
 -   **Fireplace Mode:** When a fireplace or other significant secondary heat source is active, the model can be configured to use a different temperature sensor (e.g., the average of other rooms) for learning and prediction. This prevents the model from incorrectly learning that the main heating system is more powerful than it is.
 -   **Feature Importance:** Logs which factors (features) are most influential in the model's decisions, providing insight into what the model is learning.
 -   **Systemd Service:** Can be run as a background service for continuous, unattended operation.
@@ -86,15 +87,21 @@ The `ARFRegressor` from the `river` library was specifically chosen for several 
 3.  **Robustness of Ensembles:** As a random forest, it is an ensemble of many decision trees. This makes it more robust and less prone to overfitting than a single model.
 4.  **Built-in Uncertainty Measure:** The ensemble nature allows us to easily measure the model's uncertainty. By calculating the standard deviation of the predictions from all the individual trees, we get a reliable indicator of the model's "confidence." This is the basis for the crucial fallback mechanism.
 
-### Prediction Mechanism
+### The Prediction Pipeline: A Step-by-Step Filter
 
-The prediction process is orchestrated by the `find_best_outlet_temp` function and follows a multi-step pipeline to ensure both accuracy and stability:
+The final target temperature is not a single prediction but the result of a multi-stage filtering and adjustment pipeline. This process is designed to ensure safety, stability, and accuracy, with each step refining the output of the previous one.
 
-1.  **Fallback:** Before making a prediction, the model calculates its confidence by measuring the standard deviation of predictions from its internal decision trees. If this uncertainty is above `CONFIDENCE_THRESHOLD`, the system discards the ML prediction and immediately falls back to the `baseline_outlet_temp` calculated from a traditional heating curve.
-2.  **Find Best Temperature:** If confidence is sufficient, the function searches a range of possible outlet temperatures (e.g., 25°C to 45°C). For each candidate temperature, it runs a prediction to estimate the resulting indoor temperature. It selects the temperature that is predicted to get closest to the user's target.
-3.  **Prediction Smoothing:** To avoid rapid, inefficient changes, the best temperature from the search is smoothed using an exponential moving average with the previous prediction.
-4.  **Dynamic Boost:** A corrective boost is applied to the smoothed temperature. This adjustment is based on the current error (`target_indoor_temp - actual_indoor_temp`) and helps the system react more quickly to changes.
-5.  **Smart Rounding:** The boosted temperature is then rounded intelligently. The system predicts the outcome for both the `floor` and `ceil` integer values and chooses the one that is predicted to yield an indoor temperature closer to the target. This ensures the final output is a whole number, as required by the heat pump.
+1.  **Step 1: Confidence Check & Fallback:** This is the first and most critical gate. The model calculates its confidence by measuring the agreement among its internal decision trees. If the confidence score is below the `CONFIDENCE_THRESHOLD`, the entire ML pipeline is bypassed, and the system safely uses a pre-calculated `baseline_outlet_temp` from a traditional heating curve.
+
+2.  **Step 2: ML-Powered Search:** If confidence is sufficient, the model searches a wide range of possible outlet temperatures (e.g., 25°C to 45°C). For each candidate, it predicts the resulting indoor temperature and identifies the floating-point temperature that is predicted to get closest to the user's target.
+
+3.  **Step 3: Smoothing (EMA Filter):** The raw result from the search can be volatile. To prevent rapid fluctuations, it is smoothed using an Exponential Moving Average (EMA) that considers previous predictions. This ensures the setpoint changes gracefully over time.
+
+4.  **Step 4: Dynamic Boost & Clamping:** To react more quickly to immediate needs, a "boost" is applied. If the room is too cold, the temperature is nudged higher; if it's too warm, it's nudged lower. To prevent extreme or unsafe values, this boosted temperature is then clamped within a safe percentage of the original baseline temperature.
+
+5.  **Step 5: Smart Rounding:** Heat pumps often require whole-number setpoints. Instead of a simple mathematical round, the system performs "smart rounding." It takes the floating-point value from the previous step (e.g., 35.7°C) and runs a final prediction for both the floor (35°C) and the ceiling (36°C). It then chooses the integer that is predicted to result in an indoor temperature closer to the target.
+
+6.  **Step 6: Gradual Temperature Control:** This is the final safety filter, designed to protect the heat pump from inefficient start/stop cycles. The system compares the proposed integer setpoint from Step 5 to the *previous cycle's* setpoint. If the change exceeds the `MAX_TEMP_CHANGE_PER_CYCLE` value (e.g., 2°C), it is capped. For example, if the last setpoint was 35°C and the new pipeline suggests 38°C, the final output will be capped at 37°C. This ensures the heat pump is always adjusted gently.
 
 ### Metrics: Confidence, MAE, and RMSE
 
@@ -225,6 +232,7 @@ nano .env
 -   **`MODEL_FILE` / `STATE_FILE`**: Paths to store the trained model and application state. The defaults are usually fine.
 -   **`TRAINING_LOOKBACK_HOURS`**: The number of hours of historical data to use for the initial training. Defaults to 168 (7 days).
 -   **`CYCLE_INTERVAL_MINUTES`**: The time in minutes between each full cycle of learning and prediction. A longer interval (e.g., 10-15 mins) provides a clearer learning signal, while a shorter one is more responsive. Defaults to 10.
+-   **`MAX_TEMP_CHANGE_PER_CYCLE`**: The maximum allowable integer change (in degrees) for the outlet temperature setpoint in a single cycle. This prevents abrupt changes that can cause the heat pump to start and stop frequently. For example, a value of `1` with a `CYCLE_INTERVAL_MINUTES` of `10` limits the maximum change to 6 degrees per hour. Defaults to 2.
 -   **Entity IDs**: The script is pre-configured with many entity IDs. You **must** review and update these to match the `entity_id`s in your Home Assistant setup.
 -   **`CONFIDENCE_THRESHOLD`**: The model uses a *normalized* confidence in the range (0..1], where `1.0` means perfect agreement between trees (σ = 0 °C). The code maps the per-tree standard deviation σ (in °C) to confidence using:
     ```python

@@ -22,6 +22,7 @@ import logging
 import time
 from datetime import datetime, timezone
 
+import numpy as np
 from dotenv import load_dotenv
 
 from . import config
@@ -189,6 +190,12 @@ def main(args):
             actual_indoor = ha_client.get_state(
                 config.INDOOR_TEMP_ENTITY_ID, all_states
             )
+            actual_outlet_temp = ha_client.get_state(
+                config.ACTUAL_OUTLET_TEMP_ENTITY_ID, all_states
+            )
+            current_target_outlet_temp = ha_client.get_state(
+                config.TARGET_OUTLET_TEMP_ENTITY_ID, all_states
+            )
             avg_other_rooms_temp = ha_client.get_state(
                 config.AVG_OTHER_ROOMS_TEMP_ENTITY_ID, all_states
             )
@@ -208,6 +215,7 @@ def main(args):
                 config.OUTDOOR_TEMP_ENTITY_ID: outdoor_temp,
                 config.OPENWEATHERMAP_TEMP_ENTITY_ID: owm_temp,
                 config.AVG_OTHER_ROOMS_TEMP_ENTITY_ID: avg_other_rooms_temp,
+                config.ACTUAL_OUTLET_TEMP_ENTITY_ID: actual_outlet_temp,
             }
             missing_sensors = [
                 name for name, value in critical_sensors.items() if value is None
@@ -345,6 +353,31 @@ def main(args):
             )
             final_temp = suggested_temp
 
+            # --- Apply temperature change limit ---
+            # Use the last setpoint if available, otherwise use the current actual temperature
+            # to prevent large jumps on the first run or after a restart.
+            setpoint_baseline = (
+                current_target_outlet_temp
+                if current_target_outlet_temp is not None
+                else actual_outlet_temp
+            )
+
+            if setpoint_baseline is not None:
+                temp_diff = final_temp - setpoint_baseline
+                if abs(temp_diff) > config.MAX_TEMP_CHANGE_PER_CYCLE:
+                    capped_change = config.MAX_TEMP_CHANGE_PER_CYCLE * np.sign(
+                        temp_diff
+                    )
+                    adjusted_temp = setpoint_baseline + capped_change
+                    logging.info(
+                        "Change from %.1f°C to %.1f°C exceeds max change of %.1f°C. Capping at %.1f°C.",
+                        setpoint_baseline,
+                        final_temp,
+                        config.MAX_TEMP_CHANGE_PER_CYCLE,
+                        adjusted_temp,
+                    )
+                    final_temp = adjusted_temp
+
             # To provide a "predicted indoor temp" sensor in Home Assistant,
             # we run a final prediction using the chosen `final_temp`. This
             # shows what the model expects the indoor temperature to be at the
@@ -378,7 +411,7 @@ def main(args):
                 config.TARGET_OUTLET_TEMP_ENTITY_ID,
                 final_temp,
                 get_sensor_attributes(config.TARGET_OUTLET_TEMP_ENTITY_ID),
-                round_digits=1,
+                round_digits=0,
             )
             ha_client.set_state(
                 config.PREDICTED_INDOOR_TEMP_ENTITY_ID,
