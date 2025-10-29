@@ -263,6 +263,7 @@ def main(args):
             last_indoor_temp = state.get("last_indoor_temp")
             last_avg_other_rooms_temp = state.get("last_avg_other_rooms_temp")
             last_fireplace_on = state.get("last_fireplace_on", False)
+            last_final_temp = state.get("last_final_temp")
 
             prediction_history = state.get("prediction_history", [])
             if last_run_features is not None and last_indoor_temp is not None:
@@ -353,30 +354,25 @@ def main(args):
             )
             final_temp = suggested_temp
 
-            # --- Apply temperature change limit ---
-            # Use the last setpoint if available, otherwise use the current actual temperature
-            # to prevent large jumps on the first run or after a restart.
-            setpoint_baseline = (
-                current_target_outlet_temp
-                if current_target_outlet_temp is not None
-                else actual_outlet_temp
-            )
-
-            if setpoint_baseline is not None:
-                temp_diff = final_temp - setpoint_baseline
-                if abs(temp_diff) > config.MAX_TEMP_CHANGE_PER_CYCLE:
-                    capped_change = config.MAX_TEMP_CHANGE_PER_CYCLE * np.sign(
-                        temp_diff
-                    )
-                    adjusted_temp = setpoint_baseline + capped_change
+            # --- Gradual Temperature Control ---
+            # This is the final safety check. It prevents the temperature from
+            # changing too abruptly, which can be inefficient for the heat pump.
+            if last_final_temp is not None:
+                max_change = config.MAX_TEMP_CHANGE_PER_CYCLE
+                original_temp = final_temp  # Keep a copy for logging
+                # Calculate the difference from the last setpoint
+                delta = final_temp - last_final_temp
+                # Clamp the delta to the maximum allowed change
+                if abs(delta) > max_change:
+                    final_temp = last_final_temp + np.clip(delta, -max_change, max_change)
+                    logging.info("--- Gradual Temperature Control ---")
                     logging.info(
                         "Change from %.1f°C to %.1f°C exceeds max change of %.1f°C. Capping at %.1f°C.",
-                        setpoint_baseline,
+                        last_final_temp,
+                        original_temp,
+                        max_change,
                         final_temp,
-                        config.MAX_TEMP_CHANGE_PER_CYCLE,
-                        adjusted_temp,
                     )
-                    final_temp = adjusted_temp
 
             # To provide a "predicted indoor temp" sensor in Home Assistant,
             # we run a final prediction using the chosen `final_temp`. This
@@ -500,6 +496,7 @@ def main(args):
                 "last_avg_other_rooms_temp": avg_other_rooms_temp,
                 "last_fireplace_on": fireplace_on,
                 "prediction_history": prediction_history,
+                "last_final_temp": final_temp,
             }
             save_state(**state_to_save)
 

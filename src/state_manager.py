@@ -44,6 +44,7 @@ def load_state() -> Dict[str, Any]:
             "prediction_history": [],
             "last_avg_other_rooms_temp": None,
             "last_fireplace_on": False,
+            "last_final_temp": None,
         }
 
 
@@ -60,6 +61,7 @@ def save_state(**kwargs: Any) -> None:
         "prediction_history": kwargs.get("prediction_history", []),
         "last_avg_other_rooms_temp": kwargs.get("last_avg_other_rooms_temp"),
         "last_fireplace_on": kwargs.get("last_fireplace_on", False),
+        "last_final_temp": kwargs.get("last_final_temp"),
     }
     try:
         with open(config.STATE_FILE, "wb") as f:
