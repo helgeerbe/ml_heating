@@ -263,7 +263,6 @@ def main(args):
             last_indoor_temp = state.get("last_indoor_temp")
             last_avg_other_rooms_temp = state.get("last_avg_other_rooms_temp")
             last_fireplace_on = state.get("last_fireplace_on", False)
-            last_final_temp = state.get("last_final_temp")
 
             prediction_history = state.get("prediction_history", [])
             if last_run_features is not None and last_indoor_temp is not None:
@@ -357,18 +356,20 @@ def main(args):
             # --- Gradual Temperature Control ---
             # This is the final safety check. It prevents the temperature from
             # changing too abruptly, which can be inefficient for the heat pump.
-            if last_final_temp is not None:
+            # We use the current actual outlet temp as the baseline to prevent
+            # large jumps after blocking events (DHW, defrost).
+            if actual_outlet_temp is not None:
                 max_change = config.MAX_TEMP_CHANGE_PER_CYCLE
                 original_temp = final_temp  # Keep a copy for logging
-                # Calculate the difference from the last setpoint
-                delta = final_temp - last_final_temp
+                # Calculate the difference from the current actual setpoint
+                delta = final_temp - actual_outlet_temp
                 # Clamp the delta to the maximum allowed change
                 if abs(delta) > max_change:
-                    final_temp = last_final_temp + np.clip(delta, -max_change, max_change)
+                    final_temp = actual_outlet_temp + np.clip(delta, -max_change, max_change)
                     logging.info("--- Gradual Temperature Control ---")
                     logging.info(
-                        "Change from %.1f°C to %.1f°C exceeds max change of %.1f°C. Capping at %.1f°C.",
-                        last_final_temp,
+                        "Change from actual %.1f°C to suggested %.1f°C exceeds max change of %.1f°C. Capping at %.1f°C.",
+                        actual_outlet_temp,
                         original_temp,
                         max_change,
                         final_temp,
@@ -496,7 +497,6 @@ def main(args):
                 "last_avg_other_rooms_temp": avg_other_rooms_temp,
                 "last_fireplace_on": fireplace_on,
                 "prediction_history": prediction_history,
-                "last_final_temp": final_temp,
             }
             save_state(**state_to_save)
 

@@ -11,7 +11,9 @@ import numpy as np
 import logging
 from influxdb_client import InfluxDBClient, QueryApi, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
+
 from . import config
+
 
 class InfluxService:
     """A service for interacting with InfluxDB."""
@@ -140,13 +142,21 @@ class InfluxService:
                 ] * (steps - len(values))
                 values.extend(padding)
             
-            # Downsample if more data points than steps are returned.
-            step = max(1, len(values) // steps)
-            result = []
-            for i in range(steps):
-                chunk = values[i * step:(i + 1) * step]
-                result.append(float(np.mean(chunk)) if chunk else default_value)
-            return result[-steps:]
+            # Resample the data to the exact number of steps required.
+            if len(values) != steps:
+                logging.debug(
+                    "Resampling history from %d to %d points.",
+                    len(values),
+                    steps,
+                )
+                # Create an array of original indices
+                original_indices = np.linspace(0, 1, len(values))
+                # Create an array of new indices
+                new_indices = np.linspace(0, 1, steps)
+                # Interpolate the values at the new indices
+                values = np.interp(new_indices, original_indices, values)
+
+            return [float(v) for v in values]
         except Exception:
             # Return a default list if the query fails.
             return [default_value] * steps
@@ -180,7 +190,9 @@ class InfluxService:
         fernseher_id = config.TV_STATUS_ENTITY_ID.split(".", 1)[-1]
         dhw_status_id = config.DHW_STATUS_ENTITY_ID.split(".", 1)[-1]
         defrost_status_id = config.DEFROST_STATUS_ENTITY_ID.split(".", 1)[-1]
-        disinfection_status_id = config.DISINFECTION_STATUS_ENTITY_ID.split(".", 1)[-1]
+        disinfection_status_id = config.DISINFECTION_STATUS_ENTITY_ID.split(
+            ".", 1
+        )[-1]
         dhw_boost_heater_status_id = (
             config.DHW_BOOST_HEATER_STATUS_ENTITY_ID.split(".", 1)[-1]
         )

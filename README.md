@@ -22,7 +22,7 @@ The primary goal of this project is to improve upon traditional heating curves b
 -   **Prediction Smoothing:** Smooths the model's predictions over time to prevent rapid, inefficient fluctuations in the heating system.
 -   **Smart Rounding:** Intelligently chooses between rounding up or down by predicting which integer temperature will result in an indoor temperature closer to the target.
 -   **Confidence-Based Fallback:** The model assesses its own confidence in a prediction. If the confidence is low, it safely falls back to a traditional, reliable heating curve calculation.
--   **Gradual Temperature Control:** Prevents abrupt changes to the heat pump's setpoint by limiting the maximum temperature change allowed in a single cycle (`MAX_TEMP_CHANGE_PER_CYCLE`). This helps avoid inefficient start/stop cycles.
+-   **Intelligent Temperature Ramping (Gradual Control):** Prevents abrupt changes to the heat pump's setpoint. After blocking events (DHW, defrost), the system can drop to a low temperature. Instead of making a large, inefficient jump back to the target, the controller uses the current *actual* outlet temperature as a baseline and ramps up gradually, improving efficiency and stability.
 -   **Fireplace Mode:** When a fireplace or other significant secondary heat source is active, the model can be configured to use a different temperature sensor (e.g., the average of other rooms) for learning and prediction. This prevents the model from incorrectly learning that the main heating system is more powerful than it is.
 -   **Feature Importance:** Logs which factors (features) are most influential in the model's decisions, providing insight into what the model is learning.
 -   **Systemd Service:** Can be run as a background service for continuous, unattended operation.
@@ -101,7 +101,7 @@ The final target temperature is not a single prediction but the result of a mult
 
 5.  **Step 5: Smart Rounding:** Heat pumps often require whole-number setpoints. Instead of a simple mathematical round, the system performs "smart rounding." It takes the floating-point value from the previous step (e.g., 35.7°C) and runs a final prediction for both the floor (35°C) and the ceiling (36°C). It then chooses the integer that is predicted to result in an indoor temperature closer to the target.
 
-6.  **Step 6: Gradual Temperature Control:** This is the final safety filter, designed to protect the heat pump from inefficient start/stop cycles. The system compares the proposed integer setpoint from Step 5 to the *previous cycle's* setpoint. If the change exceeds the `MAX_TEMP_CHANGE_PER_CYCLE` value (e.g., 2°C), it is capped. For example, if the last setpoint was 35°C and the new pipeline suggests 38°C, the final output will be capped at 37°C. This ensures the heat pump is always adjusted gently.
+6.  **Step 6: Gradual Temperature Control:** This is the final safety filter, designed to protect the heat pump from inefficient, large temperature jumps, especially after a blocking event like DHW or defrosting. The system compares the proposed integer setpoint from Step 5 to the **current actual outlet temperature**. If the change exceeds the `MAX_TEMP_CHANGE_PER_CYCLE` value (e.g., 2°C), it is capped. For example, if the actual outlet temperature is 30°C and the new pipeline suggests 38°C, the final output will be capped at 32°C. This ensures the heat pump always ramps up or down gently from its current state.
 
 ### Metrics: Confidence, MAE, and RMSE
 
