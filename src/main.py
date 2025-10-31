@@ -114,7 +114,9 @@ def main(args):
                     )
                     attributes_state.update(
                         {
-                            "state_description": "Network Error - could not fetch HA states",
+                            "state_description": (
+                                "Network Error - could not fetch HA states"
+                            ),
                             "last_updated": datetime.now(
                                 timezone.utc
                             ).isoformat(),
@@ -147,6 +149,64 @@ def main(args):
                 ha_client.get_state(entity, all_states, is_binary=True)
                 for entity in blocking_entities
             )
+
+            # --- Grace Period after Blocking ---
+            # If a blocking event just ended, enter a grace period to allow
+            # the system to stabilize before resuming ML control.
+            last_is_blocking = state.get("last_is_blocking", False)
+            if last_is_blocking and not is_blocking:
+                logging.info("--- Grace Period Started ---")
+                logging.info(
+                    "Blocking event ended. Entering grace period to allow system to"
+                    " stabilize."
+                )
+                last_final_temp = state.get("last_final_temp")
+
+                if last_final_temp is not None:
+                    logging.info(
+                        "Restoring last known target temperature of %.1f°C.",
+                        last_final_temp,
+                    )
+                    ha_client.set_state(
+                        config.TARGET_OUTLET_TEMP_ENTITY_ID,
+                        last_final_temp,
+                        get_sensor_attributes(
+                            config.TARGET_OUTLET_TEMP_ENTITY_ID
+                        ),
+                        round_digits=0,
+                    )
+
+                    # Wait until the actual outlet temperature drops below the
+                    # target
+                    while True:
+                        actual_outlet_temp = ha_client.get_state(
+                            config.ACTUAL_OUTLET_TEMP_ENTITY_ID,
+                            ha_client.get_all_states(),
+                        )
+                        if actual_outlet_temp is None:
+                            logging.warning(
+                                "Cannot read actual_outlet_temp, exiting grace"
+                                " period."
+                            )
+                            break
+                        if actual_outlet_temp < last_final_temp:
+                            logging.info(
+                                "Actual outlet temp (%.1f°C) has dropped below"
+                                " target (%.1f°C).",
+                                actual_outlet_temp,
+                                last_final_temp,
+                            )
+                            break
+                        logging.info(
+                            "Waiting for actual outlet temp (%.1f°C) to drop"
+                            " below target (%.1f°C)...",
+                            actual_outlet_temp,
+                            last_final_temp,
+                        )
+                        time.sleep(60)  # Wait for 1 minute
+
+                logging.info("--- Grace Period Ended ---")
+
             if is_blocking:
                 logging.info(
                     "Blocking process active (DHW/Defrost), skipping."
@@ -167,7 +227,9 @@ def main(args):
                             "state_description": "Blocking activity - Skipping",
                             "blocking_reasons": blocking_reasons,
                             "fallback_used": False,
-                            "last_updated": datetime.now(timezone.utc).isoformat(),
+                            "last_updated": datetime.now(
+                                timezone.utc
+                            ).isoformat(),
                         }
                     )
                     ha_client.set_state(
@@ -180,6 +242,8 @@ def main(args):
                     logging.debug(
                         "Failed to write BLOCKED state to HA.", exc_info=True
                     )
+                # Save the blocking state for the next cycle
+                save_state(last_is_blocking=True)
                 time.sleep(300)
                 continue
 
@@ -192,9 +256,6 @@ def main(args):
             )
             actual_outlet_temp = ha_client.get_state(
                 config.ACTUAL_OUTLET_TEMP_ENTITY_ID, all_states
-            )
-            current_target_outlet_temp = ha_client.get_state(
-                config.TARGET_OUTLET_TEMP_ENTITY_ID, all_states
             )
             avg_other_rooms_temp = ha_client.get_state(
                 config.AVG_OTHER_ROOMS_TEMP_ENTITY_ID, all_states
@@ -232,7 +293,9 @@ def main(args):
                     )
                     attributes_state.update(
                         {
-                            "state_description": "No data - missing critical sensors",
+                            "state_description": (
+                                "No data - missing critical sensors"
+                            ),
                             "missing_sensors": missing_sensors,
                             "last_updated": datetime.now(
                                 timezone.utc
@@ -254,11 +317,11 @@ def main(args):
 
             # --- Step 1: Online Learning ---
             # This is the heart of the "online" or "incremental" learning
-            # process. The script retrieves the features and indoor
-            # temperature from the *previous* cycle. It then calculates the
-            # *actual* change in indoor temperature that occurred during that
-            # last cycle. This actual outcome is used to update (retrain) the
-            # model, allowing it to continuously adapt to changing conditions.
+            # process. The script retrieves the features and indoor temperature
+            # from the *previous* cycle. It then calculates the *actual* change
+            # in indoor temperature that occurred during that last cycle. This
+            # actual outcome is used to update (retrain) the model, allowing it
+            # to continuously adapt to changing conditions.
             last_run_features = state.get("last_run_features")
             last_indoor_temp = state.get("last_indoor_temp")
             last_avg_other_rooms_temp = state.get("last_avg_other_rooms_temp")
@@ -270,7 +333,9 @@ def main(args):
                 if last_fireplace_on and last_avg_other_rooms_temp is not None:
                     learning_temp_current = avg_other_rooms_temp
                     learning_temp_last = last_avg_other_rooms_temp
-                    logging.info("Fireplace was on. Learning based on avg other rooms temp.")
+                    logging.info(
+                        "Fireplace was on. Learning based on avg other rooms temp."
+                    )
                 else:
                     learning_temp_current = actual_indoor
                     learning_temp_last = last_indoor_temp
@@ -295,8 +360,8 @@ def main(args):
             # --- Step 2: Feature Building ---
             # Gathers all the necessary data points (current sensor values,
             # historical data from InfluxDB, etc.) and transforms them into a
-            # feature vector. This vector is the input the model will use to
-            # make its next prediction.
+            # feature vector. This vector is the input the model will use to make
+            # its next prediction.
             if fireplace_on:
                 prediction_indoor_temp = avg_other_rooms_temp
                 logging.info(
@@ -321,13 +386,12 @@ def main(args):
             # upcoming cycle. It involves several sub-steps:
             # 1. Calculate a baseline temperature using a traditional heating
             #    curve. This serves as a safe fallback.
-            # 2. Use the `find_best_outlet_temp` function to simulate
-            #    different outlet temperatures and let the model predict the
-            #    outcome for each. The one that gets closest to the target
-            #    indoor temperature is chosen.
-            # 3. The model's confidence in its prediction is also returned. If
-            #    it's too low, the system will revert to the baseline
-            #    temperature.
+            # 2. Use the `find_best_outlet_temp` function to simulate different
+            #    outlet temperatures and let the model predict the outcome for
+            #    each. The one that gets closest to the target indoor
+            #    temperature is chosen.
+            # 3. The model's confidence in its prediction is also returned. If it's
+            #    too low, the system will revert to the baseline temperature.
             baseline_outlet_temp = calculate_baseline_outlet_temp(
                 outdoor_temp,
                 owm_temp,
@@ -355,9 +419,9 @@ def main(args):
 
             # --- Gradual Temperature Control ---
             # This is the final safety check. It prevents the temperature from
-            # changing too abruptly, which can be inefficient for the heat pump.
-            # We use the current actual outlet temp as the baseline to prevent
-            # large jumps after blocking events (DHW, defrost).
+            # changing too abruptly, which can be inefficient for the heat
+            # pump. We use the current actual outlet temp as the baseline to
+            # prevent large jumps after blocking events (DHW, defrost).
             if actual_outlet_temp is not None:
                 max_change = config.MAX_TEMP_CHANGE_PER_CYCLE
                 original_temp = final_temp  # Keep a copy for logging
@@ -368,7 +432,8 @@ def main(args):
                     final_temp = actual_outlet_temp + np.clip(delta, -max_change, max_change)
                     logging.info("--- Gradual Temperature Control ---")
                     logging.info(
-                        "Change from actual %.1f°C to suggested %.1f°C exceeds max change of %.1f°C. Capping at %.1f°C.",
+                        "Change from actual %.1f°C to suggested %.1f°C exceeds"
+                        " max change of %.1f°C. Capping at %.1f°C.",
                         actual_outlet_temp,
                         original_temp,
                         max_change,
@@ -376,9 +441,9 @@ def main(args):
                     )
 
             # To provide a "predicted indoor temp" sensor in Home Assistant,
-            # we run a final prediction using the chosen `final_temp`. This
-            # shows what the model expects the indoor temperature to be at the
-            # end of the next cycle, given the chosen outlet temperature.
+            # we run a final prediction using the chosen `final_temp`. This shows
+            # what the model expects the indoor temperature to be at the end of
+            # the next cycle, given the chosen outlet temperature.
             final_features = features.copy()
             final_features["outlet_temp"] = final_temp
             final_features["outlet_temp_sq"] = final_temp**2
@@ -400,9 +465,9 @@ def main(args):
             predicted_indoor = prediction_indoor_temp + predicted_delta
 
             # --- Step 4: Update Home Assistant and Log ---
-            # The calculated `final_temp` is sent to Home Assistant to
-            # control the boiler. Other metrics like model confidence, MAE,
-            # and feature importances are also published to HA for monitoring.
+            # The calculated `final_temp` is sent to Home Assistant to control
+            # the boiler. Other metrics like model confidence, MAE, and
+            # feature importances are also published to HA for monitoring.
             logging.debug("Setting target outlet temp")
             ha_client.set_state(
                 config.TARGET_OUTLET_TEMP_ENTITY_ID,
@@ -454,9 +519,9 @@ def main(args):
                         "final_temp": round(final_temp, 2),
                         "predicted_indoor": round(predicted_indoor, 2),
                         "fallback_used": bool(fallback_used),
-                        "last_prediction_time": datetime.now(
-                            timezone.utc
-                        ).isoformat(),
+                        "last_prediction_time": (
+                            datetime.now(timezone.utc).isoformat()
+                        ),
                     }
                 )
                 ha_client.set_state(
@@ -488,15 +553,17 @@ def main(args):
             )
 
             # --- Step 6: Save State for Next Run ---
-            # The features and indoor temperature from the *current* run are
-            # saved to a file. This data will be loaded at the start of the
-            # next loop iteration to be used in the "Online Learning" step.
+            # The features and indoor temperature from the *current* run are saved
+            # to a file. This data will be loaded at the start of the next loop
+            # iteration to be used in the "Online Learning" step.
             state_to_save = {
                 "last_run_features": features,
                 "last_indoor_temp": actual_indoor,
                 "last_avg_other_rooms_temp": avg_other_rooms_temp,
                 "last_fireplace_on": fireplace_on,
                 "prediction_history": prediction_history,
+                "last_final_temp": final_temp,
+                "last_is_blocking": is_blocking,
             }
             save_state(**state_to_save)
 
@@ -531,7 +598,9 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="ML Heating Controller")
+    parser = argparse.ArgumentParser(
+        description="ML Heating Controller"
+    )
     parser.add_argument(
         "--initial-train",
         action="store_true",
