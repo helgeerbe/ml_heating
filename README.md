@@ -21,9 +21,14 @@ The primary goal of this project is to improve upon traditional heating curves b
 -   **Dynamic Boost:** Applies a final correction based on the current error between the target and actual indoor temperatures to react quickly to changes.
 -   **Prediction Smoothing:** Smooths the model's predictions over time to prevent rapid, inefficient fluctuations in the heating system.
 -   **Smart Rounding:** Intelligently chooses between rounding up or down by predicting which integer temperature will result in an indoor temperature closer to the target.
--   **Confidence-Based Fallback:** The model assesses its own confidence in a prediction. If the confidence is low, it safely falls back to a traditional, reliable heating curve calculation.
--   **Intelligent Temperature Ramping (Gradual Control):** Prevents abrupt changes to the heat pump's setpoint. After blocking events (DHW, defrost), the system can drop to a low temperature. Instead of making a large, inefficient jump back to the target, the controller uses the current *actual* outlet temperature as a baseline and ramps up gradually, improving efficiency and stability.
--   **Grace Period after Blocking:** After a blocking event like DHW or defrosting ends, the water in the system is often much hotter than the normal heating range. To prevent the model from overreacting to this temporary state, the system enters a "grace period." It restores the last known target temperature and waits for the actual outlet temperature to cool down and fall below this target before resuming ML control. This ensures the model makes decisions based on stable, representative data.
+-   **Confidence Recording (no automatic fallback):** The model assesses its confidence in a prediction and records it in the ML state sensor. Low confidence is reported so automations or dashboards can react, but it does not force an automatic baseline fallback.
+-   **Intelligent Temperature Ramping (Gradual Control):** Prevents abrupt changes to the heat pump's setpoint. After blocking events (DHW, defrost), the system can drop to a low temperature. Instead of making a large, inefficient jump back to the target, the controller uses the current *actual* outlet temperature as a reference and ramps up gradually, improving efficiency and stability.
+-   **Grace Period after Blocking:** After a blocking event like DHW or defrosting ends, the water in the system can be far from the normal heating range. To avoid the model reacting to this transient state the controller restores the last known target outlet temperature and enters a grace period. The controller determines the required waiting direction from the measured outlet vs. restored target:
+    
+    - If the outlet is hotter than the restored target (typical after DHW), the controller waits for the outlet to cool to <= target.
+    - If the outlet is colder than the restored target (possible after defrost with reversed flow), the controller waits for the outlet to warm to >= target.
+    
+    The wait uses the same historical lookback and enforces a maximum timeout (`GRACE_PERIOD_MAX_MINUTES`) so the system never stalls indefinitely. During the grace period the controller avoids resuming aggressive ML-driven actuation and uses the restored target as a safe reference; after the condition is met (or the timeout elapses) normal ML control resumes. This behaviour protects both model quality and the heat-pump hardware by preventing large, inefficient setpoint jumps immediately after blocking events.
 -   **Fireplace Mode:** When a fireplace or other significant secondary heat source is active, the model can be configured to use a different temperature sensor (e.g., the average of other rooms) for learning and prediction. This prevents the model from incorrectly learning that the main heating system is more powerful than it is.
 -   **Feature Importance:** Logs which factors (features) are most influential in the model's decisions, providing insight into what the model is learning.
 -   **Systemd Service:** Can be run as a background service for continuous, unattended operation.
@@ -63,13 +68,17 @@ The model uses a rich set of features engineered from various data sources to un
     -   `tv_on`: A binary flag indicating if the TV is currently on. This serves as an example of a feature that represents an additional, unmeasurable heat source. The model can learn the correlation between the TV being on and a slight rise in indoor temperature.
     -   `dhw_heating`, `defrosting`, etc.: Binary flags for the status of various heat pump operations that might block or affect heating.
 
+    -   Defrost-derived metrics: `defrost_recent`, `defrost_count`, `defrost_age_min` — computed from the InfluxDB history window (the same window used for other aggregated features). These history-derived metrics make short defrost events visible to the model even when the live Home Assistant snapshot misses the transient `defrosting` flag.
+
 ## Model and Approach
+
+The controller includes history-derived defrost metrics (`defrost_recent`, `defrost_count`, `defrost_age_min`) computed from the historical InfluxDB window so short defrost events are visible to the model. The online learning loop now skips learning for long hot-water blocking activities (DHW, disinfection, DHW boost heater) to avoid contaminating the learning signal; defrost cycles remain part of the learning signal and are represented via the new defrost metrics.
 
 ### Online Training
 
 This project uses an **online machine learning** approach, which means the model learns incrementally from a stream of live data.
 
-1.  **Initial Training (Optional):** When first run with the `--initial-train` flag, the model is "warmed up" using historical data from InfluxDB. The duration of this lookback period is configurable via the `TRAINING_LOOKBACK_HOURS` environment variable (default is 168 hours, or 7 days). This gives the model a solid baseline understanding of the home's thermal dynamics.
+1.  **Initial Training (Optional):** When first run with the `--initial-train` flag, the model is "warmed up" using historical data from InfluxDB. The duration of this lookback period is configurable via the `TRAINING_LOOKBACK_HOURS` environment variable (default is 168 hours, or 7 days). This gives the model a solid initial understanding of the home's thermal dynamics.
 2.  **Live Learning Cycle:**
     -   The system sets a target outlet temperature.
     -   It waits for a cycle (e.g., 5 minutes).
@@ -86,19 +95,19 @@ The `ARFRegressor` from the `river` library was specifically chosen for several 
 1.  **Designed for Online Learning:** Unlike traditional batch models (e.g., from scikit-learn) that require periodic retraining on large datasets, `river` models are designed to learn from a continuous stream of data, one sample at a time. This is ideal for a system that needs to run and adapt 24/7.
 2.  **Adaptability to Concept Drift:** The "A" in ARF stands for "Adaptive." The model has built-in drift detection mechanisms (`PageHinkley` and `ADWIN`). This allows it to detect and adapt to "concept drift"—fundamental changes in the data's underlying patterns, such as the transition from winter to summer.
 3.  **Robustness of Ensembles:** As a random forest, it is an ensemble of many decision trees. This makes it more robust and less prone to overfitting than a single model.
-4.  **Built-in Uncertainty Measure:** The ensemble nature allows us to easily measure the model's uncertainty. By calculating the standard deviation of the predictions from all the individual trees, we get a reliable indicator of the model's "confidence." This is the basis for the crucial fallback mechanism.
+4.  **Built-in Uncertainty Measure:** The ensemble nature allows us to easily measure the model's uncertainty. By calculating the standard deviation of the predictions from all the individual trees, we get a reliable indicator of the model's "confidence." This is the basis for the confidence reporting mechanism.
 
 ### The Prediction Pipeline: A Step-by-Step Filter
 
 The final target temperature is not a single prediction but the result of a multi-stage filtering and adjustment pipeline. This process is designed to ensure safety, stability, and accuracy, with each step refining the output of the previous one.
 
-1.  **Step 1: Confidence Check & Fallback:** This is the first and most critical gate. The model calculates its confidence by measuring the agreement among its internal decision trees. If the confidence score is below the `CONFIDENCE_THRESHOLD`, the entire ML pipeline is bypassed, and the system safely uses a pre-calculated `baseline_outlet_temp` from a traditional heating curve.
+1.  **Step 1: Confidence Check & Recording:** The model calculates its confidence by measuring the agreement among its internal decision trees and records it in the ML state sensor. Low confidence is noted but does not automatically bypass the ML pipeline; automations can inspect the `confidence` attribute to decide whether to ignore the ML suggestion.
 
-2.  **Step 2: ML-Powered Search:** If confidence is sufficient, the model searches a wide range of possible outlet temperatures (e.g., 25°C to 45°C). For each candidate, it predicts the resulting indoor temperature and identifies the floating-point temperature that is predicted to get closest to the user's target.
+2.  **Step 2: ML-Powered Search:** The model searches the configured absolute clamp range (`CLAMP_MIN_ABS` to `CLAMP_MAX_ABS`, step 0.5°C). For each candidate, it predicts the resulting indoor temperature and identifies the floating-point temperature that is predicted to get closest to the user's target. If two candidates tie, the one closer to the last actual outlet temperature is chosen.
 
 3.  **Step 3: Smoothing (EMA Filter):** The raw result from the search can be volatile. To prevent rapid fluctuations, it is smoothed using an Exponential Moving Average (EMA) that considers previous predictions. This ensures the setpoint changes gracefully over time.
 
-4.  **Step 4: Dynamic Boost & Clamping:** To react more quickly to immediate needs, a "boost" is applied. If the room is too cold, the temperature is nudged higher; if it's too warm, it's nudged lower. To prevent extreme or unsafe values, this boosted temperature is then clamped within a safe percentage of the original baseline temperature.
+4.  **Step 4: Dynamic Boost & Clamping:** A corrective boost is applied based on the current indoor error; the boosted temperature is then clamped to the absolute bounds defined by `CLAMP_MIN_ABS` and `CLAMP_MAX_ABS` to prevent unsafe values.
 
 5.  **Step 5: Smart Rounding:** Heat pumps often require whole-number setpoints. Instead of a simple mathematical round, the system performs "smart rounding." It takes the floating-point value from the previous step (e.g., 35.7°C) and runs a final prediction for both the floor (35°C) and the ceiling (36°C). It then chooses the integer that is predicted to result in an indoor temperature closer to the target.
 
@@ -118,12 +127,11 @@ The application publishes a numeric state sensor `sensor.ml_heating_state` that 
 
 State codes (numeric)
 - 0 = OK — Prediction done
-- 1 = LOW_CONFIDENCE — Confidence too low; fallback used
+- 1 = LOW_CONFIDENCE — Confidence too low; reported in state (no automatic baseline fallback)
 - 2 = BLOCKED — Blocking activity detected (DHW, defrosting, disinfection, boost) — skipping this cycle
 - 3 = NETWORK_ERROR — Failed to fetch Home Assistant states or network calls
 - 4 = NO_DATA — Missing critical sensors or insufficient history for features
 - 5 = TRAINING — Running initial training / warm-up
-- 6 = FALLBACK_BASELINE — Forced baseline/safety fallback (distinct from LOW_CONFIDENCE)
 - 7 = MODEL_ERROR — Exception occurred during prediction/learning
 
 Typical attributes
@@ -132,7 +140,6 @@ Typical attributes
 - `sigma`: raw per-tree stddev in °C
 - `mae`, `rmse`: current metric floats
 - `suggested_temp`, `final_temp`, `predicted_indoor`: recent numeric values
-- `fallback_used`: bool
 - `blocking_reasons`: list of active blockers (when applicable)
 - `missing_sensors`: list of missing critical entities (when applicable)
 - `last_prediction_time` / `last_updated`: ISO timestamps
@@ -235,6 +242,7 @@ nano .env
 -   **`CYCLE_INTERVAL_MINUTES`**: The time in minutes between each full cycle of learning and prediction. A longer interval (e.g., 10-15 mins) provides a clearer learning signal, while a shorter one is more responsive. Defaults to 10.
 -   **`MAX_TEMP_CHANGE_PER_CYCLE`**: The maximum allowable integer change (in degrees) for the outlet temperature setpoint in a single cycle. This prevents abrupt changes that can cause the heat pump to start and stop frequently. For example, a value of `1` with a `CYCLE_INTERVAL_MINUTES` of `10` limits the maximum change to 6 degrees per hour. Defaults to 2.
 -   **Entity IDs**: The script is pre-configured with many entity IDs. You **must** review and update these to match the `entity_id`s in your Home Assistant setup.
+-   **`PV_FORECAST_ENTITY_ID`**: Home Assistant sensor that provides today's PV forecast. The code uses the sensor's attribute `watts` (15‑minute samples) and aggregates them into hourly means for the next four full UTC hours. Forecast values are provided in watts (W). Hours with no samples are treated as 0.
 -   **`CONFIDENCE_THRESHOLD`**: The model uses a *normalized* confidence in the range (0..1], where `1.0` means perfect agreement between trees (σ = 0 °C). The code maps the per-tree standard deviation σ (in °C) to confidence using:
     ```python
     confidence = 1.0 / (1.0 + sigma)
@@ -246,7 +254,7 @@ nano .env
     Examples:
     - Tolerate σ_max = 1.0°C → `CONFIDENCE_THRESHOLD = 0.5`
     - Tolerate σ_max = 0.5°C → `CONFIDENCE_THRESHOLD ≈ 0.667`
-    The sample files use `0.5` as a reasonable starting point.
+The sample files use `0.5` as a reasonable starting point.
 
 ### 4. Initial Training (Recommended)
 

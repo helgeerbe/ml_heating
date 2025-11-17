@@ -96,17 +96,26 @@ class InfluxService:
         return results
 
     def fetch_history(
-        self, entity_id: str, steps: int, default_value: float
+        self,
+        entity_id: str,
+        steps: int,
+        default_value: float,
+        agg_fn: str = "mean",
     ) -> list[float]:
         """
         Fetches historical data for a given entity_id.
 
         It retrieves data for a specified number of steps, with each step's
-        duration defined in the config. It performs aggregation (mean) and
-        ensures the output has a fixed length, padding if necessary.
+        duration defined in the config. The aggregation function used in the
+        Flux `aggregateWindow` can be selected via `agg_fn` (e.g. "mean" or "max").
+        The output is padded/resampled to a fixed length if necessary.
         """
         minutes = steps * config.HISTORY_STEP_MINUTES
         entity_id_short = entity_id.split(".", 1)[-1]
+
+        # Sanitize aggregation function
+        agg_fn = agg_fn if agg_fn in ("mean", "max", "min", "last", "first", "sum") else "mean"
+
         flux_query = f"""
         from(bucket: "{config.INFLUX_BUCKET}")
           |> range(start: -{minutes}m)
@@ -114,7 +123,7 @@ class InfluxService:
           |> filter(fn: (r) => r["_field"] == "value")
         |> aggregateWindow(
             every: {config.HISTORY_STEP_MINUTES}m,
-            fn: mean,
+            fn: {agg_fn},
             createEmpty: false
         )
           |> pivot(
@@ -160,6 +169,14 @@ class InfluxService:
         except Exception:
             # Return a default list if the query fails.
             return [default_value] * steps
+
+    def fetch_binary_history(self, entity_id: str, steps: int) -> list[float]:
+        """
+        Convenience wrapper for fetching binary signals (e.g. defrost, fireplace)
+        using `max` aggregation so short pulses are preserved as 1.0 in the
+        aggregated windows.
+        """
+        return self.fetch_history(entity_id, steps, 0.0, agg_fn="max")
 
     def fetch_outlet_history(self, steps: int) -> list[float]:
         """Fetches the historical heating outlet temperature."""

@@ -237,7 +237,6 @@ def find_best_outlet_temp(
     features: pd.DataFrame,
     current_temp: float,
     target_temp: float,
-    baseline_outlet_temp: float,
     prediction_history: list,
     outlet_history: list[float],
     error_target_vs_actual: float,
@@ -266,8 +265,6 @@ def find_best_outlet_temp(
         features: The input features for the current time step.
         current_temp: The current indoor temperature.
         target_temp: The desired indoor temperature.
-        baseline_outlet_temp: A safe fallback temperature from a traditional
-                              heating curve.
         prediction_history: A list of recent smoothed predictions.
         outlet_history: A list of recent actual outlet temperatures.
 
@@ -277,7 +274,7 @@ def find_best_outlet_temp(
     """
     logging.info("--- Finding Best Outlet Temp ---")
     logging.info(f"Target indoor temp: {target_temp:.1f}°C")
-    best_temp, min_diff = baseline_outlet_temp, float("inf")
+    best_temp, min_diff = outlet_history[-1], float("inf")
 
     x_base = features.to_dict(orient="records")[0]
 
@@ -299,23 +296,21 @@ def find_best_outlet_temp(
     # If normalized confidence is below the configured threshold, fall back.
     if confidence < config.CONFIDENCE_THRESHOLD:
         logging.warning(
-            "Model confidence low (σ=%.3f°C, confidence=%.3f < %.3f), "
-            "falling back to baseline.",
+            "Model confidence low (σ=%.3f°C, confidence=%.3f < %.3f)."
+            " Will still return ML proposal; state will indicate low confidence.",
             sigma,
             confidence,
             config.CONFIDENCE_THRESHOLD,
         )
-        return baseline_outlet_temp, confidence, prediction_history, sigma
 
     # --- Search for Optimal Temperature ---
-    # Search in a radius around the baseline temperature.
-    search_radius = 20.0
-    min_search_temp = max(18.0, baseline_outlet_temp - search_radius)
-    max_search_temp = min(55.0, baseline_outlet_temp + search_radius)
+    # Search across the configured absolute clamp range.
+    min_search_temp = config.CLAMP_MIN_ABS
+    max_search_temp = config.CLAMP_MAX_ABS
     step = 0.5
 
     if min_search_temp > max_search_temp:
-        return baseline_outlet_temp, 0.0, prediction_history, 0.0
+        return outlet_history[-1], 0.0, prediction_history, 0.0
 
     last_outlet_temp = outlet_history[-1]
 
@@ -348,11 +343,11 @@ def find_best_outlet_temp(
         if diff < min_diff:
             min_diff, best_temp = diff, temp_candidate
         # Tie-breaking: if two temps are equally good, choose the one
-        # closer to the original baseline.
+        # closer to the last actual outlet temperature.
         elif diff == min_diff:
-            is_closer = abs(
-                temp_candidate - baseline_outlet_temp
-            ) < abs(best_temp - baseline_outlet_temp)
+            is_closer = abs(temp_candidate - last_outlet_temp) < abs(
+                best_temp - last_outlet_temp
+            )
             if is_closer:
                 best_temp = temp_candidate
 
@@ -401,10 +396,10 @@ def find_best_outlet_temp(
     boosted_temp = best_temp + boost
     logging.info(f"  Boosted Temp: {boosted_temp:.1f}°C")
 
-    # Clamp the boosted temperature to a reasonable range around the baseline
-    # to prevent extreme values.
-    lower_bound = max(18.0, baseline_outlet_temp * 0.8)
-    upper_bound = min(55.0, baseline_outlet_temp * 1.2)
+    # Clamp the boosted temperature to the configured absolute range to
+    # prevent extreme values.
+    lower_bound = config.CLAMP_MIN_ABS
+    upper_bound = config.CLAMP_MAX_ABS
     best_temp = np.clip(boosted_temp, lower_bound, upper_bound)
     logging.info(
         "  Clamped Boosted Temp (to %.1f-%.1f°C): %.1f°C",

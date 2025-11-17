@@ -134,6 +134,11 @@ PV2_POWER_ENTITY_ID: str = os.getenv(
 PV3_POWER_ENTITY_ID: str = os.getenv(
     "PV3_POWER_ENTITY_ID", "sensor.solarmax_pv_power"
 )
+
+# PV forecast sensor (HA attributes 'watts' available in 15-min steps)
+PV_FORECAST_ENTITY_ID: str = os.getenv(
+    "PV_FORECAST_ENTITY_ID", "sensor.energy_production_today_4"
+)
 HEATING_STATUS_ENTITY_ID: str = os.getenv(
     "HEATING_STATUS_ENTITY_ID", "climate.heizung_2"
 )
@@ -171,6 +176,10 @@ CYCLE_INTERVAL_MINUTES: int = int(os.getenv("CYCLE_INTERVAL_MINUTES", "10"))
 MAX_TEMP_CHANGE_PER_CYCLE: int = int(
     os.getenv("MAX_TEMP_CHANGE_PER_CYCLE", "2")
 )
+# Maximum minutes to wait during the grace period after blocking ends.
+GRACE_PERIOD_MAX_MINUTES: int = int(
+    os.getenv("GRACE_PERIOD_MAX_MINUTES", "30")
+)
 
 # --- Metrics Entity IDs ---
 # These entities are created in Home Assistant to allow real-time monitoring
@@ -180,3 +189,9 @@ CONFIDENCE_ENTITY_ID: str = os.getenv(
 )
 MAE_ENTITY_ID: str = os.getenv("MAE_ENTITY_ID", "sensor.ml_model_mae")
 RMSE_ENTITY_ID: str = os.getenv("RMSE_ENTITY_ID", "sensor.ml_model_rmse")
+
+# --- Clamping (absolute) ---
+# These define the absolute allowed range for any ML-proposed outlet temperature.
+# Use environment variables CLAMP_MIN_ABS and CLAMP_MAX_ABS to override defaults.
+CLAMP_MIN_ABS: float = float(os.getenv("CLAMP_MIN_ABS", "14.0"))
+CLAMP_MAX_ABS: float = float(os.getenv("CLAMP_MAX_ABS", "65.0"))

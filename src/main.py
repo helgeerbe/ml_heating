@@ -37,7 +37,6 @@ from .model_wrapper import (
     save_model,
 )
 from .state_manager import load_state, save_state
-from .thermal import calculate_baseline_outlet_temp
 
 
 def main(args):
@@ -145,10 +144,14 @@ def main(args):
                 config.DISINFECTION_STATUS_ENTITY_ID,
                 config.DHW_BOOST_HEATER_STATUS_ENTITY_ID,
             ]
-            is_blocking = any(
-                ha_client.get_state(entity, all_states, is_binary=True)
-                for entity in blocking_entities
-            )
+            # Build a list of active blocking reasons so we can distinguish
+            # DHW-like (long) blockers from short ones like defrost.
+            blocking_reasons = [
+                e
+                for e in blocking_entities
+                if ha_client.get_state(e, all_states, is_binary=True)
+            ]
+            is_blocking = bool(blocking_reasons)
 
             # --- Grace Period after Blocking ---
             # If a blocking event just ended, enter a grace period to allow
@@ -176,36 +179,99 @@ def main(args):
                         round_digits=0,
                     )
 
-                    # Wait until the actual outlet temperature drops below the
-                    # target
-                    while True:
-                        actual_outlet_temp = ha_client.get_state(
-                            config.ACTUAL_OUTLET_TEMP_ENTITY_ID,
-                            ha_client.get_all_states(),
+                    # Determine whether the outlet is currently hotter or colder than
+                    # the last target. For DHW-like events the outlet will be hotter;
+                    # for defrost it can be colder due to reversed flow. Choose the
+                    # waiting direction accordingly and enforce a timeout.
+                    start_time = time.time()
+                    max_seconds = config.GRACE_PERIOD_MAX_MINUTES * 60
+
+                    actual_outlet_temp_start = ha_client.get_state(
+                        config.ACTUAL_OUTLET_TEMP_ENTITY_ID,
+                        ha_client.get_all_states(),
+                    )
+                    if actual_outlet_temp_start is None:
+                        logging.warning(
+                            "Cannot read actual_outlet_temp at grace start; skipping wait."
                         )
-                        if actual_outlet_temp is None:
-                            logging.warning(
-                                "Cannot read actual_outlet_temp, exiting grace"
-                                " period."
-                            )
-                            break
-                        if actual_outlet_temp < last_final_temp:
+                    else:
+                        delta0 = actual_outlet_temp_start - last_final_temp
+                        if delta0 == 0:
                             logging.info(
-                                "Actual outlet temp (%.1f°C) has dropped below"
-                                " target (%.1f°C).",
-                                actual_outlet_temp,
+                                "Actual outlet equals the restored target (%.1f°C); no wait needed.",
                                 last_final_temp,
                             )
-                            break
-                        logging.info(
-                            "Waiting for actual outlet temp (%.1f°C) to drop"
-                            " below target (%.1f°C)...",
-                            actual_outlet_temp,
-                            last_final_temp,
-                        )
-                        time.sleep(60)  # Wait for 1 minute
+                        else:
+                            # Choose wait condition based on initial direction.
+                            wait_for_cooling = delta0 > 0
+                            direction = "cooling" if wait_for_cooling else "warming"
+                            logging.info(
+                                "Grace period: initial outlet delta %.1f°C -> waiting for %s (timeout %d min).",
+                                delta0,
+                                "actual <= target" if wait_for_cooling else "actual >= target",
+                                config.GRACE_PERIOD_MAX_MINUTES,
+                            )
+
+                            while True:
+                                actual_outlet_temp = ha_client.get_state(
+                                    config.ACTUAL_OUTLET_TEMP_ENTITY_ID,
+                                    ha_client.get_all_states(),
+                                )
+                                if actual_outlet_temp is None:
+                                    logging.warning(
+                                        "Cannot read actual_outlet_temp, exiting grace period."
+                                    )
+                                    break
+                                # If outlet started hotter than target, wait until it cools
+                                # to <= target. If it started colder (defrost), wait until
+                                # it warms to >= target.
+                                if wait_for_cooling and actual_outlet_temp <= last_final_temp:
+                                    logging.info(
+                                        "Actual outlet temp (%.1f°C) has cooled to or below"
+                                        " target (%.1f°C). Resuming control.",
+                                        actual_outlet_temp,
+                                        last_final_temp,
+                                    )
+                                    break
+                                if (not wait_for_cooling) and actual_outlet_temp >= last_final_temp:
+                                    logging.info(
+                                        "Actual outlet temp (%.1f°C) has warmed to or above"
+                                        " target (%.1f°C). Resuming control.",
+                                        actual_outlet_temp,
+                                        last_final_temp,
+                                    )
+                                    break
+                                elapsed = time.time() - start_time
+                                if elapsed > max_seconds:
+                                    logging.warning(
+                                        "Grace period timed out after %d minutes; proceeding.",
+                                        config.GRACE_PERIOD_MAX_MINUTES,
+                                    )
+                                    break
+                                logging.info(
+                                    "Waiting for outlet to %s target (current: %.1f°C, target: %.1f°C). Elapsed: %d/%d min",
+                                    "cool to" if wait_for_cooling else "warm to",
+                                    actual_outlet_temp,
+                                    last_final_temp,
+                                    int(elapsed / 60),
+                                    config.GRACE_PERIOD_MAX_MINUTES,
+                                )
+                                time.sleep(60)  # Wait for 1 minute
+
+                else:
+                    logging.info(
+                        "No last_final_temp found in persisted state; skipping restore/wait."
+                    )
 
                 logging.info("--- Grace Period Ended ---")
+                # Refresh HA states after the grace period so subsequent sensor reads
+                # (used for prediction and clamping) reflect the current system state.
+                try:
+                    all_states = ha_client.get_all_states()
+                except Exception:
+                    logging.debug(
+                        "Failed to refresh HA states after grace period.", exc_info=True
+                    )
 
             if is_blocking:
                 logging.info(
@@ -226,7 +292,6 @@ def main(args):
                         {
                             "state_description": "Blocking activity - Skipping",
                             "blocking_reasons": blocking_reasons,
-                            "fallback_used": False,
                             "last_updated": datetime.now(
                                 timezone.utc
                             ).isoformat(),
@@ -242,8 +307,14 @@ def main(args):
                     logging.debug(
                         "Failed to write BLOCKED state to HA.", exc_info=True
                     )
-                # Save the blocking state for the next cycle
-                save_state(last_is_blocking=True)
+                # Save the blocking state for the next cycle (preserve last_final_temp
+                # and record which entities caused the blocking so we can avoid
+                # learning from DHW-like cycles).
+                save_state(
+                    last_is_blocking=True,
+                    last_final_temp=state.get("last_final_temp"),
+                    last_blocking_reasons=blocking_reasons,
+                )
                 time.sleep(300)
                 continue
 
@@ -348,14 +419,28 @@ def main(args):
                 )
                 # Get the features and prediction from the last cycle.
                 x = last_run_features.to_dict(orient="records")[0]
-                y_pred = model.predict_one(x)
-                # Update the model with the actual outcome.
-                model.learn_one(x, actual_delta)
-                # Update the rolling performance metrics.
-                mae.update(actual_delta, y_pred)
-                rmse.update(actual_delta, y_pred)
-                # Persist the updated model and metrics.
-                save_model(model, mae, rmse)
+
+                # Determine if the previous run was a long hot-water blocking event.
+                last_blocking_reasons = state.get("last_blocking_reasons", []) or []
+                dhw_like_blockers = {
+                    config.DHW_STATUS_ENTITY_ID,
+                    config.DISINFECTION_STATUS_ENTITY_ID,
+                    config.DHW_BOOST_HEATER_STATUS_ENTITY_ID,
+                }
+                if any(b in dhw_like_blockers for b in last_blocking_reasons):
+                    logging.info(
+                        "Previous cycle had DHW-like blocking (%s); skipping learning for that cycle.",
+                        last_blocking_reasons,
+                    )
+                else:
+                    y_pred = model.predict_one(x)
+                    # Update the model with the actual outcome.
+                    model.learn_one(x, actual_delta)
+                    # Update the rolling performance metrics.
+                    mae.update(actual_delta, y_pred)
+                    rmse.update(actual_delta, y_pred)
+                    # Persist the updated model and metrics.
+                    save_model(model, mae, rmse)
 
             # --- Step 2: Feature Building ---
             # Gathers all the necessary data points (current sensor values,
@@ -384,19 +469,12 @@ def main(args):
             # --- Step 3: Prediction ---
             # This step determines the best outlet temperature for the
             # upcoming cycle. It involves several sub-steps:
-            # 1. Calculate a baseline temperature using a traditional heating
-            #    curve. This serves as a safe fallback.
-            # 2. Use the `find_best_outlet_temp` function to simulate different
+            # 1. Use the `find_best_outlet_temp` function to simulate different
             #    outlet temperatures and let the model predict the outcome for
             #    each. The one that gets closest to the target indoor
-            #    temperature is chosen.
-            # 3. The model's confidence in its prediction is also returned. If it's
-            #    too low, the system will revert to the baseline temperature.
-            baseline_outlet_temp = calculate_baseline_outlet_temp(
-                outdoor_temp,
-                owm_temp,
-                ha_client.get_hourly_forecast(),
-            )
+            #    temperature is chosen. Baseline-based logic has been removed;
+            #    the function always returns the ML proposal (state still records
+            #    confidence).
             # Find the best outlet temperature by simulating different values.
             error_target_vs_actual = target_indoor_temp - prediction_indoor_temp
             (
@@ -409,7 +487,6 @@ def main(args):
                 features,
                 prediction_indoor_temp,
                 target_indoor_temp,
-                baseline_outlet_temp,
                 prediction_history,
                 outlet_history,
                 error_target_vs_actual,
@@ -489,12 +566,21 @@ def main(args):
             importances = get_feature_importances(model)
             if importances:
                 logging.info("Feature Importances:")
+                try:
+                    fvals = features.to_dict(orient="records")[0]
+                except Exception:
+                    fvals = {}
                 for feature, importance in sorted(
                     importances.items(),
                     key=lambda item: item[1],
                     reverse=True,
                 ):
-                    logging.info(f"  - {feature}: {importance:.4f}")
+                    logging.info(
+                        "  - %s: %.4f (value: %s)",
+                        feature,
+                        importance,
+                        fvals.get(feature),
+                    )
             ha_client.log_feature_importance(importances)
             influx_service.write_feature_importances(
                 importances, bucket=config.INFLUX_FEATURES_BUCKET
@@ -502,14 +588,13 @@ def main(args):
 
             # --- Update ML State sensor ---
             try:
-                fallback_used = confidence < config.CONFIDENCE_THRESHOLD
                 attributes_state = get_sensor_attributes(
                     "sensor.ml_heating_state"
                 )
                 attributes_state.update(
                     {
                         "state_description": "Confidence - Too Low"
-                        if fallback_used
+                        if confidence < config.CONFIDENCE_THRESHOLD
                         else "OK - Prediction done",
                         "confidence": round(confidence, 4),
                         "sigma": round(sigma, 4),
@@ -518,7 +603,6 @@ def main(args):
                         "suggested_temp": round(suggested_temp, 2),
                         "final_temp": round(final_temp, 2),
                         "predicted_indoor": round(predicted_indoor, 2),
-                        "fallback_used": bool(fallback_used),
                         "last_prediction_time": (
                             datetime.now(timezone.utc).isoformat()
                         ),
@@ -526,7 +610,7 @@ def main(args):
                 )
                 ha_client.set_state(
                     "sensor.ml_heating_state",
-                    1 if fallback_used else 0,
+                    1 if confidence < config.CONFIDENCE_THRESHOLD else 0,
                     attributes_state,
                     round_digits=None,
                 )
@@ -564,6 +648,7 @@ def main(args):
                 "prediction_history": prediction_history,
                 "last_final_temp": final_temp,
                 "last_is_blocking": is_blocking,
+                "last_blocking_reasons": blocking_reasons if is_blocking else [],
             }
             save_state(**state_to_save)
 

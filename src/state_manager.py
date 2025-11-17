@@ -8,6 +8,8 @@ performance in the next cycle.
 """
 import logging
 import pickle
+import os
+import tempfile
 from typing import Any, Dict
 
 from . import config
@@ -53,21 +55,56 @@ def save_state(**kwargs: Any) -> None:
     """
     Saves the application's current state to a pickle file.
 
-    This includes the feature set from the current run and the measured indoor
-    temperature, which will be used in the next cycle for online learning.
+    This function merges provided keys into the existing persisted state
+    instead of overwriting the entire file. This prevents accidental loss of
+    unrelated fields when doing partial updates (e.g., saving only
+    `last_is_blocking`).
     """
-    state = {
-        "last_run_features": kwargs.get("last_run_features"),
-        "last_indoor_temp": kwargs.get("last_indoor_temp"),
-        "prediction_history": kwargs.get("prediction_history", []),
-        "last_avg_other_rooms_temp": kwargs.get("last_avg_other_rooms_temp"),
-        "last_fireplace_on": kwargs.get("last_fireplace_on", False),
-        "last_final_temp": kwargs.get("last_final_temp"),
-        "last_is_blocking": kwargs.get("last_is_blocking", False),
-    }
+    # Load the existing state (returns defaults on failure).
     try:
-        with open(config.STATE_FILE, "wb") as f:
-            pickle.dump(state, f)
-            logging.debug("Successfully saved state to %s", config.STATE_FILE)
+        existing = load_state() or {
+            "last_run_features": None,
+            "last_indoor_temp": None,
+            "prediction_history": [],
+            "last_avg_other_rooms_temp": None,
+            "last_fireplace_on": False,
+            "last_final_temp": None,
+            "last_is_blocking": False,
+        }
+    except Exception:
+        existing = {
+            "last_run_features": None,
+            "last_indoor_temp": None,
+            "prediction_history": [],
+            "last_avg_other_rooms_temp": None,
+            "last_fireplace_on": False,
+            "last_final_temp": None,
+            "last_is_blocking": False,
+        }
+
+    # Update only the provided keys.
+    existing.update(kwargs)
+    # Log which keys were updated for easier debugging of partial saves.
+    try:
+        logging.debug("Merged state saved; updated keys: %s", list(kwargs.keys()))
+    except Exception:
+        # Ensure logging failures don't prevent state persistence.
+        pass
+
+    # Atomically write the updated state to avoid corruption.
+    try:
+        dirpath = os.path.dirname(config.STATE_FILE) or "."
+        fd, tmp_path = tempfile.mkstemp(dir=dirpath)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                pickle.dump(existing, f)
+            os.replace(tmp_path, config.STATE_FILE)
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+        logging.debug("Successfully saved merged state to %s", config.STATE_FILE)
     except Exception as e:
         logging.error("Failed to save state to %s: %s", config.STATE_FILE, e)

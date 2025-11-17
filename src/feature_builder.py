@@ -56,6 +56,9 @@ def get_feature_names() -> List[str]:
         "dhw_disinfection",
         "dhw_boost_heater",
         "fireplace_on",
+        "defrost_recent",
+        "defrost_count",
+        "defrost_age_min",
     ]
     base_features = [
         "temp_diff_indoor_outdoor",
@@ -145,7 +148,35 @@ def build_features(
     pv_now = pv1 + pv2 + pv3
 
     # --- Get historical and forecast data ---
-    pv_forecasts = influx_service.get_pv_forecast()
+    # Use Home Assistant PV forecast sensor (15-min 'watts' attribute) exclusively.
+    # Build 4 hourly anchors starting at the next full hour (UTC) and compute
+    # the mean watts within each hour. If an hour has no samples, assume 0.0.
+    pv_entity = config.PV_FORECAST_ENTITY_ID
+    pv_forecasts = [0.0, 0.0, 0.0, 0.0]
+
+    entity_state = all_states.get(pv_entity) if all_states else None
+    attrs = entity_state.get("attributes", {}) if isinstance(entity_state, dict) else {}
+
+    now_utc = pd.Timestamp(datetime.now(timezone.utc))
+    first_anchor = now_utc.ceil("h")
+    anchors = pd.date_range(start=first_anchor, periods=4, freq="h", tz="UTC")
+
+    watts_map = attrs.get("watts") or {}
+    if isinstance(watts_map, dict) and watts_map:
+        try:
+            s = pd.Series(
+                list(watts_map.values()),
+                index=pd.to_datetime(list(watts_map.keys()), utc=True),
+            ).sort_index()
+            hourly = []
+            for a in anchors:
+                start = a
+                end = a + pd.Timedelta("1h")
+                slice_vals = s[(s.index >= start) & (s.index < end)]
+                hourly.append(float(slice_vals.mean()) if not slice_vals.empty else 0.0)
+            pv_forecasts = hourly
+        except Exception:
+            pv_forecasts = [0.0, 0.0, 0.0, 0.0]
     temp_forecasts = ha_client.get_hourly_forecast()
     outlet_history = influx_service.fetch_outlet_history(config.HISTORY_STEPS)
     indoor_history = influx_service.fetch_indoor_history(config.HISTORY_STEPS)
@@ -238,6 +269,8 @@ def build_features(
     ) / (config.HISTORY_STEPS * config.HISTORY_STEP_MINUTES)
 
     # Binary flags for system states (e.g., defrosting).
+    # For binary sensors we fetch a history using max-aggregation so short
+    # pulses remain 1.0 after aggregation, then use the most recent value.
     binary_entities = {
         "dhw_heating": config.DHW_STATUS_ENTITY_ID,
         "defrosting": config.DEFROST_STATUS_ENTITY_ID,
@@ -247,8 +280,52 @@ def build_features(
     }
     binary_features_values = {}
     for name, entity_id in binary_entities.items():
-        state_data = ha_client.get_state(entity_id, all_states, is_binary=True)
-        binary_features_values[name] = 1.0 if state_data else 0.0
+        try:
+            hist = influx_service.fetch_binary_history(
+                entity_id, config.HISTORY_STEPS
+            )
+            recent_val = hist[-1] if hist else 0.0
+            binary_features_values[name] = 1.0 if recent_val and recent_val > 0.1 else 0.0
+        except Exception:
+            # Fallback to live HA snapshot if Influx query fails.
+            state_data = ha_client.get_state(entity_id, all_states, is_binary=True)
+            binary_features_values[name] = 1.0 if state_data else 0.0
+
+    # --- Defrost history-derived features ---
+    # Short defrost events may be missed in the live snapshot; query Influx history
+    # for the defrost entity using the same history window used elsewhere.
+    try:
+        # Use max-aggregation for binary signals so short pulses remain 1.0
+        defrost_history = influx_service.fetch_binary_history(
+            config.DEFROST_STATUS_ENTITY_ID, config.HISTORY_STEPS
+        )
+    except Exception:
+        defrost_history = [0.0] * config.HISTORY_STEPS
+
+    defrost_count = int(sum(1 for v in defrost_history if v and v > 0.1))
+    defrost_recent = 1.0 if defrost_count > 0 else 0.0
+
+    # Minutes since last defrost sample in the history window. If none, use a large sentinel.
+    defrost_age_min = (
+        config.HISTORY_STEPS * config.HISTORY_STEP_MINUTES
+    )
+    for i in range(len(defrost_history) - 1, -1, -1):
+        if defrost_history[i] and defrost_history[i] > 0.1:
+            defrost_age_min = (len(defrost_history) - 1 - i) * config.HISTORY_STEP_MINUTES
+            break
+
+    logging.debug(
+        "Defrost history for %s: %s -> defrost_count=%d defrost_recent=%s defrost_age_min=%s",
+        config.DEFROST_STATUS_ENTITY_ID,
+        defrost_history,
+        defrost_count,
+        defrost_recent,
+        defrost_age_min,
+    )
+
+    binary_features_values["defrost_recent"] = defrost_recent
+    binary_features_values["defrost_count"] = float(defrost_count)
+    binary_features_values["defrost_age_min"] = float(defrost_age_min)
 
     # --- 4. Assemble the DataFrame ---
     # Combine all engineered features into a list in the correct order.
@@ -361,6 +438,7 @@ def build_features_for_training(
     pv1_id = config.PV1_POWER_ENTITY_ID.split(".", 1)[-1]
     pv2_id = config.PV2_POWER_ENTITY_ID.split(".", 1)[-1]
     pv3_id = config.PV3_POWER_ENTITY_ID.split(".", 1)[-1]
+    defrost_status_id = config.DEFROST_STATUS_ENTITY_ID.split(".", 1)[-1]
 
     # --- Get current values from the row ---
     actual_indoor = row.get(actual_indoor_id)
@@ -434,6 +512,26 @@ def build_features_for_training(
         binary_features_values[name] = (
             1.0 if row.get(entity_short_id) == "on" else 0.0
         )
+
+    # Derive defrost history metrics from the history slice so training features
+    # match the live feature builder.
+    try:
+        defrost_history = history_slice[defrost_status_id].tolist()
+    except Exception:
+        defrost_history = [0.0] * config.HISTORY_STEPS
+
+    defrost_count = int(sum(1 for v in defrost_history if v and v > 0.1))
+    defrost_recent = 1.0 if defrost_count > 0 else 0.0
+
+    defrost_age_min = config.HISTORY_STEPS * config.HISTORY_STEP_MINUTES
+    for i in range(len(defrost_history) - 1, -1, -1):
+        if defrost_history[i] and defrost_history[i] > 0.1:
+            defrost_age_min = (len(defrost_history) - 1 - i) * config.HISTORY_STEP_MINUTES
+            break
+
+    binary_features_values["defrost_recent"] = defrost_recent
+    binary_features_values["defrost_count"] = float(defrost_count)
+    binary_features_values["defrost_age_min"] = float(defrost_age_min)
 
     # --- Forecasts (assuming they are in the DataFrame) ---
     pv_forecasts = [
