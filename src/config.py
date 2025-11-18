@@ -181,6 +181,12 @@ GRACE_PERIOD_MAX_MINUTES: int = int(
     os.getenv("GRACE_PERIOD_MAX_MINUTES", "30")
 )
 
+# How often (seconds) to poll blocking entities during the idle period.
+# A value of 60 means we check the blocking state once per minute.
+BLOCKING_POLL_INTERVAL_SECONDS: int = int(
+    os.getenv("BLOCKING_POLL_INTERVAL_SECONDS", "60")
+)
+
 # --- Metrics Entity IDs ---
 # These entities are created in Home Assistant to allow real-time monitoring
 # of the model's performance and health.

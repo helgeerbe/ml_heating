@@ -48,6 +48,7 @@ def load_state() -> Dict[str, Any]:
             "last_fireplace_on": False,
             "last_final_temp": None,
             "last_is_blocking": False,
+            "last_blocking_end_time": None,
         }
 
 
@@ -70,6 +71,7 @@ def save_state(**kwargs: Any) -> None:
             "last_fireplace_on": False,
             "last_final_temp": None,
             "last_is_blocking": False,
+            "last_blocking_end_time": None,
         }
     except Exception:
         existing = {
@@ -80,6 +82,7 @@ def save_state(**kwargs: Any) -> None:
             "last_fireplace_on": False,
             "last_final_temp": None,
             "last_is_blocking": False,
+            "last_blocking_end_time": None,
         }
 
     # Update only the provided keys.

@@ -38,6 +38,64 @@ from .model_wrapper import (
 )
 from .state_manager import load_state, save_state
 
+def poll_for_blocking(ha_client, state, blocking_entities):
+    """
+    Poll for blocking events during the idle period so defrost starts/ends
+    are detected quickly. This function encapsulates the idle polling logic
+    so it can be unit tested.
+    """
+    end_time = time.time() + config.CYCLE_INTERVAL_MINUTES * 60
+    while time.time() < end_time:
+        try:
+            all_states_poll = ha_client.get_all_states()
+        except Exception:
+            logging.debug("Failed to poll HA during idle; will retry.", exc_info=True)
+            time.sleep(config.BLOCKING_POLL_INTERVAL_SECONDS)
+            continue
+
+        blocking_now = any(
+            ha_client.get_state(e, all_states_poll, is_binary=True)
+            for e in blocking_entities
+        )
+
+        # Blocking started during idle -> persist and handle immediately.
+        if blocking_now and not state.get("last_is_blocking", False):
+            try:
+                blocking_reasons_now = [
+                    e
+                    for e in blocking_entities
+                    if ha_client.get_state(e, all_states_poll, is_binary=True)
+                ]
+                save_state(
+                    last_is_blocking=True,
+                    last_final_temp=state.get("last_final_temp"),
+                    last_blocking_reasons=blocking_reasons_now,
+                    last_blocking_end_time=None,
+                )
+                logging.info("Blocking detected during idle poll; handling immediately.")
+            except Exception:
+                logging.debug(
+                    "Failed to persist blocking start detected during idle poll.", exc_info=True
+                )
+            return
+
+        # Blocking ended during idle -> persist end time so grace will run.
+        if state.get("last_is_blocking", False) and not blocking_now:
+            try:
+                save_state(
+                    last_is_blocking=True,
+                    last_blocking_end_time=time.time(),
+                    last_blocking_reasons=[],
+                )
+                logging.info("Blocking ended during idle poll; will run grace on next loop.")
+            except Exception:
+                logging.debug(
+                    "Failed to persist blocking end during idle poll.", exc_info=True
+                )
+            return
+
+        time.sleep(config.BLOCKING_POLL_INTERVAL_SECONDS)
+
 
 def main(args):
     """
@@ -154,124 +212,178 @@ def main(args):
             is_blocking = bool(blocking_reasons)
 
             # --- Grace Period after Blocking ---
-            # If a blocking event just ended, enter a grace period to allow
-            # the system to stabilize before resuming ML control.
+            # If a blocking event recently ended, enter a grace period to allow
+            # the system to stabilize before resuming ML control. We persist the
+            # blocking end time so the grace period can expire if the event is
+            # too far in the past. Also abort the grace immediately if blocking
+            # reappears while waiting.
             last_is_blocking = state.get("last_is_blocking", False)
+            last_blocking_end_time = state.get("last_blocking_end_time")
             if last_is_blocking and not is_blocking:
-                logging.info("--- Grace Period Started ---")
-                logging.info(
-                    "Blocking event ended. Entering grace period to allow system to"
-                    " stabilize."
-                )
-                last_final_temp = state.get("last_final_temp")
+                # Mark the blocking end time if not already set (this happens when
+                # we detect the transition from blocking->not-blocking).
+                if last_blocking_end_time is None:
+                    last_blocking_end_time = time.time()
+                    try:
+                        save_state(last_blocking_end_time=last_blocking_end_time)
+                    except Exception:
+                        logging.debug("Failed to persist last_blocking_end_time.", exc_info=True)
 
-                if last_final_temp is not None:
+                # If the blocking end is older than GRACE_PERIOD_MAX_MINUTES, skip grace.
+                age = time.time() - last_blocking_end_time
+                if age > config.GRACE_PERIOD_MAX_MINUTES * 60:
                     logging.info(
-                        "Restoring last known target temperature of %.1f°C.",
-                        last_final_temp,
+                        "Grace period expired (ended %.1f min ago); skipping restore/wait.",
+                        age / 60.0,
                     )
-                    ha_client.set_state(
-                        config.TARGET_OUTLET_TEMP_ENTITY_ID,
-                        last_final_temp,
-                        get_sensor_attributes(
-                            config.TARGET_OUTLET_TEMP_ENTITY_ID
-                        ),
-                        round_digits=0,
+                else:
+                    logging.info("--- Grace Period Started ---")
+                    logging.info(
+                        "Blocking event ended %.1f min ago. Entering grace period to allow system to stabilize.",
+                        age / 60.0,
                     )
+                    last_final_temp = state.get("last_final_temp")
 
-                    # Determine whether the outlet is currently hotter or colder than
-                    # the last target. For DHW-like events the outlet will be hotter;
-                    # for defrost it can be colder due to reversed flow. Choose the
-                    # waiting direction accordingly and enforce a timeout.
-                    start_time = time.time()
-                    max_seconds = config.GRACE_PERIOD_MAX_MINUTES * 60
-
-                    actual_outlet_temp_start = ha_client.get_state(
-                        config.ACTUAL_OUTLET_TEMP_ENTITY_ID,
-                        ha_client.get_all_states(),
-                    )
-                    if actual_outlet_temp_start is None:
-                        logging.warning(
-                            "Cannot read actual_outlet_temp at grace start; skipping wait."
+                    if last_final_temp is not None:
+                        logging.info(
+                            "Restoring last known target temperature of %.1f°C.",
+                            last_final_temp,
                         )
-                    else:
-                        delta0 = actual_outlet_temp_start - last_final_temp
-                        if delta0 == 0:
-                            logging.info(
-                                "Actual outlet equals the restored target (%.1f°C); no wait needed.",
-                                last_final_temp,
+                        ha_client.set_state(
+                            config.TARGET_OUTLET_TEMP_ENTITY_ID,
+                            last_final_temp,
+                            get_sensor_attributes(
+                                config.TARGET_OUTLET_TEMP_ENTITY_ID
+                            ),
+                            round_digits=0,
+                        )
+
+                        # Determine whether the outlet is currently hotter or colder than
+                        # the last target. For DHW-like events the outlet will be hotter;
+                        # for defrost it can be colder due to reversed flow. Choose the
+                        # waiting direction accordingly and enforce a timeout.
+                        start_time = time.time()
+                        max_seconds = config.GRACE_PERIOD_MAX_MINUTES * 60
+
+                        actual_outlet_temp_start = ha_client.get_state(
+                            config.ACTUAL_OUTLET_TEMP_ENTITY_ID,
+                            ha_client.get_all_states(),
+                        )
+                        if actual_outlet_temp_start is None:
+                            logging.warning(
+                                "Cannot read actual_outlet_temp at grace start; skipping wait."
                             )
                         else:
-                            # Choose wait condition based on initial direction.
-                            wait_for_cooling = delta0 > 0
-                            direction = "cooling" if wait_for_cooling else "warming"
-                            logging.info(
-                                "Grace period: initial outlet delta %.1f°C -> waiting for %s (timeout %d min).",
-                                delta0,
-                                "actual <= target" if wait_for_cooling else "actual >= target",
-                                config.GRACE_PERIOD_MAX_MINUTES,
-                            )
-
-                            while True:
-                                actual_outlet_temp = ha_client.get_state(
-                                    config.ACTUAL_OUTLET_TEMP_ENTITY_ID,
-                                    ha_client.get_all_states(),
-                                )
-                                if actual_outlet_temp is None:
-                                    logging.warning(
-                                        "Cannot read actual_outlet_temp, exiting grace period."
-                                    )
-                                    break
-                                # If outlet started hotter than target, wait until it cools
-                                # to <= target. If it started colder (defrost), wait until
-                                # it warms to >= target.
-                                if wait_for_cooling and actual_outlet_temp <= last_final_temp:
-                                    logging.info(
-                                        "Actual outlet temp (%.1f°C) has cooled to or below"
-                                        " target (%.1f°C). Resuming control.",
-                                        actual_outlet_temp,
-                                        last_final_temp,
-                                    )
-                                    break
-                                if (not wait_for_cooling) and actual_outlet_temp >= last_final_temp:
-                                    logging.info(
-                                        "Actual outlet temp (%.1f°C) has warmed to or above"
-                                        " target (%.1f°C). Resuming control.",
-                                        actual_outlet_temp,
-                                        last_final_temp,
-                                    )
-                                    break
-                                elapsed = time.time() - start_time
-                                if elapsed > max_seconds:
-                                    logging.warning(
-                                        "Grace period timed out after %d minutes; proceeding.",
-                                        config.GRACE_PERIOD_MAX_MINUTES,
-                                    )
-                                    break
+                            delta0 = actual_outlet_temp_start - last_final_temp
+                            if delta0 == 0:
                                 logging.info(
-                                    "Waiting for outlet to %s target (current: %.1f°C, target: %.1f°C). Elapsed: %d/%d min",
-                                    "cool to" if wait_for_cooling else "warm to",
-                                    actual_outlet_temp,
+                                    "Actual outlet equals the restored target (%.1f°C); no wait needed.",
                                     last_final_temp,
-                                    int(elapsed / 60),
+                                )
+                            else:
+                                # Choose wait condition based on initial direction.
+                                wait_for_cooling = delta0 > 0
+                                logging.info(
+                                    "Grace period: initial outlet delta %.1f°C -> waiting for %s (timeout %d min).",
+                                    delta0,
+                                    "actual <= target" if wait_for_cooling else "actual >= target",
                                     config.GRACE_PERIOD_MAX_MINUTES,
                                 )
-                                time.sleep(60)  # Wait for 1 minute
 
-                else:
-                    logging.info(
-                        "No last_final_temp found in persisted state; skipping restore/wait."
-                    )
+                                while True:
+                                    # During the grace wait we also poll for blocking
+                                    # reappearance. If blocking appears we abort the
+                                    # grace and reset the blocking timer.
+                                    all_states_poll = ha_client.get_all_states()
+                                    blocking_now_poll = any(
+                                        ha_client.get_state(e, all_states_poll, is_binary=True)
+                                        for e in blocking_entities
+                                    )
+                                    if blocking_now_poll:
+                                        logging.info(
+                                            "Blocking reappeared during grace; aborting wait and preserving blocking state."
+                                        )
+                                        try:
+                                            blocking_reasons_now = [
+                                                e
+                                                for e in blocking_entities
+                                                if ha_client.get_state(e, all_states_poll, is_binary=True)
+                                            ]
+                                            save_state(
+                                                last_is_blocking=True,
+                                                last_final_temp=state.get("last_final_temp"),
+                                                last_blocking_reasons=blocking_reasons_now,
+                                                last_blocking_end_time=None,
+                                            )
+                                        except Exception:
+                                            logging.debug("Failed to persist blocking restart.", exc_info=True)
+                                        break
 
-                logging.info("--- Grace Period Ended ---")
-                # Refresh HA states after the grace period so subsequent sensor reads
-                # (used for prediction and clamping) reflect the current system state.
-                try:
-                    all_states = ha_client.get_all_states()
-                except Exception:
-                    logging.debug(
-                        "Failed to refresh HA states after grace period.", exc_info=True
-                    )
+                                    actual_outlet_temp = ha_client.get_state(
+                                        config.ACTUAL_OUTLET_TEMP_ENTITY_ID,
+                                        all_states_poll,
+                                    )
+                                    if actual_outlet_temp is None:
+                                        logging.warning(
+                                            "Cannot read actual_outlet_temp, exiting grace period."
+                                        )
+                                        break
+                                    # If outlet started hotter than target, wait until it cools
+                                    # to <= target. If it started colder (defrost), wait until
+                                    # it warms to >= target.
+                                    if wait_for_cooling and actual_outlet_temp <= last_final_temp:
+                                        logging.info(
+                                            "Actual outlet temp (%.1f°C) has cooled to or below"
+                                            " target (%.1f°C). Resuming control.",
+                                            actual_outlet_temp,
+                                            last_final_temp,
+                                        )
+                                        break
+                                    if (not wait_for_cooling) and actual_outlet_temp >= last_final_temp:
+                                        logging.info(
+                                            "Actual outlet temp (%.1f°C) has warmed to or above"
+                                            " target (%.1f°C). Resuming control.",
+                                            actual_outlet_temp,
+                                            last_final_temp,
+                                        )
+                                        break
+                                    elapsed = time.time() - start_time
+                                    if elapsed > max_seconds:
+                                        logging.warning(
+                                            "Grace period timed out after %d minutes; proceeding.",
+                                            config.GRACE_PERIOD_MAX_MINUTES,
+                                        )
+                                        break
+                                    logging.info(
+                                        "Waiting for outlet to %s target (current: %.1f°C, target: %.1f°C). Elapsed: %d/%d min",
+                                        "cool to" if wait_for_cooling else "warm to",
+                                        actual_outlet_temp,
+                                        last_final_temp,
+                                        int(elapsed / 60),
+                                        config.GRACE_PERIOD_MAX_MINUTES,
+                                    )
+                                    time.sleep(config.BLOCKING_POLL_INTERVAL_SECONDS)
+
+                    else:
+                        logging.info(
+                            "No last_final_temp found in persisted state; skipping restore/wait."
+                        )
+
+                    logging.info("--- Grace Period Ended ---")
+                    try:
+                        save_state(last_is_blocking=False, last_blocking_end_time=None)
+                    except Exception:
+                        logging.debug("Failed to persist cleared blocking state.", exc_info=True)
+                    # skip the rest of this cycle so restored last_final_temp stays in HA while sensors settle
+                    continue
+                    # Refresh HA states after the grace period so subsequent sensor reads
+                    # (used for prediction and clamping) reflect the current system state.
+                    try:
+                        all_states = ha_client.get_all_states()
+                    except Exception:
+                        logging.debug(
+                            "Failed to refresh HA states after grace period.", exc_info=True
+                        )
 
             if is_blocking:
                 logging.info(
@@ -314,6 +426,7 @@ def main(args):
                     last_is_blocking=True,
                     last_final_temp=state.get("last_final_temp"),
                     last_blocking_reasons=blocking_reasons,
+                    last_blocking_end_time=None,
                 )
                 time.sleep(300)
                 continue
@@ -679,7 +792,63 @@ def main(args):
                     "Failed to write MODEL_ERROR state to HA.", exc_info=True
                 )
 
-        time.sleep(config.CYCLE_INTERVAL_MINUTES * 60)
+        # Poll for blocking events during the idle period so defrost starts/ends
+        # are detected quickly. We poll at BLOCKING_POLL_INTERVAL_SECONDS until the
+        # next cycle should run. If blocking starts/ends we persist the state and
+        # break to let the main loop react immediately.
+        end_time = time.time() + config.CYCLE_INTERVAL_MINUTES * 60
+        while time.time() < end_time:
+            try:
+                all_states_poll = ha_client.get_all_states()
+            except Exception:
+                logging.debug(
+                    "Failed to poll HA during idle; will retry.", exc_info=True
+                )
+                time.sleep(config.BLOCKING_POLL_INTERVAL_SECONDS)
+                continue
+
+            blocking_now = any(
+                ha_client.get_state(e, all_states_poll, is_binary=True)
+                for e in blocking_entities
+            )
+
+            # Blocking started during idle -> persist and handle immediately.
+            if blocking_now and not state.get("last_is_blocking", False):
+                try:
+                    blocking_reasons_now = [
+                        e
+                        for e in blocking_entities
+                        if ha_client.get_state(e, all_states_poll, is_binary=True)
+                    ]
+                    save_state(
+                        last_is_blocking=True,
+                        last_final_temp=state.get("last_final_temp"),
+                        last_blocking_reasons=blocking_reasons_now,
+                        last_blocking_end_time=None,
+                    )
+                    logging.info("Blocking detected during idle poll; handling immediately.")
+                except Exception:
+                    logging.debug(
+                        "Failed to persist blocking start detected during idle poll.", exc_info=True
+                    )
+                break
+
+            # Blocking ended during idle -> persist end time so grace will run.
+            if state.get("last_is_blocking", False) and not blocking_now:
+                try:
+                    save_state(
+                        last_is_blocking=True,
+                        last_blocking_end_time=time.time(),
+                        last_blocking_reasons=[],
+                    )
+                    logging.info("Blocking ended during idle poll; will run grace on next loop.")
+                except Exception:
+                    logging.debug(
+                        "Failed to persist blocking end during idle poll.", exc_info=True
+                    )
+                break
+
+            time.sleep(config.BLOCKING_POLL_INTERVAL_SECONDS)
 
 
 if __name__ == "__main__":

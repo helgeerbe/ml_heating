@@ -29,6 +29,11 @@ The primary goal of this project is to improve upon traditional heating curves b
     - If the outlet is colder than the restored target (possible after defrost with reversed flow), the controller waits for the outlet to warm to >= target.
     
     The wait uses the same historical lookback and enforces a maximum timeout (`GRACE_PERIOD_MAX_MINUTES`) so the system never stalls indefinitely. During the grace period the controller avoids resuming aggressive ML-driven actuation and uses the restored target as a safe reference; after the condition is met (or the timeout elapses) normal ML control resumes. This behaviour protects both model quality and the heat-pump hardware by preventing large, inefficient setpoint jumps immediately after blocking events.
+    
+    Implementation notes:
+    
+    - After the grace wait completes (by condition, timeout, or abort), the controller clears the persisted blocking flag (`last_is_blocking=False`) and skips the remainder of that same cycle. This ensures the restored `last_final_temp` remains the active target in Home Assistant for one cycle while the outlet temperature settles, preventing an immediate recalculation that would otherwise be biased by the still-hot measured outlet.
+    - The persisted `last_final_temp` is preserved while blocking is active and is only updated at the end of a normal (non-blocking) cycle. This prevents DHW-like cycles from contaminating the learning signal or overwriting the last safe target.
 -   **Fireplace Mode:** When a fireplace or other significant secondary heat source is active, the model can be configured to use a different temperature sensor (e.g., the average of other rooms) for learning and prediction. This prevents the model from incorrectly learning that the main heating system is more powerful than it is.
 -   **Feature Importance:** Logs which factors (features) are most influential in the model's decisions, providing insight into what the model is learning.
 -   **Systemd Service:** Can be run as a background service for continuous, unattended operation.
@@ -256,6 +261,13 @@ nano .env
     - Tolerate σ_max = 0.5°C → `CONFIDENCE_THRESHOLD ≈ 0.667`
 The sample files use `0.5` as a reasonable starting point.
 
+Note: The controller polls blocking entities during the idle period at
+`BLOCKING_POLL_INTERVAL_SECONDS` (default: 60 seconds). This controls how
+often the script checks Home Assistant for DHW/defrost blocking flags while
+idle between cycles. Lower values make the controller react faster to
+short defrost events but increase the Home Assistant API load. Set
+`BLOCKING_POLL_INTERVAL_SECONDS` in your `.env` to tune this behavior.
+
 ### 4. Initial Training (Recommended)
 
 Run the script with the `--initial-train` flag. This will train the model on your recent historical data from InfluxDB.
@@ -289,7 +301,7 @@ To run the script continuously in the background, create a systemd service file.
     WorkingDirectory=/path/to/your/ml_heating
     ExecStart=/path/to/your/ml_heating/.venv/bin/python3 -m src.main
     Restart=on-failure
-    RestartSec=5min
+    RestartSec=5m
 
     [Install]
     WantedBy=multi-user.target
