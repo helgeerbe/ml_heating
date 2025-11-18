@@ -610,21 +610,48 @@ def main(args):
             # --- Gradual Temperature Control ---
             # This is the final safety check. It prevents the temperature from
             # changing too abruptly, which can be inefficient for the heat
-            # pump. We use the current actual outlet temp as the baseline to
-            # prevent large jumps after blocking events (DHW, defrost).
+            # pump. We normally use the current actual outlet temp as the
+            # baseline to prevent large jumps after blocking events (DHW,
+            # defrost). For recent *defrost* endings we instead use the
+            # pre-blocking baseline (`last_final_temp`) so the controller can
+            # return faster to the last target and avoid clipping caused by a
+            # transient measured outlet.
             if actual_outlet_temp is not None:
                 max_change = config.MAX_TEMP_CHANGE_PER_CYCLE
                 original_temp = final_temp  # Keep a copy for logging
-                # Calculate the difference from the current actual setpoint
-                delta = final_temp - actual_outlet_temp
+
+                # Determine if a recent blocking end occurred and whether it was defrost
+                last_blocking_end_time = state.get("last_blocking_end_time")
+                last_blocking_reasons = state.get("last_blocking_reasons", []) or []
+                last_final_temp = state.get("last_final_temp")
+
+                recent_blocking = (
+                    last_blocking_end_time is not None
+                    and (time.time() - last_blocking_end_time)
+                    < config.GRACE_PERIOD_MAX_MINUTES * 60
+                )
+                recent_defrost = (
+                    recent_blocking and config.DEFROST_STATUS_ENTITY_ID in last_blocking_reasons
+                )
+
+                # Choose baseline: for recent defrost use last_final_temp (if available)
+                # so we can reach the previous target faster; otherwise use the
+                # instantaneous actual outlet temperature.
+                if recent_defrost and last_final_temp is not None:
+                    baseline = last_final_temp
+                else:
+                    baseline = actual_outlet_temp
+
+                # Calculate the difference from the chosen baseline
+                delta = final_temp - baseline
                 # Clamp the delta to the maximum allowed change
                 if abs(delta) > max_change:
-                    final_temp = actual_outlet_temp + np.clip(delta, -max_change, max_change)
+                    final_temp = baseline + np.clip(delta, -max_change, max_change)
                     logging.info("--- Gradual Temperature Control ---")
                     logging.info(
-                        "Change from actual %.1f°C to suggested %.1f°C exceeds"
+                        "Change from baseline %.1f°C to suggested %.1f°C exceeds"
                         " max change of %.1f°C. Capping at %.1f°C.",
-                        actual_outlet_temp,
+                        baseline,
                         original_temp,
                         max_change,
                         final_temp,
