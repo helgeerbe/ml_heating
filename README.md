@@ -118,7 +118,18 @@ The final target temperature is not a single prediction but the result of a mult
 
 6.  **Step 6: Gradual Temperature Control:** This is the final safety filter, designed to protect the heat pump from inefficient, large temperature jumps, especially after a blocking event like DHW or defrosting. The system normally compares the proposed integer setpoint from Step 5 to the **current actual outlet temperature**. If the change exceeds the `MAX_TEMP_CHANGE_PER_CYCLE` value (e.g., 2°C), it is capped. For example, if the actual outlet temperature is 30°C and the new pipeline suggests 38°C, the final output will be capped at 32°C. This ensures the heat pump always ramps up or down gently from its current state.
     
-    Defrost exception: For recent defrost events the controller avoids biasing the clamp against a transient outlet reading. When a blocking end is recent and the blocking reasons include the defrost entity, the clamp baseline is chosen as the last persisted pre-blocking target (`last_final_temp`) if available. The max-change cap is then applied relative to that baseline so the controller can return toward the prior target faster and avoid being clipped by the transient defrost measurement. This preserves the existing soft-start / measured-baseline behavior for DHW-like blockers while speeding up recovery after defrost.
+    Baseline behavior: The clamp baseline defaults to the persisted previous target (`last_final_temp`)
+    when available. After any blocking event ends the controller restores `last_final_temp` and
+    enters the grace wait so the actual outlet temperature has time to reach the old target before
+    resuming ML-driven actuation. This prevents transient post-blocking readings from biasing the
+    clamp and delays in returning to the intended setpoint.
+    
+    Exception (soft-start): For DHW-like blockers (DHW, disinfection, DHW boost heater) we keep
+    the soft-start behaviour: in those cases the baseline used for the gradual clamp is the current
+    measured `actual_outlet_temp` so the controller ramps gently from the (typically hot) outlet.
+    
+    Fallback: If `last_final_temp` is not available we fall back to using the instantaneous
+    measured outlet temperature as the baseline.
 
 ### Metrics: Confidence, MAE, and RMSE
 

@@ -608,37 +608,37 @@ def main(args):
             final_temp = suggested_temp
 
             # --- Gradual Temperature Control ---
-            # This is the final safety check. It prevents the temperature from
-            # changing too abruptly, which can be inefficient for the heat
-            # pump. We normally use the current actual outlet temp as the
-            # baseline to prevent large jumps after blocking events (DHW,
-            # defrost). For recent *defrost* endings we instead use the
-            # pre-blocking baseline (`last_final_temp`) so the controller can
-            # return faster to the last target and avoid clipping caused by a
-            # transient measured outlet.
+            # Final safety check to prevent abrupt setpoint jumps. Baseline
+            # selection rules:
+            #  - Default baseline: the persisted previous target (`last_final_temp`)
+            #    when available. This ensures we clamp relative to the last
+            #    intended setpoint rather than a transient measured outlet.
+            #  - Exception (soft-start): if the last blocking reason matches a
+            #    DHW-like blocker (DHW, disinfection, DHW boost), use the current
+            #    measured `actual_outlet_temp` as baseline to enable a gentle ramp.
+            #  - Fallback: if `last_final_temp` is not available, use the
+            #    instantaneous measured outlet temp.
             if actual_outlet_temp is not None:
                 max_change = config.MAX_TEMP_CHANGE_PER_CYCLE
                 original_temp = final_temp  # Keep a copy for logging
 
-                # Determine if a recent blocking end occurred and whether it was defrost
-                last_blocking_end_time = state.get("last_blocking_end_time")
                 last_blocking_reasons = state.get("last_blocking_reasons", []) or []
                 last_final_temp = state.get("last_final_temp")
 
-                recent_blocking = (
-                    last_blocking_end_time is not None
-                    and (time.time() - last_blocking_end_time)
-                    < config.GRACE_PERIOD_MAX_MINUTES * 60
-                )
-                recent_defrost = (
-                    recent_blocking and config.DEFROST_STATUS_ENTITY_ID in last_blocking_reasons
-                )
+                # DHW-like blockers that should keep the soft-start behavior
+                dhw_like_blockers = {
+                    config.DHW_STATUS_ENTITY_ID,
+                    config.DISINFECTION_STATUS_ENTITY_ID,
+                    config.DHW_BOOST_HEATER_STATUS_ENTITY_ID,
+                }
 
-                # Choose baseline: for recent defrost use last_final_temp (if available)
-                # so we can reach the previous target faster; otherwise use the
-                # instantaneous actual outlet temperature.
-                if recent_defrost and last_final_temp is not None:
+                # Default baseline is the persisted last_final_temp if present.
+                # Override to measured actual_outlet_temp when last blocking reasons
+                # include any DHW-like blocker (soft start).
+                if last_final_temp is not None:
                     baseline = last_final_temp
+                    if any(b in dhw_like_blockers for b in last_blocking_reasons):
+                        baseline = actual_outlet_temp
                 else:
                     baseline = actual_outlet_temp
 
