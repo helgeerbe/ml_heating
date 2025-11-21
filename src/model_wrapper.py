@@ -35,29 +35,29 @@ def create_model() -> compose.Pipeline:
     """
     feature_names = get_feature_names()
 
-    # We separate features because the 'outlet_temp' and its derivatives are
-    # the variables we are searching over. Scaling them would complicate the
-    # search process, as we would need to inverse-transform them constantly.
-    # Other features are scaled to bring them to a similar magnitude, which
-    # generally helps the model learn more effectively.
-    unscaled_features = [
-        "outlet_temp",
-        "outlet_temp_sq",
-        "outlet_temp_cub",
-        "outlet_temp_change_from_last",
-        "outlet_indoor_diff",
-        "outdoor_temp_x_outlet_temp",
+    # Differentiate between numerical and binary features. Numerical features
+    # will be scaled to normalize their range. Binary features are passed
+    # through without scaling.
+    binary_features = [
+        "dhw_heating",
+        "defrosting",
+        "dhw_disinfection",
+        "dhw_boost_heater",
+        "fireplace_on",
+        "defrost_recent",
+        "tv_on",
+        "is_weekend",
     ]
 
-    scaled_features = [f for f in feature_names if f not in unscaled_features]
+    # All other features are assumed to be numerical.
+    numerical_features = [f for f in feature_names if f not in binary_features]
 
-    # Create a sub-pipeline to apply standard scaling to the selected features.
-    scaler = compose.Select(
-        *scaled_features
-    ) | preprocessing.StandardScaler()
+    # Create a sub-pipeline to apply standard scaling to all numerical
+    # features.
+    scaler = compose.Select(*numerical_features) | preprocessing.StandardScaler()
 
-    # Create a sub-pipeline that simply passes the unscaled features through.
-    passthrough = compose.Select(*unscaled_features)
+    # Create a sub-pipeline that simply passes the binary features through.
+    passthrough = compose.Select(*binary_features)
 
     # Combine the scaler and passthrough pipelines. The '+' operator creates a
     # TransformerUnion, which applies the transformations in parallel and
@@ -249,16 +249,19 @@ def find_best_outlet_temp(
     temperature setting:
     1.  **Confidence Check**: It first assesses the model's confidence by
         measuring the standard deviation of predictions from individual trees
-        in the forest. If confidence is low, it falls back to a safe baseline.
-    2.  **Search**: It performs a grid search over a range of possible outlet
-        temperatures, using the model to predict the resulting indoor
-        temperature change for each candidate.
-    3.  **Smoothing**: The best temperature from the search is smoothed using
-        an exponential moving average of recent predictions to prevent rapid,
-        jarring changes in the setpoint.
-    4.  **Smart Rounding**: Instead of a simple round, it checks both the floor
-        and ceiling integer temperatures to see which one is predicted to get
-        closer to the target, making a more intelligent final decision.
+        in the forest.
+    2.  **Raw Prediction**: It performs a grid search over a range of possible
+        outlet temperatures, recording the raw predicted indoor temperature
+        for each.
+    3.  **Monotonic Enforcement**: It corrects the raw predictions to enforce a
+        physically plausible, non-decreasing relationship between outlet temp
+        and indoor temp. This is anchored to the most recent actual outlet
+        temperature for reliability.
+    4.  **Optimal Search**: It searches the corrected, monotonic curve to find
+        the most energy-efficient (i.e., lowest) outlet temperature that
+        achieves the best possible outcome.
+    5.  **Smoothing & Finalization**: The result is smoothed, boosted, and
+        rounded to produce the final, stable setpoint.
 
     Args:
         model: The trained River model.
@@ -269,92 +272,113 @@ def find_best_outlet_temp(
         outlet_history: A list of recent actual outlet temperatures.
 
     Returns:
-        A tuple with the final outlet temperature, model confidence, and the
-        updated prediction history.
+        A tuple with the final outlet temp, confidence, updated prediction
+        history, and raw model uncertainty (sigma).
     """
     logging.info("--- Finding Best Outlet Temp ---")
     logging.info(f"Target indoor temp: {target_temp:.1f}°C")
-    best_temp, min_diff = outlet_history[-1], float("inf")
-
     x_base = features.to_dict(orient="records")[0]
+    last_outlet_temp = outlet_history[-1] if outlet_history else 35.0
 
     # --- Confidence Monitoring ---
-    # The model's uncertainty is measured by `sigma`, the standard deviation
-    # of predictions from the internal trees. A higher `sigma` means more
-    # disagreement and thus lower confidence. This `sigma` is converted to a
-    # `confidence` score between 0 (max uncertainty) and 1 (perfect
-    # certainty).
     regressor = model.steps["learn"]
     tree_preds = [tree.predict_one(x_base) for tree in regressor]
-    # Raw uncertainty (σ) as the standard deviation of tree predictions in °C
     sigma = float(np.std(tree_preds))
-
-    # Normalize σ to a 0..1 confidence score where 1.0 == perfect agreement.
-    # This mapping is monotonic: larger σ -> lower confidence.
     confidence = 1.0 / (1.0 + sigma)
 
-    # If normalized confidence is below the configured threshold, fall back.
     if confidence < config.CONFIDENCE_THRESHOLD:
         logging.warning(
-            "Model confidence low (σ=%.3f°C, confidence=%.3f < %.3f)."
-            " Will still return ML proposal; state will indicate low confidence.",
+            "Model confidence low (σ=%.3f°C, confidence=%.3f < %.3f). "
+            "Proceeding, but the result might be less reliable.",
             sigma,
             confidence,
             config.CONFIDENCE_THRESHOLD,
         )
 
-    # --- Search for Optimal Temperature ---
-    # Search across the configured absolute clamp range.
+    # --- 1. Raw Prediction Search ---
     min_search_temp = config.CLAMP_MIN_ABS
     max_search_temp = config.CLAMP_MAX_ABS
     step = 0.5
+    search_range = np.arange(min_search_temp, max_search_temp + step, step)
 
-    if min_search_temp > max_search_temp:
-        return outlet_history[-1], 0.0, prediction_history, 0.0
-
-    last_outlet_temp = outlet_history[-1]
-
-    # Iterate through candidate temperatures and predict the outcome.
-    for temp_candidate in np.arange(
-        min_search_temp, max_search_temp + step, step
-    ):
+    raw_deltas = {}
+    raw_predictions = {}
+    for temp_candidate in search_range:
         x_candidate = x_base.copy()
-        x_candidate["outlet_temp"] = temp_candidate
-        x_candidate["outlet_temp_sq"] = temp_candidate**2
-        x_candidate["outlet_temp_cub"] = temp_candidate**3
-        x_candidate["outlet_temp_change_from_last"] = (
-            temp_candidate - last_outlet_temp
+        x_candidate.update(
+            {
+                "outlet_temp": temp_candidate,
+                "outlet_temp_sq": temp_candidate**2,
+                "outlet_temp_cub": temp_candidate**3,
+                "outlet_temp_change_from_last": temp_candidate
+                - last_outlet_temp,
+                "outlet_indoor_diff": temp_candidate - current_temp,
+                "outdoor_temp_x_outlet_temp": outdoor_temp * temp_candidate,
+            }
         )
-        x_candidate["outlet_indoor_diff"] = temp_candidate - current_temp
-        outdoor_temp = x_base["outdoor_temp"]
-        x_candidate["outdoor_temp_x_outlet_temp"] = (
-            outdoor_temp * temp_candidate
-        )
-
         predicted_delta = model.predict_one(x_candidate)
         predicted_indoor = current_temp + predicted_delta
+        raw_deltas[temp_candidate] = predicted_delta
+        raw_predictions[temp_candidate] = predicted_indoor
 
-        logging.info(
-            f"  - Test {temp_candidate:.1f}°C -> "
-            f"Pred ΔT: {predicted_delta:.3f}°C, "
-            f"Indoor: {predicted_indoor:.2f}°C"
+    # --- 2. Monotonic Enforcement ---
+    logging.info("--- Enforcing Monotonic Predictions ---")
+    # Find the index of the anchor temperature (closest to the last actual).
+    anchor_temp = min(
+        search_range, key=lambda x: abs(x - last_outlet_temp)
+    )
+    anchor_idx = list(search_range).index(anchor_temp)
+    logging.info(
+        f"Anchor temp for monotonic enforcement: {anchor_temp}°C at index {anchor_idx}"
+    )
+
+    corrected_preds = raw_predictions.copy()
+
+    # Upward pass: From anchor to max temp.
+    for i in range(anchor_idx + 1, len(search_range)):
+        current_temp_key = search_range[i]
+        prev_temp_key = search_range[i - 1]
+        corrected_preds[current_temp_key] = max(
+            corrected_preds[current_temp_key], corrected_preds[prev_temp_key]
         )
+
+    # Downward pass: From anchor to min temp.
+    for i in range(anchor_idx - 1, -1, -1):
+        current_temp_key = search_range[i]
+        next_temp_key = search_range[i + 1]
+        corrected_preds[current_temp_key] = min(
+            corrected_preds[current_temp_key], corrected_preds[next_temp_key]
+        )
+
+    logging.info("--- Prediction Details (Raw vs. Corrected) ---")
+    for temp in search_range:
+        raw_pred = raw_predictions[temp]
+        raw_delta = raw_deltas[temp]
+        corrected_pred = corrected_preds[temp]
+        log_message = (
+            f"  - Test {temp:.1f}°C -> "
+            f"Pred ΔT: {raw_delta:.3f}°C, "
+            f"Raw Indoor: {raw_pred:.2f}°C, "
+            f"Corrected: {corrected_pred:.2f}°C"
+        )
+        logging.info(log_message)
+
+    # --- 3. Find Optimal Temp from Corrected Curve ---
+    best_temp, min_diff = last_outlet_temp, float("inf")
+    for temp_candidate in search_range:
+        predicted_indoor = corrected_preds[temp_candidate]
         diff = abs(predicted_indoor - target_temp)
+
+        # Prioritize the solution that is closest to the target.
+        # If there's a tie, choose the *lowest* temperature for efficiency.
         if diff < min_diff:
             min_diff, best_temp = diff, temp_candidate
-        # Tie-breaking: if two temps are equally good, choose the one
-        # closer to the last actual outlet temperature.
         elif diff == min_diff:
-            is_closer = abs(temp_candidate - last_outlet_temp) < abs(
-                best_temp - last_outlet_temp
-            )
-            if is_closer:
-                best_temp = temp_candidate
+            best_temp = min(best_temp, temp_candidate)
 
     logging.info(f"--- Optimal float temp found: {best_temp:.1f}°C ---")
 
-    # --- Prediction Smoothing ---
-    # Apply exponential smoothing to the predictions to reduce volatility.
+    # --- 4. Prediction Smoothing ---
     if not prediction_history:
         prediction_history.append(best_temp)
     else:
@@ -365,6 +389,7 @@ def find_best_outlet_temp(
         )
         prediction_history.append(smoothed_temp)
 
+    # Keep the history buffer at a manageable size.
     if len(prediction_history) > 50:
         del prediction_history[:-50]
 

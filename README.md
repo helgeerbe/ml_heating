@@ -93,6 +93,16 @@ This project uses an **online machine learning** approach, which means the model
 
 This continuous feedback loop allows the model to adapt to changing seasons, variations in home occupancy, and other dynamic factors without needing to be manually retrained. The model used is a `river.forest.ARFRegressor`, an Adaptive Random Forest that is well-suited for this kind of streaming data.
 
+### Preprocessing Pipeline
+
+Before the features are fed into the `ARFRegressor`, they go through a preprocessing pipeline created with `river.compose.Pipeline`. This pipeline ensures that different types of features are handled appropriately:
+
+1.  **Numerical Feature Scaling:** Most features, such as temperatures, forecasts, and historical trends, are numerical. These are passed through a `river.preprocessing.StandardScaler`. This process standardizes the features by removing the mean and scaling to unit variance. Scaling is crucial for many machine learning algorithms as it helps prevent features with larger ranges from dominating the learning process.
+
+2.  **Binary Feature Passthrough:** Features that are inherently binary (e.g., `dhw_heating`, `is_weekend`, `tv_on`) are passed through without any transformation. Since they are already in a meaningful 0 or 1 representation, scaling is unnecessary.
+
+This combined pipeline ensures that the model receives well-conditioned data, which is essential for stable and effective online learning.
+
 ### Why Adaptive Random Forest Regressor?
 
 The `ARFRegressor` from the `river` library was specifically chosen for several key reasons:
@@ -108,7 +118,7 @@ The final target temperature is not a single prediction but the result of a mult
 
 1.  **Step 1: Confidence Check & Recording:** The model calculates its confidence by measuring the agreement among its internal decision trees and records it in the ML state sensor. Low confidence is noted but does not automatically bypass the ML pipeline; automations can inspect the `confidence` attribute to decide whether to ignore the ML suggestion.
 
-2.  **Step 2: ML-Powered Search:** The model searches the configured absolute clamp range (`CLAMP_MIN_ABS` to `CLAMP_MAX_ABS`, step 0.5°C). For each candidate, it predicts the resulting indoor temperature and identifies the floating-point temperature that is predicted to get closest to the user's target. If two candidates tie, the one closer to the last actual outlet temperature is chosen.
+2.  **Step 2: ML-Powered Search:** The model searches the configured absolute clamp range (`CLAMP_MIN_ABS` to `CLAMP_MAX_ABS`, step 0.5°C). For each candidate, it predicts the resulting indoor temperature and identifies the floating-point temperature that is predicted to get closest to the user's target. If multiple candidates are tied for being the closest, the one with the **lowest temperature** is chosen. This prioritizes energy efficiency by selecting the minimum required outlet temperature to achieve the best possible outcome.
 
 3.  **Step 3: Smoothing (EMA Filter):** The raw result from the search can be volatile. To prevent rapid fluctuations, it is smoothed using an Exponential Moving Average (EMA) that considers previous predictions. This ensures the setpoint changes gracefully over time.
 
