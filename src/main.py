@@ -38,6 +38,7 @@ from .model_wrapper import (
 )
 from .state_manager import load_state, save_state
 
+
 def poll_for_blocking(ha_client, state, blocking_entities):
     """
     Poll for blocking events during the idle period so defrost starts/ends
@@ -124,7 +125,6 @@ def main(args):
     # Load the persisted model, metrics, and application state from files.
     # If they don't exist, create new instances.
     model, mae, rmse = load_model()
-    state = load_state()
     influx_service = create_influx_service()
 
     # --- Initial Training ---
@@ -156,6 +156,8 @@ def main(args):
     # prediction every 5 minutes.
     while True:
         try:
+            # Load the application state at the beginning of each cycle.
+            state = load_state()
             # Create a new Home Assistant client for each cycle.
             ha_client = create_ha_client()
             # Fetch all states from Home Assistant at once to minimize API calls.
@@ -791,6 +793,8 @@ def main(args):
                 "last_blocking_reasons": blocking_reasons if is_blocking else [],
             }
             save_state(**state_to_save)
+            # Update in-memory state so the idle poll uses fresh data
+            state.update(state_to_save)
 
         except Exception as e:
             logging.error("Error in main loop: %s", e, exc_info=True)
@@ -820,62 +824,9 @@ def main(args):
                 )
 
         # Poll for blocking events during the idle period so defrost starts/ends
-        # are detected quickly. We poll at BLOCKING_POLL_INTERVAL_SECONDS until the
-        # next cycle should run. If blocking starts/ends we persist the state and
-        # break to let the main loop react immediately.
-        end_time = time.time() + config.CYCLE_INTERVAL_MINUTES * 60
-        while time.time() < end_time:
-            try:
-                all_states_poll = ha_client.get_all_states()
-            except Exception:
-                logging.debug(
-                    "Failed to poll HA during idle; will retry.", exc_info=True
-                )
-                time.sleep(config.BLOCKING_POLL_INTERVAL_SECONDS)
-                continue
-
-            blocking_now = any(
-                ha_client.get_state(e, all_states_poll, is_binary=True)
-                for e in blocking_entities
-            )
-
-            # Blocking started during idle -> persist and handle immediately.
-            if blocking_now and not state.get("last_is_blocking", False):
-                try:
-                    blocking_reasons_now = [
-                        e
-                        for e in blocking_entities
-                        if ha_client.get_state(e, all_states_poll, is_binary=True)
-                    ]
-                    save_state(
-                        last_is_blocking=True,
-                        last_final_temp=state.get("last_final_temp"),
-                        last_blocking_reasons=blocking_reasons_now,
-                        last_blocking_end_time=None,
-                    )
-                    logging.info("Blocking detected during idle poll; handling immediately.")
-                except Exception:
-                    logging.debug(
-                        "Failed to persist blocking start detected during idle poll.", exc_info=True
-                    )
-                break
-
-            # Blocking ended during idle -> persist end time so grace will run.
-            if state.get("last_is_blocking", False) and not blocking_now:
-                try:
-                    save_state(
-                        last_is_blocking=True,
-                        last_blocking_end_time=time.time(),
-                        last_blocking_reasons=[],
-                    )
-                    logging.info("Blocking ended during idle poll; will run grace on next loop.")
-                except Exception:
-                    logging.debug(
-                        "Failed to persist blocking end during idle poll.", exc_info=True
-                    )
-                break
-
-            time.sleep(config.BLOCKING_POLL_INTERVAL_SECONDS)
+        # are detected quickly. This call will block until the next cycle is
+        # due, or until a blocking event starts or ends.
+        poll_for_blocking(ha_client, state, blocking_entities)
 
 
 if __name__ == "__main__":
