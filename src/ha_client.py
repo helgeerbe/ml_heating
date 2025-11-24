@@ -13,7 +13,11 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from . import config
+# Support both package-relative and direct import for notebooks
+try:
+    from . import config  # Package-relative import
+except ImportError:
+    import config  # Direct import fallback for notebooks
 
 
 class HAClient:

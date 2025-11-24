@@ -13,8 +13,13 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from . import config
-from .ha_client import HAClient
+# Support both package-relative and direct import for notebooks
+try:
+    from . import config  # Package-relative import
+    from .ha_client import HAClient
+except ImportError:
+    import config  # Direct import fallback for notebooks
+    from ha_client import HAClient
 from .influx_service import InfluxService
 
 

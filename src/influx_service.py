@@ -12,7 +12,11 @@ import logging
 from influxdb_client import InfluxDBClient, QueryApi, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
-from . import config
+# Support both package-relative and direct import for notebooks
+try:
+    from . import config  # Package-relative import
+except ImportError:
+    import config  # Direct import fallback for notebooks
 
 
 class InfluxService:

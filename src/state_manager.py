@@ -12,7 +12,11 @@ import os
 import tempfile
 from typing import Any, Dict
 
-from . import config
+# Support both package-relative and direct import for notebooks
+try:
+    from . import config  # Package-relative import
+except ImportError:
+    import config  # Direct import fallback for notebooks
 
 
 def load_state() -> Dict[str, Any]:
