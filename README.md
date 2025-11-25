@@ -1,347 +1,977 @@
 # ML Heating Control for Home Assistant
 
 > **Warning**
-> This project is an initial test and proof of concept. It is not recommended for unattended production use. Please use it at your own risk and monitor its behavior carefully.
+> This project is an initial test and proof of concept heating controller. However, heating systems are critical infrastructure - always monitor its behavior and ensure you have safety mechanisms in place. Use at your own risk.
 
-This project implements a physics-based heating control system that integrates with Home Assistant. It uses the RealisticPhysicsModel to predict the optimal water outlet temperature for a heat pump to efficiently maintain a target indoor temperature.
+This project implements a **physics-based machine learning heating control system** that integrates with Home Assistant. It uses a RealisticPhysicsModel to predict the optimal water outlet temperature for a heat pump, continuously learning from real-world results to efficiently maintain your target indoor temperature.
+
+## Overview
+
+Traditional heating curves are static: they map outdoor temperature to a fixed outlet temperature. This system is **dynamic and adaptive** - it learns your house's unique thermal characteristics and continuously improves its predictions based on what actually happens.
 
 ## Goal
 
-The primary goal of this project is to improve upon traditional heating curves by creating a self-adapting system that learns the unique thermal properties of a house. By predicting the impact of the water outlet temperature on the indoor temperature, it aims to:
+The primary goal is to improve upon traditional heat curves by creating a **self-learning system** that:
 
--   **Increase Efficiency:** Avoid over- and under-shooting the target temperature.
--   **Improve Comfort:** Maintain a more stable and accurate indoor temperature.
--   **Adapt to Changes:** Automatically adjust to changing seasons, weather patterns, and household conditions.
+-   **Increases Efficiency:** Minimizes energy waste by precisely matching heating output to actual need
+-   **Improves Comfort:** Maintains stable indoor temperature with less overshoot/undershoot
+-   **Adapts Continuously:** Learns from every cycle, adjusting to seasons, weather patterns, house changes, and occupancy
+-   **Anticipates Conditions:** Uses weather and PV forecasts to proactively adjust heating
+-   **Operates Safely:** Includes comprehensive blocking logic, gradual temperature changes, and health monitoring
 
-## Feature Set
+## Key Features
 
--   **Physics-Based Model:** The system uses a RealisticPhysicsModel that learns house characteristics and external heat source effects from historical data. The model adapts its parameters based on real-world results.
--   **Home Assistant Integration:** Seamlessly fetches sensor data (temperatures, PV power, etc.) from and sends control commands (target outlet temperature) back to Home Assistant.
--   **InfluxDB for Historical Data:** Uses an InfluxDB database to fetch historical data for initial model training.
--   **Dynamic Boost:** Applies a final correction based on the current error between the target and actual indoor temperatures to react quickly to changes.
--   **Prediction Smoothing:** Smooths the model's predictions over time to prevent rapid, inefficient fluctuations in the heating system.
--   **Smart Rounding:** Intelligently chooses between rounding up or down by predicting which integer temperature will result in an indoor temperature closer to the target.
--   **Confidence Recording (no automatic fallback):** The model assesses its confidence in a prediction and records it in the ML state sensor. Low confidence is reported so automations or dashboards can react, but it does not force an automatic baseline fallback.
--   **Intelligent Temperature Ramping (Gradual Control):** Prevents abrupt changes to the heat pump's setpoint. After blocking events (DHW, defrost), the system can drop to a low temperature. Instead of making a large, inefficient jump back to the target, the controller uses the current *actual* outlet temperature as a reference and ramps up gradually, improving efficiency and stability.
--   **Grace Period after Blocking:** After a blocking event like DHW or defrosting ends, the water in the system can be far from the normal heating range. To avoid the model reacting to this transient state the controller restores the last known target outlet temperature and enters a grace period. The controller determines the required waiting direction from the measured outlet vs. restored target:
+### Core Capabilities
+
+-   **Physics-Based Machine Learning:** Uses RealisticPhysicsModel that understands thermodynamic principles while learning your house's unique characteristics from real data
+-   **Online Learning:** Continuously adapts after every heating cycle - learns from what actually happened vs what was predicted
+-   **Active & Shadow Modes:** Can run in active mode (controlling heating) or shadow mode (calculating but not applying, for safe testing and comparison)
+-   **Home Assistant Integration:** Seamless bi-directional integration - reads sensors, writes control temperatures, publishes metrics and diagnostics
+-   **InfluxDB Historical Data:** Leverages your existing Home Assistant/InfluxDB setup for initial calibration and historical feature engineering
+
+### Intelligent Control
+
+-   **Smart Rounding:** Tests both floor and ceiling temperatures, predicts outcomes, chooses the one that gets closest to target
+-   **Prediction Smoothing:** Exponential moving average prevents erratic temperature jumps
+-   **Dynamic Boost:** Reacts to current temperature error to accelerate correction when needed
+-   **Gradual Temperature Control:** Limits maximum temperature change per cycle to protect heat pump from abrupt setpoint jumps
+-   **Monotonic Enforcement:** Ensures predictions respect physical reality (higher outlet temp → higher indoor temp)
+### Safety & Robustness
+
+-   **Blocking Event Handling:** Automatically pauses and waits during DHW heating, defrosting, disinfection, and DHW boost heater operation
+-   **Grace Period after Blocking:** After blocking events end, intelligently waits for outlet temperature to stabilize before resuming ML control The controller determines the required waiting direction from the measured outlet vs. restored target:
     
     - If the outlet is hotter than the restored target (typical after DHW), the controller waits for the outlet to cool to <= target.
     - If the outlet is colder than the restored target (possible after defrost with reversed flow), the controller waits for the outlet to warm to >= target.
     
-    The wait uses the same historical lookback and enforces a maximum timeout (`GRACE_PERIOD_MAX_MINUTES`) so the system never stalls indefinitely. During the grace period the controller avoids resuming aggressive ML-driven actuation and uses the restored target as a safe reference; after the condition is met (or the timeout elapses) normal ML control resumes. This behaviour protects both model quality and the heat-pump hardware by preventing large, inefficient setpoint jumps immediately after blocking events.
-    
-    Implementation notes:
-    
-    - After the grace wait completes (by condition, timeout, or abort), the controller clears the persisted blocking flag (`last_is_blocking=False`) and skips the remainder of that same cycle. This ensures the restored `last_final_temp` remains the active target in Home Assistant for one cycle while the outlet temperature settles, preventing an immediate recalculation that would otherwise be biased by the still-hot measured outlet.
-    - The persisted `last_final_temp` is preserved while blocking is active and is only updated at the end of a normal (non-blocking) cycle. This prevents DHW-like cycles from contaminating the learning signal or overwriting the last safe target.
--   **Fireplace Mode:** When a fireplace or other significant secondary heat source is active, the model can be configured to use a different temperature sensor (e.g., the average of other rooms) for learning and prediction. This prevents the model from incorrectly learning that the main heating system is more powerful than it is.
--   **Feature Importance:** Logs which factors (features) are most influential in the model's decisions, providing insight into what the model is learning.
--   **Systemd Service:** Can be run as a background service for continuous, unattended operation.
+    - Intelligently determines whether to wait for cooling or warming based on measured outlet vs target
+    - Enforces maximum timeout (`GRACE_PERIOD_MAX_MINUTES`) to prevent indefinite stalling
+    - Skips one cycle after grace completes to allow system to fully stabilize
+    - Prevents large, inefficient temperature jumps and protects model learning quality
 
-### Features
+-   **Heating Status Check:** Skips prediction and learning when heating system is not in 'heat' or 'auto' mode
+-   **Absolute Temperature Clamping:** Enforces safe minimum/maximum outlet temperatures (`CLAMP_MIN_ABS`, `CLAMP_MAX_ABS`)
+-   **Confidence Monitoring:** Tracks model confidence and publishes it to Home Assistant for monitoring and automation
 
-The model uses a rich set of features engineered from various data sources to understand the thermal dynamics of the house. These include:
+### External Heat Sources
 
--   **Core Features:**
-    -   `outdoor_temp`: The current outdoor temperature.
-    -   `outlet_temp`: The current water outlet temperature of the heat pump. This is the primary variable the model uses for its search.
-    -   `temp_diff_indoor_outdoor`: The difference between the indoor and outdoor temperatures.
+-   **Fireplace Mode:** When fireplace is active, uses alternative temperature sensor (e.g., average of other rooms) to prevent incorrect learning
+-   **PV Solar Warming:** Learns how solar power generation affects indoor temperature
+-   **TV/Electronics Heat:** Can track heat contribution from electronics and appliances
 
--   **Time-based Features:**
-    -   Cyclical features for time of day, month of the year, and day of the week (e.g., `hour_sin`, `hour_cos`) to capture daily and seasonal patterns.
-    -   `is_weekend`: A flag indicating if it is currently the weekend.
+### Monitoring & Diagnostics
 
--   **Historical & Lag Features:**
-    -   Past values of indoor and outlet temperatures at different intervals (e.g., `indoor_temp_lag_10m`, `outlet_temp_lag_60m`).
+-   **ML State Sensor:** Comprehensive sensor (`sensor.ml_heating_state`) with numeric state codes and detailed attributes for monitoring system health
+-   **Performance Metrics:** Real-time MAE (Mean Absolute Error) and RMSE (Root Mean Square Error) tracking
+-   **Shadow Mode Metrics:** When in shadow mode, tracks separate metrics for ML vs heat curve performance comparison
+-   **Feature Importance Export:** Exports feature importance to InfluxDB for visualization and analysis
+-   **Detailed Logging:** Comprehensive logging of decisions, predictions, and learning progress
 
--   **Trend & Delta Features:**
-    -   The rate of change (gradient) of indoor and outlet temperatures over the last hour.
-    -   The difference (delta) between the current temperature and historical values (e.g., `indoor_temp_delta_30m`).
+### Deployment
 
--   **Forecast Features:**
-    -   `pv_forecast_*h`: The predicted solar power generation for the next 4 hours.
-    -   `temp_forecast_*h`: The predicted outdoor temperature for the next 4 hours.
+-   **Systemd Service:** Production-ready systemd service configuration for reliable background operation
+-   **Automatic Restart:** Configured to restart on failure with 5-minute delay
+-   **Jupyter Notebooks:** Four analysis notebooks included for model diagnosis, performance monitoring, behavior analysis, and validation
 
--   **Polynomial & Interaction Features:**
-    -   `outlet_temp_sq`, `outlet_temp_cub`: The square and cube of the outlet temperature to help the model learn non-linear relationships.
-    -   `outdoor_temp_x_outlet_temp`: An interaction term to capture how the effect of the outlet temperature might change depending on the outdoor temperature.
+## Contributing
 
--   **Aggregated History Features:**
-    -   Statistical summaries of the recent history of indoor and outlet temperatures, including `mean`, `std` (standard deviation), `min`, `max`, `trend`, and quartiles (`q25`, `q75`).
+Contributions are welcome! Areas for improvement:
+- Additional external heat source integrations
+- Alternative prediction algorithms
+- Enhanced forecasting integration
+- Grafana dashboard templates
+- Documentation improvements
 
--   **Binary & Status Features:**
-    -   `tv_on`: A binary flag indicating if the TV is currently on. This serves as an example of a feature that represents an additional, unmeasurable heat source. The model can learn the correlation between the TV being on and a slight rise in indoor temperature.
-    -   `dhw_heating`, `defrosting`, etc.: Binary flags for the status of various heat pump operations that might block or affect heating.
+Please open an issue first to discuss major changes.
 
-    -   Defrost-derived metrics: `defrost_recent`, `defrost_count`, `defrost_age_min` — computed from the InfluxDB history window (the same window used for other aggregated features). These history-derived metrics make short defrost events visible to the model even when the live Home Assistant snapshot misses the transient `defrosting` flag.
+## License
 
-## Model and Approach
+See LICENSE file for details.
 
-The controller uses a **RealisticPhysicsModel** that learns actual house characteristics and external heat source effects from historical data. The model includes:
+## Acknowledgments
 
--   **Core Physics Parameters:** Base heating rate, target temperature influence, outdoor temperature factor
--   **External Heat Sources:** PV solar warming, fireplace heating, TV heat contribution
--   **System States:** DHW heating, defrosting, disinfection handling
--   **Forecast Integration:** 4-hour weather and PV forecasts for anticipatory control
+This project builds on thermodynamic principles and machine learning techniques to create a practical, production-ready heating controller. Special thanks to the Home Assistant and InfluxDB communities for their excellent integration capabilities.
 
-### Physics Model Calibration
+---
 
-The RealisticPhysicsModel can be calibrated using historical data:
+## Quick Reference
 
-1.  **Calibration (Recommended):** Run with the `--calibrate-physics` flag to train the model on historical data from InfluxDB. The duration of this lookback period is configurable via the `TRAINING_LOOKBACK_HOURS` environment variable (default is 168 hours, or 7 days).
-2.  **Adaptive Learning:** The model continuously adapts its parameters based on prediction errors, learning:
-    -   Base heating effectiveness
-    -   Target temperature influence
-    -   PV warming coefficient
-    -   Fireplace heating rate  
-    -   TV heat contribution
+### File Structure
+```
+ml_heating/
+├── src/
+│   ├── main.py              # Main control loop
+│   ├── physics_model.py     # RealisticPhysicsModel
+│   ├── model_wrapper.py     # Optimization & pipeline
+│   ├── physics_features.py  # Feature engineering
+│   ├── physics_calibration.py # Historical training
+│   ├── ha_client.py         # Home Assistant integration
+│   ├── influx_service.py    # InfluxDB queries
+│   ├── state_manager.py     # State persistence
+│   └── config.py            # Configuration
+├── notebooks/               # Analysis notebooks
+│   ├── 01_physics_model_diagnosis.ipynb
+│   ├── 02_performance_monitoring.ipynb
+│   ├── 03_behavior_analysis.ipynb
+│   └── 04_model_validation.ipynb
+├── tests/                   # Unit tests
+├── .env                     # Your configuration (not in git)
+├── .env_sample              # Configuration template
+├── requirements.txt         # Python dependencies
+└── README.md               # This file
+```
 
-### Why Physics-Based Model?
+### Key Concepts Summary
 
-The RealisticPhysicsModel approach was chosen for several key reasons:
+| Concept | Description |
+|---------|-------------|
+| **Active Mode** | ML controls heating directly |
+| **Shadow Mode** | ML observes but doesn't control |
+| **Online Learning** | Model learns after every cycle |
+| **Physics Model** | Thermodynamics + ML parameters |
+| **Prediction Pipeline** | 7-stage optimization & safety |
+| **Monotonic Enforcement** | Ensures physical plausibility |
+| **Smart Rounding** | Tests floor/ceiling, picks best |
+| **Gradual Control** | Limits temperature change rate |
+| **Grace Period** | Stabilization after blocking |
+| **Blocking Events** | DHW, defrost, etc. pause control |
+| **Feature Importance** | What factors matter most |
+| **Shadow Metrics** | Compare ML vs heat curve |
 
-1.  **Transparency:** Physics-based calculations are interpretable and debuggable, unlike black-box ML models.
-2.  **Stability:** The model provides consistent, predictable behavior based on thermodynamic principles.
-3.  **Adaptability:** Parameters self-tune based on actual house behavior while respecting physical constraints.
-4.  **Efficiency:** No complex feature preprocessing or ensemble calculations required.
-5.  **Confidence:** Physics-based predictions have inherent high confidence due to their foundation in thermodynamics.
+### Typical Good Performance
 
-### The Prediction Pipeline: A Step-by-Step Filter
+| Metric | Good Value | Notes |
+|--------|-----------|-------|
+| Confidence | > 0.9 | Higher is better |
+| MAE | < 0.2°C | Lower is better |
+| RMSE | < 0.3°C | Lower is better |
+| State Code | 0 (OK) | Most of the time |
 
-The final target temperature is not a single prediction but the result of a multi-stage filtering and adjustment pipeline. This process is designed to ensure safety, stability, and accuracy, with each step refining the output of the previous one.
+### Emergency: Revert to Heat Curve
 
-1.  **Step 1: Confidence Check & Recording:** The physics model has inherently high confidence due to its thermodynamic foundation. Confidence is recorded in the ML state sensor for monitoring purposes.
+If something goes wrong:
 
-2.  **Step 2: ML-Powered Search:** The model searches the configured absolute clamp range (`CLAMP_MIN_ABS` to `CLAMP_MAX_ABS`, step 0.5°C). For each candidate, it predicts the resulting indoor temperature and identifies the floating-point temperature that is predicted to get closest to the user's target. If multiple candidates are tied for being the closest, the one with the **lowest temperature** is chosen. This prioritizes energy efficiency by selecting the minimum required outlet temperature to achieve the best possible outcome.
+```bash
+# Stop ML heating
+sudo systemctl stop ml_heating.service
 
-3.  **Step 3: Smoothing (EMA Filter):** The raw result from the search can be volatile. To prevent rapid fluctuations, it is smoothed using an Exponential Moving Average (EMA) that considers previous predictions. This ensures the setpoint changes gracefully over time.
+# Re-enable your original heat curve automation in Home Assistant
 
-4.  **Step 4: Dynamic Boost & Clamping:** A corrective boost is applied based on the current indoor error; the boosted temperature is then clamped to the absolute bounds defined by `CLAMP_MIN_ABS` and `CLAMP_MAX_ABS` to prevent unsafe values.
+# Or, quickly switch to shadow mode in .env:
+ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID=sensor.hp_target_temp_circuit1
+sudo systemctl restart ml_heating.service
+```
 
-5.  **Step 5: Smart Rounding:** Heat pumps often require whole-number setpoints. Instead of a simple mathematical round, the system performs "smart rounding." It takes the floating-point value from the previous step (e.g., 35.7°C) and runs a final prediction for both the floor (35°C) and the ceiling (36°C). It then chooses the integer that is predicted to result in an indoor temperature closer to the target.
+The model continues learning in shadow mode, so you can analyze what went wrong and switch back when ready.
 
-6.  **Step 6: Gradual Temperature Control:** This is the final safety filter, designed to protect the heat pump from inefficient, large temperature jumps, especially after a blocking event like DHW or defrosting. The system normally compares the proposed integer setpoint from Step 5 to the **current actual outlet temperature**. If the change exceeds the `MAX_TEMP_CHANGE_PER_CYCLE` value (e.g., 2°C), it is capped. For example, if the actual outlet temperature is 30°C and the new pipeline suggests 38°C, the final output will be capped at 32°C. This ensures the heat pump always ramps up or down gently from its current state.
-    
-    Baseline behavior: The clamp baseline defaults to the persisted previous target (`last_final_temp`)
-    when available. After any blocking event ends the controller restores `last_final_temp` and
-    enters the grace wait so the actual outlet temperature has time to reach the old target before
-    resuming ML-driven actuation. This prevents transient post-blocking readings from biasing the
-    clamp and delays in returning to the intended setpoint.
-    
-    Exception (soft-start): For DHW-like blockers (DHW, disinfection, DHW boost heater) we keep
-    the soft-start behaviour: in those cases the baseline used for the gradual clamp is the current
-    measured `actual_outlet_temp` so the controller ramps gently from the (typically hot) outlet.
-    
-    Fallback: If `last_final_temp` is not available we fall back to using the instantaneous
-    measured outlet temperature as the baseline.
+## How It Works
 
-### Metrics: Confidence, MAE, and RMSE
+### Architecture Overview
 
--   **Confidence:** This is not a statistical confidence but rather a measure of agreement among the trees in the random forest model. A lower standard deviation means the trees agree, and the prediction is considered more reliable.
--   **MAE (Mean Absolute Error):** The average absolute difference between the predicted temperature change and the actual temperature change. A lower MAE is better.
--   **RMSE (Root Mean Square Error):** Similar to MAE but gives a higher weight to large errors. A lower RMSE is better.
+```
+┌─────────────────┐      ┌──────────────────┐      ┌─────────────────┐
+│  Home Assistant │◄────►│  ML Heating      │◄────►│   InfluxDB      │
+│                 │      │  Controller      │      │                 │
+│ - Sensors       │      │                  │      │ - Historical    │
+│ - Controls      │      │ - Physics Model  │      │   Data          │
+│ - Metrics       │      │ - Online Learning│      │ - Features      │
+└─────────────────┘      │ - Optimization   │      └─────────────────┘
+                         └──────────────────┘
+```
 
-These metrics are continuously updated and sent to Home Assistant, providing a real-time view of the model's performance.
+### The Physics Model
+
+The controller uses **RealisticPhysicsModel** - a physics-based machine learning approach that combines thermodynamic principles with data-driven learning:
+
+**Core Physics Parameters (learned from data):**
+- Base heating rate: How effectively the heat pump heats the house
+- Target temperature influence: How target setting affects heating dynamics
+- Outdoor temperature factor: Impact of outdoor conditions on heat loss
+
+**External Heat Sources (automatically calibrated):**
+- PV solar warming: Heat gain from solar power generation
+- Fireplace heating rate: Contribution from secondary heat sources
+- TV/electronics heat: Heat from appliances and devices
+
+**System States & Blocking:**
+- DHW heating, defrosting, disinfection, DHW boost heater
+- Automatically detected and handled with appropriate wait periods
+
+**Forecast Integration:**
+- 4-hour weather forecast: Anticipates temperature changes
+- 4-hour PV forecast: Predicts solar heat gain
+- Enables proactive rather than reactive control
+
+### Model Calibration & Learning
+
+**Initial Calibration (Recommended):**
+```bash
+python3 -m src.main --calibrate-physics
+```
+- Trains model on historical data from InfluxDB
+- Duration: `TRAINING_LOOKBACK_HOURS` (default: 168 hours / 7 days)
+- Learns your house's unique thermal characteristics
+- Calibrates external heat source effects
+
+**Continuous Online Learning:**
+After calibration, the model learns from every heating cycle:
+1. Sets outlet temperature based on current prediction
+2. Waits one cycle (`CYCLE_INTERVAL_MINUTES`)
+3. Measures actual indoor temperature change
+4. Reads what temperature was actually applied (supports shadow mode)
+5. Learns from the difference between prediction and reality
+6. Updates model parameters to improve future predictions
+
+This happens automatically in both **active mode** (ML controls heating) and **shadow mode** (heat curve controls, ML learns).
+
+### The Prediction Pipeline
+
+The final outlet temperature goes through a sophisticated multi-stage pipeline:
+
+```
+Raw Prediction → Monotonic Enforcement → Smoothing → Dynamic Boost → 
+Smart Rounding → Gradual Control → Final Temperature
+```
+
+**Stage 1: Optimization Search**
+- Searches range `CLAMP_MIN_ABS` to `CLAMP_MAX_ABS` in 0.5°C steps
+- For each candidate, predicts resulting indoor temperature
+- Finds temperature that gets closest to target
+- If tie, chooses lowest temperature (energy efficiency priority)
+
+**Stage 2: Monotonic Enforcement**
+- Ensures physical plausibility: higher outlet → higher indoor
+- Anchors to last actual outlet temperature for reliability
+- Corrects any non-monotonic predictions from raw model
+
+**Stage 3: Prediction Smoothing**
+- Applies Exponential Moving Average (EMA)
+- Formula: `new = α * raw + (1-α) * previous`
+- Configured via `SMOOTHING_ALPHA` (default: 0.8)
+- Prevents erratic jumps while staying responsive
+
+**Stage 4: Dynamic Boost**
+- Applies correction based on current temperature error
+- If room too cold: boost up (capped at +5°C)
+- If room too warm: reduce (capped at -5°C)
+- Disabled when outdoor temp > 15°C (solar gain sufficient)
+
+**Stage 5: Absolute Clamping**
+- Enforces safety limits: `CLAMP_MIN_ABS` to `CLAMP_MAX_ABS`
+- Default: 14°C to 65°C
+- Prevents dangerous temperatures
+
+**Stage 6: Smart Rounding**
+- Heat pumps need integer temperatures
+- Tests both floor and ceiling (e.g., 35°C and 36°C for 35.7°C)
+- Predicts indoor outcome for each
+- Chooses integer that results in temperature closest to target
+
+**Stage 7: Gradual Temperature Control**
+- Final safety: limits change per cycle to `MAX_TEMP_CHANGE_PER_CYCLE`
+- Example: if max change = 2°C, outlet at 30°C, target 38°C → sets 32°C
+- Baseline selection:
+  - **Normal:** Uses last persisted target (`last_final_temp`)
+  - **Soft-start (DHW-like):** Uses current measured outlet temp for gentle ramp
+  - **Fallback:** Uses measured outlet if no history available
+- Protects heat pump from large, inefficient jumps
+
+### Active vs Shadow Mode
+
+The system supports two operating modes:
+
+**Active Mode:**
+- ML directly controls heating by writing to `TARGET_OUTLET_TEMP_ENTITY_ID`
+- Model learns from its own decisions
+- MAE/RMSE track actual ML performance
+- Configuration: Set both entity IDs to the same value
+
+**Shadow Mode:**
+- Heat curve controls heating (writes to one entity)
+- ML calculates but doesn't apply (writes to different entity)
+- Model learns from heat curve's decisions
+- Separate shadow metrics compare ML vs heat curve:
+  - `shadow_ml_mae/rmse`: What error ML would make
+  - `shadow_hc_mae/rmse`: What error heat curve actually makes
+- Use shadow mode to:
+  - Safely test ML before going active
+  - Compare performance quantitatively
+  - Continue learning while heat curve controls
+  - Decide when ML is ready to take over
+
+**Switching Modes:**
+Simply change entity IDs in `.env` and restart:
+```bash
+# Shadow mode (different entities)
+TARGET_OUTLET_TEMP_ENTITY_ID=sensor.ml_vorlauftemperatur
+ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID=sensor.hp_target_temp_circuit1
+
+# Active mode (same entity)
+TARGET_OUTLET_TEMP_ENTITY_ID=sensor.ml_vorlauftemperatur
+ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID=sensor.ml_vorlauftemperatur
+```
+
+Switch to active mode when: `shadow_ml_mae < shadow_hc_mae` AND `shadow_ml_rmse < shadow_hc_rmse`
+
+### Performance Metrics
+
+**Confidence:**
+- Normalized 0 to 1 scale (1.0 = perfect confidence)
+- Formula: `confidence = 1.0 / (1.0 + sigma)`
+- Where sigma is the per-tree standard deviation in °C
+- Published to Home Assistant for monitoring
+
+**MAE (Mean Absolute Error):**
+- Average absolute difference between predicted and actual temperature change
+- In °C - lower is better
+- Typical good performance: < 0.2°C
+
+**RMSE (Root Mean Square Error):**
+- Similar to MAE but penalizes large errors more
+- In °C - lower is better
+- Typical good performance: < 0.3°C
+
+**Shadow Metrics (Shadow Mode Only):**
+- `shadow_ml_mae/rmse`: ML's hypothetical performance
+- `shadow_hc_mae/rmse`: Heat curve's actual performance
+- Enables quantitative comparison
 
 ### ML State Sensor
 
-The application publishes a numeric state sensor `sensor.ml_heating_state` that summarizes the controller's status each cycle and provides attributes with diagnostics. Use the numeric state for automations and the attributes for human-readable context.
+The system publishes `sensor.ml_heating_state` with numeric state codes and rich diagnostic attributes:
 
-State codes (numeric)
-- 0 = OK — Prediction done
-- 1 = LOW_CONFIDENCE — Confidence too low; reported in state (no automatic baseline fallback)
-- 2 = BLOCKED — Blocking activity detected (DHW, defrosting, disinfection, boost) — skipping this cycle
-- 3 = NETWORK_ERROR — Failed to fetch Home Assistant states or network calls
-- 4 = NO_DATA — Missing critical sensors or insufficient history for features
-- 5 = TRAINING — Running initial training / warm-up
-- 6 = HEATING_OFF — Heating system not in 'heat' or 'auto' mode — skipping this cycle
-- 7 = MODEL_ERROR — Exception occurred during prediction/learning
+**State Codes:**
+| Code | Name | Meaning |
+|------|------|---------|
+| 0 | OK | Prediction completed successfully |
+| 1 | LOW_CONFIDENCE | Model confidence below threshold - logged for monitoring |
+| 2 | BLOCKED | Blocking activity active (DHW/defrost/etc) - cycle skipped |
+| 3 | NETWORK_ERROR | Failed to communicate with Home Assistant |
+| 4 | NO_DATA | Missing critical sensors or insufficient history |
+| 5 | TRAINING | Running initial calibration |
+| 6 | HEATING_OFF | Heating not in 'heat' or 'auto' mode - cycle skipped |
+| 7 | MODEL_ERROR | Exception during prediction or learning |
 
-Typical attributes
-- `state_description`: short human string (e.g., "Confidence - Too Low")
-- `confidence`: normalized 0..1 float (1.0 = perfect agreement)
-- `sigma`: raw per-tree stddev in °C
-- `mae`, `rmse`: current metric floats
-- `suggested_temp`, `final_temp`, `predicted_indoor`: recent numeric values
-- `blocking_reasons`: list of active blockers (when applicable)
-- `missing_sensors`: list of missing critical entities (when applicable)
-- `last_prediction_time` / `last_updated`: ISO timestamps
-- `last_error`: short error message (for MODEL_ERROR / NETWORK_ERROR)
+**Key Attributes:**
+- `state_description`: Human-readable status
+- `confidence`, `sigma`: Model confidence metrics
+- `mae`, `rmse`: Performance metrics
+- `suggested_temp`, `final_temp`, `predicted_indoor`: Latest values
+- `blocking_reasons`: List of active blocking events
+- `missing_sensors`: List of unavailable critical sensors
+- `last_prediction_time`, `last_updated`: Timestamps
+- `last_error`: Error message for troubleshooting
 
-Example automation use-cases
-- Alert if state == 3 (NETWORK_ERROR) or repeated MODEL_ERROR.
-- Tally LOW_CONFIDENCE occurrences to gauge model reliability.
-- Use `blocking_reasons` to explain skipped cycles in logs or dashboards.
+**Automation Examples:**
+```yaml
+# Alert on network errors
+- trigger:
+    platform: state
+    entity_id: sensor.ml_heating_state
+    to: "3"
+  action:
+    service: notify.mobile_app
+    data:
+      message: "ML Heating: Network error detected"
 
-This sensor makes it easy to monitor model health and reason about fallback behaviour directly from Home Assistant.
+# Track low confidence occurrences
+- trigger:
+    platform: state
+    entity_id: sensor.ml_heating_state
+    to: "1"
+  action:
+    service: counter.increment
+    entity_id: counter.ml_low_confidence_count
+```
 
-## Data Flow
+## Analysis & Debugging
 
-1.  **Get Data from Home Assistant:** The script fetches current sensor values (indoor/outdoor temps, etc.) and blocking statuses (DHW, defrost) from Home Assistant.
-2.  **Get History from InfluxDB:** The `feature_builder` uses the InfluxDB service to get historical values for features like past outlet temperatures.
-3.  **Set Data back to Home Assistant:** The script pushes the following data back to Home Assistant entities:
-    -   The final calculated target outlet temperature.
-    -   The predicted indoor temperature for the next cycle.
-    -   Model performance metrics (Confidence, MAE, RMSE).
-    -   Feature importances.
+### Jupyter Notebooks
 
-## Feature importance exported to InfluxDB
+Four analysis notebooks are included in `notebooks/`:
 
-Feature importance snapshots are exported to InfluxDB for visualization and inspection.
+**01_physics_model_diagnosis.ipynb**
+- Deep dive into physics model structure
+- Test physics compliance
+- Verify model predictions
 
-- Bucket: `ml_heating_features`  
-- Measurement: `feature_importance`  
-- Schema:
-  - Each feature is stored as a separate field (float), for example `temp_forecast_3h`, `indoor_hist_mean`, `outlet_temp_lag_60m`, etc.
-  - `exported` — integer UNIX epoch seconds marking when the snapshot was written (provenance / run id).
-  - `_time` — the snapshot timestamp (when the point was written).
-- Configuration:
-  - Set the feature export bucket in your `.env`:
-    ```ini
-    INFLUX_FEATURE_BUCKET=ml_heating_features
-    ```
-- Visualization tips:
-  - Table views may show locale-specific decimals (e.g. `0,03`); charts may apply unit suffixes — set the Y-axis unit to `number`/`none` to display raw floats.
-  - Use Flux to scale or format on-read (example: multiply by 100 to show percent) rather than rewriting stored data.
+**02_performance_monitoring.ipynb**
+- Track model performance over time
+- Detect performance degradation
+- Set alert thresholds
 
-Quick Flux examples
-- List measurements in the feature bucket:
+**03_behavior_analysis.ipynb**
+- Analyze heating patterns
+- Seasonal behavior analysis
+- Energy efficiency insights
+
+**04_model_validation.ipynb**
+- Comprehensive validation checks
+- Production readiness assessment
+- Physics validation across scenarios
+
+To use notebooks:
+```bash
+source .venv/bin/activate
+jupyter notebook notebooks/
+```
+
+### Data Flow
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  EACH CYCLE (every CYCLE_INTERVAL_MINUTES)                  │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│  1. CHECK BLOCKING EVENTS                                    │
+│     - DHW heating, defrost, disinfection, boost heater      │
+│     - If blocked: skip cycle, persist state                 │
+│     - If just unblocked: enter grace period                 │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│  2. CHECK HEATING STATUS                                     │
+│     - Read climate entity state                             │
+│     - If not 'heat' or 'auto': skip cycle (state=6)        │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│  3. ONLINE LEARNING (from previous cycle)                   │
+│     - Read actual applied temp from previous cycle          │
+│     - Measure actual indoor temperature change              │
+│     - Compare to predicted change                           │
+│     - Call model.learn_one() to update                      │
+│     - If shadow mode: track ML vs heat curve errors         │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│  4. FETCH CURRENT DATA                                       │
+│     Home Assistant: All current sensor values               │
+│     InfluxDB: Historical data for feature engineering       │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│  5. BUILD FEATURES                                           │
+│     - Current temps (indoor, outdoor, outlet)               │
+│     - Historical temps (lags, deltas, gradients)            │
+│     - Time features (hour, month, day-of-week)              │
+│     - External sources (PV, fireplace, TV)                  │
+│     - Forecasts (weather, PV next 4 hours)                  │
+│     - System states (blocking, defrost)                     │
+│     - Statistical aggregations (mean, std, trends)          │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│  6. PREDICTION PIPELINE                                      │
+│     ┌─────────────────────────────────────────────────┐    │
+│     │ a) Optimization search (0.5°C steps)            │    │
+│     │ b) Monotonic enforcement                        │    │
+│     │ c) Smoothing (EMA)                              │    │
+│     │ d) Dynamic boost                                │    │
+│     │ e) Absolute clamping                            │    │
+│     │ f) Smart rounding                               │    │
+│     │ g) Gradual control (max change limit)          │    │
+│     └─────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│  7. PUBLISH TO HOME ASSISTANT                                │
+│     - Target outlet temperature                             │
+│     - Predicted indoor temperature                          │
+│     - ML state sensor (code + attributes)                   │
+│     - Confidence, MAE, RMSE metrics                         │
+│     - Feature importances (to InfluxDB)                     │
+│     - Shadow metrics (if shadow mode)                       │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│  8. SAVE STATE & MODEL                                       │
+│     - Persist model to MODEL_FILE                           │
+│     - Save state to STATE_FILE                              │
+│     - Store features for next cycle's learning              │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│  9. IDLE & BLOCKING POLL                                     │
+│     - Wait remainder of CYCLE_INTERVAL_MINUTES              │
+│     - Poll for blocking events every                        │
+│       BLOCKING_POLL_INTERVAL_SECONDS                        │
+│     - If blocking detected during idle: handle immediately  │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+                     (repeat cycle)
+```
+
+## Troubleshooting
+
+### Common Issues
+
+**State Code 3: Network Error**
+- Check Home Assistant is running and accessible
+- Verify `HASS_URL` and `HASS_TOKEN` in `.env`
+- Check network connectivity
+- Review logs: `journalctl -u ml_heating.service -n 50`
+
+**State Code 4: No Data**
+- Check all required entity IDs exist in Home Assistant
+- Look at `missing_sensors` attribute on `sensor.ml_heating_state`
+- Verify entity IDs match exactly (case-sensitive)
+- Ensure InfluxDB has sufficient historical data
+
+**State Code 6: Heating Off**
+- Heating system not in 'heat' or 'auto' mode
+- Check your climate entity
+- Normal during summer or when heating manually disabled
+
+**State Code 7: Model Error**
+- Check `last_error` attribute for details
+- May indicate corrupted model file
+- Try recalibrating: `--calibrate-physics`
+- Check logs for Python exceptions
+
+**Poor Performance (High MAE/RMSE)**
+- Recalibrate model with recent data
+- Increase `CYCLE_INTERVAL_MINUTES` for better learning signal
+- Check if blocking events are properly detected
+- Verify all external heat sources configured correctly
+- Consider if house characteristics changed (insulation, windows, etc.)
+
+**Erratic Temperature Control**
+- Increase `SMOOTHING_ALPHA` for more stability
+- Increase `MAX_TEMP_CHANGE_PER_CYCLE` if too conservative
+- Check for sensor noise or dropout
+- Verify grace period settings
+
+**Model Not Learning**
+- Verify `ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID` is correct
+- Check logs for "Online learning" messages
+- Ensure sufficient time between cycles (30min recommended)
+- Look for repeated blocking events preventing learning
+
+### Debug Mode
+
+Enable verbose logging:
+```bash
+# Temporarily for testing
+python3 -m src.main --debug
+
+# Or in service, edit /etc/systemd/system/ml_heating.service
+# Add to [Service] section:
+Environment="DEBUG=1"
+```
+
+Debug mode logs:
+- Complete feature vectors
+- All prediction candidates
+- Monotonic enforcement details
+- Smart rounding decisions
+- Learning updates
+
+### Getting Help
+
+When reporting issues, include:
+1. Relevant log excerpts (`journalctl -u ml_heating.service -n 200`)
+2. Your `.env` configuration (redact tokens!)
+3. State of `sensor.ml_heating_state` including attributes
+4. Recent MAE/RMSE values
+5. Whether active or shadow mode
+6. Any recent changes to house or system
+
+## Advanced Topics
+
+### Feature Importance Analysis
+
+The system exports feature importance to InfluxDB for analysis and visualization.
+
+**Configuration:**
+```ini
+# In .env
+INFLUX_FEATURES_BUCKET=ml_heating_features
+```
+
+**InfluxDB Schema:**
+- Bucket: `ml_heating_features`
+- Measurement: `feature_importance`
+- Fields: Each feature as float (e.g., `temp_forecast_3h`, `indoor_hist_mean`)
+- Tags: `exported` (UNIX timestamp)
+
+**Example Flux Queries:**
+
+List all measurements:
 ```flux
 import "influxdata/influxdb/schema"
 schema.measurements(bucket: "ml_heating_features")
 ```
 
-- Inspect recent feature rows:
+Recent feature importances:
 ```flux
-from(bucket:"ml_heating_features")
+from(bucket: "ml_heating_features")
   |> range(start: -7d)
   |> filter(fn: (r) => r._measurement == "feature_importance")
-  |> keep(columns: ["_time","_field","_value","exported"])
+  |> keep(columns: ["_time", "_field", "_value", "exported"])
   |> sort(columns: ["_time"], desc: true)
   |> limit(n: 50)
 ```
 
-- Convert `exported` to human readable time in Python:
-```python
-import datetime
-ts = 1760904513
-print(datetime.datetime.utcfromtimestamp(ts).isoformat() + "Z")
+Top 10 most important features:
+```flux
+from(bucket: "ml_heating_features")
+  |> range(start: -24h)
+  |> filter(fn: (r) => r._measurement == "feature_importance")
+  |> last()
+  |> sort(columns: ["_value"], desc: true)
+  |> limit(n: 10)
 ```
+
+**Interpretation:**
+- Higher values = more influential on predictions
+- Monitor over time to see what matters in different conditions
+- Useful for understanding model behavior and debugging
+
+### Seasonal Recalibration
+
+Consider recalibrating when seasons change significantly:
+
+```bash
+# Stop service
+sudo systemctl stop ml_heating.service
+
+# Backup current model
+cp /opt/ml_heating/ml_model.pkl /opt/ml_heating/ml_model.pkl.backup
+
+# Recalibrate
+source /opt/ml_heating/.venv/bin/activate
+python3 -m src.main --calibrate-physics
+
+# Restart service
+sudo systemctl start ml_heating.service
+```
+
+When to recalibrate:
+- Major seasonal changes (winter ↔ summer)
+- After house modifications (insulation, windows)
+- After heat pump maintenance
+- If performance degrades significantly
+- When moving from shadow to active mode
+
+### Custom Feature Engineering
+
+The system uses 19 physics-based features. To understand what's available, see:
+- `src/physics_features.py`: Feature construction
+- `src/physics_model.py`: How features are used
+- Notebooks: Analysis and visualization
+
+Key feature categories:
+- Core temperatures (indoor, outdoor, outlet)
+- Historical data (lags, deltas, gradients)
+- Time cyclical (hour, month, day of week)
+- External sources (PV, fireplace, TV)
+- Forecasts (weather, PV 4-hour ahead)
+- System states (blocking events)
+- Statistical (mean, std, trends, quartiles)
 
 ## Installation and Setup
 
-### 1. Create a Virtual Environment
+### Prerequisites
+
+- Python 3.8 or higher
+- Home Assistant with REST API access
+- InfluxDB with Home Assistant data (for initial calibration)
+- Systemd (for service deployment)
+
+### 1. Clone and Setup
 
 ```bash
+# Clone the repository
+git clone https://github.com/helgeerbe/ml_heating.git
+cd ml_heating
+
+# Create virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
-```
 
-### 2. Install Dependencies
-
-```bash
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 3. Configure Environment Variables
+### 2. Configure Environment
 
-Copy the `.env_sample` file to `.env` and fill in the required values.
+Copy the sample configuration and edit with your settings:
 
 ```bash
 cp .env_sample .env
 nano .env
 ```
 
-#### `.env` File Explanation
+#### Critical Configuration Settings
 
--   **`HASS_URL`**: The URL of your Home Assistant instance (e.g., `http://homeassistant.local:8123`).
--   **`HASS_TOKEN`**: A Long-Lived Access Token for the Home Assistant API.
--   **`INFLUX_URL`**: The URL of your InfluxDB instance.
--   **`INFLUX_TOKEN`**: An InfluxDB API token with read access to your Home Assistant bucket.
--   **`INFLUX_ORG`**: Your InfluxDB organization name.
--   **`INFLUX_BUCKET`**: The InfluxDB bucket where Home Assistant data is stored.
--   **`MODEL_FILE` / `STATE_FILE`**: Paths to store the trained model and application state. The defaults are usually fine.
--   **`TRAINING_LOOKBACK_HOURS`**: The number of hours of historical data to use for the initial training. Defaults to 168 (7 days).
--   **`CYCLE_INTERVAL_MINUTES`**: The time in minutes between each full cycle of learning and prediction. A longer interval (e.g., 10-15 mins) provides a clearer learning signal, while a shorter one is more responsive. Defaults to 10.
--   **`MAX_TEMP_CHANGE_PER_CYCLE`**: The maximum allowable integer change (in degrees) for the outlet temperature setpoint in a single cycle. This prevents abrupt changes that can cause the heat pump to start and stop frequently. For example, a value of `1` with a `CYCLE_INTERVAL_MINUTES` of `10` limits the maximum change to 6 degrees per hour. Defaults to 2.
--   **Entity IDs**: The script is pre-configured with many entity IDs. You **must** review and update these to match the `entity_id`s in your Home Assistant setup.
--   **`PV_FORECAST_ENTITY_ID`**: Home Assistant sensor that provides today's PV forecast. The code uses the sensor's attribute `watts` (15‑minute samples) and aggregates them into hourly means for the next four full UTC hours. Forecast values are provided in watts (W). Hours with no samples are treated as 0.
--   **`CONFIDENCE_THRESHOLD`**: The model uses a *normalized* confidence in the range (0..1], where `1.0` means perfect agreement between trees (σ = 0 °C). The code maps the per-tree standard deviation σ (in °C) to confidence using:
-    ```python
-    confidence = 1.0 / (1.0 + sigma)
-    ```
-    To pick an appropriate threshold, decide the maximum tolerated σ (°C) and convert:
-    ```
-    threshold = 1.0 / (1.0 + sigma_max)
-    ```
-    Examples:
-    - Tolerate σ_max = 1.0°C → `CONFIDENCE_THRESHOLD = 0.5`
-    - Tolerate σ_max = 0.5°C → `CONFIDENCE_THRESHOLD ≈ 0.667`
-The sample files use `0.5` as a reasonable starting point.
+**Home Assistant Connection:**
+- `HASS_URL`: Your Home Assistant URL (e.g., `http://homeassistant.local:8123`)
+- `HASS_TOKEN`: Long-Lived Access Token from your HA profile
 
-Note: The controller polls blocking entities during the idle period at
-`BLOCKING_POLL_INTERVAL_SECONDS` (default: 60 seconds). This controls how
-often the script checks Home Assistant for DHW/defrost blocking flags while
-idle between cycles. Lower values make the controller react faster to
-short defrost events but increase the Home Assistant API load. Set
-`BLOCKING_POLL_INTERVAL_SECONDS` in your `.env` to tune this behavior.
+**InfluxDB Connection:**
+- `INFLUX_URL`: Your InfluxDB URL with port
+- `INFLUX_TOKEN`: API token with read access to HA bucket
+- `INFLUX_ORG`: Your InfluxDB organization
+- `INFLUX_BUCKET`: Bucket with Home Assistant data
 
-### 4. Initial Training (Recommended)
+**Model Files:**
+- `MODEL_FILE`: Path for trained model (default: `/opt/ml_heating/ml_model.pkl`)
+- `STATE_FILE`: Path for application state (default: `/opt/ml_heating/ml_state.pkl`)
 
-Run the script with the `--calibrate-physics` flag to calibrate the physics model on your recent historical data from InfluxDB.
+**Core Entity IDs (MUST match your HA setup):**
+- `TARGET_INDOOR_TEMP_ENTITY_ID`: Desired indoor temperature
+- `INDOOR_TEMP_ENTITY_ID`: Actual indoor temperature sensor
+- `ACTUAL_OUTLET_TEMP_ENTITY_ID`: Heat pump outlet temperature sensor
+- `TARGET_OUTLET_TEMP_ENTITY_ID`: Entity ML writes its calculated temperature to
+- `ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID`: Entity that was actually applied (for learning)
+  - **Active mode:** Same as `TARGET_OUTLET_TEMP_ENTITY_ID`
+  - **Shadow mode:** Different entity (e.g., from your heat curve automation)
+- `HEATING_STATUS_ENTITY_ID`: Climate entity to check heating mode
+
+**Blocking Event Entities:**
+- `DHW_STATUS_ENTITY_ID`: DHW heating active sensor
+- `DEFROST_STATUS_ENTITY_ID`: Defrost cycle active sensor
+- `DISINFECTION_STATUS_ENTITY_ID`: DHW disinfection active sensor
+- `DHW_BOOST_HEATER_STATUS_ENTITY_ID`: DHW boost heater active sensor
+
+**External Heat Sources:**
+- `FIREPLACE_STATUS_ENTITY_ID`: Fireplace active sensor
+- `AVG_OTHER_ROOMS_TEMP_ENTITY_ID`: Alternative temperature sensor for fireplace mode
+- `TV_STATUS_ENTITY_ID`: TV/electronics heat source indicator
+- `PV1_POWER_ENTITY_ID`, `PV2_POWER_ENTITY_ID`, `PV3_POWER_ENTITY_ID`: Solar power sensors
+- `PV_FORECAST_ENTITY_ID`: PV forecast sensor with `watts` attribute (15-min samples)
+
+**Timing & Behavior:**
+- `CYCLE_INTERVAL_MINUTES`: Time between predictions (default: 30 min)
+  - Longer = clearer learning signal
+  - Shorter = more responsive
+- `MAX_TEMP_CHANGE_PER_CYCLE`: Max outlet temp change per cycle (default: 5°C)
+  - Prevents abrupt jumps
+  - Example: 5°C with 30min cycle = max 10°C/hour
+- `GRACE_PERIOD_MAX_MINUTES`: Max wait after blocking ends (default: 30 min)
+- `BLOCKING_POLL_INTERVAL_SECONDS`: How often to check for blocking during idle (default: 60s)
+
+**Model Tuning:**
+- `CONFIDENCE_THRESHOLD`: Minimum confidence (default: 0.3)
+  - Formula: `threshold = 1.0 / (1.0 + max_tolerated_sigma_in_celsius)`
+  - Examples: 1.0°C tolerance → 0.5, 0.5°C tolerance → 0.67
+- `SMOOTHING_ALPHA`: EMA smoothing factor (default: 0.8)
+  - Lower (0.1) = more smoothing, less responsive
+  - Higher (0.9) = less smoothing, more responsive
+- `CLAMP_MIN_ABS` / `CLAMP_MAX_ABS`: Absolute temperature limits (default: 14-65°C)
+
+**Training:**
+- `TRAINING_LOOKBACK_HOURS`: Historical data for calibration (default: 168 hours / 7 days)
+
+**See `.env_sample` for complete configuration with detailed comments.**
+
+### 3. Initial Calibration (Recommended)
+
+Calibrate the physics model on your historical data:
 
 ```bash
+source .venv/bin/activate
 python3 -m src.main --calibrate-physics
 ```
 
-You can also validate the physics model behavior with `--validate-physics`.
+This trains the model on `TRAINING_LOOKBACK_HOURS` (default: 168 hours) of historical data from InfluxDB, learning your house's unique thermal characteristics.
 
-### 5. Running as a systemd Service
+**Optional Validation:**
+```bash
+python3 -m src.main --validate-physics
+```
+Tests model predictions across temperature ranges without modifying anything.
 
-To run the script continuously in the background, create a systemd service file.
+### 4. Test Run
 
-1.  Create the service file:
+Start in foreground to verify configuration:
 
-    ```bash
-    sudo nano /etc/systemd/system/ml_heating.service
-    ```
+```bash
+python3 -m src.main
+```
 
-2.  Paste the following content into the file, making sure to **update the paths** to match your installation directory.
+Watch the logs to ensure:
+- Connects to Home Assistant successfully
+- Reads all required sensors
+- Makes predictions
+- No errors or warnings
 
-    ```ini
-    [Unit]
-    Description=ML Heating Control Service
-    After=network.target
+Press Ctrl+C to stop.
 
-    [Service]
-    Type=simple
-    User=your_user
-    WorkingDirectory=/path/to/your/ml_heating
-    ExecStart=/path/to/your/ml_heating/.venv/bin/python3 -m src.main
-    Restart=on-failure
-    RestartSec=5m
+### 5. Deploy as Systemd Service
 
-    [Install]
-    WantedBy=multi-user.target
-    ```
+Create the service file:
 
-3.  Reload systemd, enable, and start the service:
+```bash
+sudo nano /etc/systemd/system/ml_heating.service
+```
 
-    ```bash
-    sudo systemctl daemon-reload
-    sudo systemctl enable ml_heating.service
-    sudo systemctl start ml_heating.service
-    ```
+Add the following content (**update paths for your installation**):
 
-4.  You can check the status and logs of the service using:
+```ini
+[Unit]
+Description=ML Heating Control Service
+After=network.target home-assistant.service influxdb.service
+Wants=home-assistant.service influxdb.service
 
-    ```bash
-    sudo systemctl status ml_heating.service
-    sudo journalctl -u ml_heating.service -f
-    ```
+[Service]
+Type=simple
+User=your_user
+WorkingDirectory=/opt/ml_heating
+ExecStart=/opt/ml_heating/.venv/bin/python3 -m src.main
+Restart=on-failure
+RestartSec=5m
+StandardOutput=journal
+StandardError=journal
 
-## Script Parameters
+[Install]
+WantedBy=multi-user.target
+```
 
--   `--calibrate-physics`: Calibrates the RealisticPhysicsModel on historical data from InfluxDB, then starts the main control loop.
--   `--validate-physics`: Validates the physics model behavior across temperature ranges and exits. Useful for testing model predictions.
--   `--debug`: Enables verbose debug logging. Note that this may cause very noisy output from underlying libraries like `urllib3`. The application attempts to suppress this, but some messages may still appear.
+Enable and start the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable ml_heating.service
+sudo systemctl start ml_heating.service
+```
+
+### 6. Monitor Operation
+
+**Check service status:**
+```bash
+sudo systemctl status ml_heating.service
+```
+
+**View live logs:**
+```bash
+sudo journalctl -u ml_heating.service -f
+```
+
+**View recent logs:**
+```bash
+sudo journalctl -u ml_heating.service -n 100
+```
+
+**Check specific time range:**
+```bash
+sudo journalctl -u ml_heating.service --since "1 hour ago"
+```
+
+### 7. Home Assistant Monitoring
+
+Add to your dashboard:
+```yaml
+type: entities
+entities:
+  - entity: sensor.ml_heating_state
+    name: ML Heating Status
+  - entity: sensor.ml_model_confidence
+    name: Model Confidence
+  - entity: sensor.ml_model_mae
+    name: Mean Absolute Error
+  - entity: sensor.ml_model_rmse
+    name: Root Mean Square Error
+  - entity: sensor.ml_vorlauftemperatur
+    name: ML Target Outlet Temp
+```
+
+## Usage & Operation
+
+### Command Line Options
+
+**Calibration:**
+```bash
+python3 -m src.main --calibrate-physics
+```
+- Trains model on historical data from InfluxDB
+- Duration: `TRAINING_LOOKBACK_HOURS` (default: 7 days)
+- Then starts normal operation
+- Run this when first setting up or after major house changes
+
+**Validation:**
+```bash
+python3 -m src.main --validate-physics
+```
+- Tests model predictions across temperature ranges
+- Exits without modifying anything
+- Useful for verifying model behavior
+
+**Debug Mode:**
+```bash
+python3 -m src.main --debug
+```
+- Enables verbose logging
+- Includes detailed feature vectors and model decisions
+- Warning: Can be very noisy
+
+**Normal Operation:**
+```bash
+python3 -m src.main
+```
+- Standard operation mode
+- Recommended for production use
+
+### Operating Modes
+
+**Starting in Shadow Mode (Recommended):**
+1. Configure different entity IDs in `.env`:
+   ```
+   TARGET_OUTLET_TEMP_ENTITY_ID=sensor.ml_vorlauftemperatur
+   ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID=sensor.hp_target_temp_circuit1
+   ```
+2. Keep your existing heat curve automation active
+3. ML calculates but doesn't control heating
+4. Monitor shadow metrics in logs
+5. When `shadow_ml_mae < shadow_hc_mae` and confident, switch to active mode
+
+**Switching to Active Mode:**
+1. Update `.env` to use same entity:
+   ```
+   ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID=sensor.ml_vorlauftemperatur
+   ```
+2. Disable your heat curve automation
+3. Restart ml_heating service:
+   ```bash
+   sudo systemctl restart ml_heating.service
+   ```
+4. ML now controls heating directly
+
+**You can switch back and forth as needed** - the model continues learning in both modes.
+
+### Typical Workflow
+
+1. **Week 1: Shadow Mode**
+   - Let ML observe and learn
+   - Monitor shadow metrics
+   - Compare ML vs heat curve performance
+
+2. **Week 2: Active Mode (if metrics good)**
+   - ML takes control
+   - Monitor confidence and error metrics
+   - Check comfort and energy consumption
+
+3. **Ongoing:**
+   - Monitor `sensor.ml_heating_state` for issues
+   - Check logs occasionally
+   - Recalibrate seasonally if needed
+
+### Safety Considerations
+
+- Always monitor initial operation closely
+- Set up alerts for state code 3 (network error) and 7 (model error)
+- Consider keeping your heat curve automation as a backup
+- Monitor confidence levels - typical good operation shows 0.9+
+- If performance degrades, recalibrate or switch back to shadow mode
