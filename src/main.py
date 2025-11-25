@@ -1,21 +1,15 @@
 """
 This module is the central entry point and main control loop for the application.
 
-It orchestrates the entire process of data collection, online learning,
-prediction, and action. The script operates in a continuous loop,
-performing the following key steps in each iteration:
-1.  **Initialization**: Loads the ML model and application state.
+It orchestrates the entire process of data collection, prediction, and action
+using the enhanced physics-based heating model. The script operates in a
+continuous loop, performing the following key steps in each iteration:
+1.  **Initialization**: Loads the physics model and application state.
 2.  **Data Fetching**: Gathers the latest sensor data from Home Assistant.
-3.  **Online Learning**: Updates the model with the outcome of the previous
-    cycle.
-4.  **Feature Engineering**: Builds a feature set from current and
-    historical data.
-5.  **Prediction**: Uses the model to find the optimal heating temperature.
-6.  **Action**: Sets the new target temperature in Home Assistant.
-7.  **State Persistence**: Saves the current state for the next cycle.
-
-The script also supports an initial training mode (`--initial-train`) to
-bootstrap the model using historical data from InfluxDB.
+3.  **Feature Engineering**: Builds a feature set from current and historical data.
+4.  **Prediction**: Uses the physics model to find the optimal heating temperature.
+5.  **Action**: Sets the new target temperature in Home Assistant.
+6.  **State Persistence**: Saves the current state for the next cycle.
 """
 import argparse
 import logging
@@ -23,33 +17,23 @@ import time
 from datetime import datetime, timezone
 
 import numpy as np
+import pandas as pd
 from dotenv import load_dotenv
 
 from . import config
-from .feature_builder import build_features
+from .physics_features import build_physics_features
 from .ha_client import create_ha_client, get_sensor_attributes
 from .influx_service import create_influx_service
 from .model_wrapper import (
     find_best_outlet_temp,
     get_feature_importances,
-    initial_train,
     load_model,
     save_model,
 )
-
-# Import realistic physics model components from src package
-try:
-    from .physics_model import RealisticPhysicsModel
-    from .physics_calibration import (
-        train_realistic_physics_model,
-        validate_physics_model,
-        deploy_physics_only_model
-    )
-except ImportError:
-    RealisticPhysicsModel = None
-    train_realistic_physics_model = None
-    validate_physics_model = None
-    deploy_physics_only_model = None
+from .physics_calibration import (
+    train_realistic_physics_model,
+    validate_physics_model,
+)
 from .state_manager import load_state, save_state
 
 
@@ -136,40 +120,26 @@ def main(args):
     logging.getLogger("urllib3").setLevel(logging.INFO)
 
     # --- Initialization ---
-    # Load the persisted model, metrics, and application state from files.
+    # Load the persisted physics model, metrics, and application state from files.
     # If they don't exist, create new instances.
     model, mae, rmse = load_model()
+    
+    # Shadow mode metrics to compare ML vs heat curve performance
+    from river import metrics as river_metrics
+    shadow_ml_mae = river_metrics.MAE()
+    shadow_ml_rmse = river_metrics.RMSE()
+    shadow_hc_mae = river_metrics.MAE()
+    shadow_hc_rmse = river_metrics.RMSE()
+    
     influx_service = create_influx_service()
 
-    # --- Initial Training ---
-    # If the --initial-train flag is set, train the model on historical data
-    # from InfluxDB to give it a warm start.
-    if args.initial_train:
-        initial_train(model, mae, rmse, influx_service)
-        save_model(model, mae, rmse)
-        # Log feature importances to understand what the model learned
-        # initially.
-        importances = get_feature_importances(model)
-        if importances:
-            logging.info("Initial Feature Importances:")
-            for feature, importance in sorted(
-                importances.items(), key=lambda item: item[1], reverse=True
-            ):
-                logging.info(f"  - {feature}: {importance:.4f}")
-            influx_service.write_feature_importances(
-                importances, bucket=config.INFLUX_FEATURES_BUCKET
-            )
-    
-    # --- Realistic Physics Model Calibration ---
+    # --- Physics Model Calibration ---
     if args.calibrate_physics:
-        if train_realistic_physics_model is None:
-            logging.error("Realistic physics training not available. Install required dependencies.")
-            return
         try:
-            logging.info("=== CALIBRATING REALISTIC PHYSICS MODEL ===")
+            logging.info("=== CALIBRATING PHYSICS MODEL ===")
             result = train_realistic_physics_model()
             if result:
-                logging.info("✅ Realistic physics model calibrated successfully!")
+                logging.info("✅ Physics model calibrated successfully!")
                 logging.info("🔄 Restart ml_heating service to use new model:")
                 logging.info("   systemctl restart ml_heating")
             else:
@@ -180,9 +150,6 @@ def main(args):
     
     # --- Physics Validation ---
     if args.validate_physics:
-        if validate_physics_model is None:
-            logging.error("Realistic physics validation not available.")
-            return
         try:
             result = validate_physics_model()
             if result:
@@ -191,28 +158,6 @@ def main(args):
                 logging.error("❌ Physics validation failed!")
         except Exception as e:
             logging.error("Physics validation error: %s", e, exc_info=True)
-        return
-    
-    # --- Physics-Only Mode ---
-    if args.physics_only:
-        if RealisticPhysicsModel is None:
-            logging.error("Realistic physics model not available.")
-            return
-        logging.info("=== PHYSICS-ONLY MODE ===")
-        logging.info("Using only realistic physics model (no ML training)")
-        
-        # Create physics model directly
-        from .model_wrapper import MockMetric
-        model = RealisticPhysicsModel()
-        mae = MockMetric(0.15)  # Preset reasonable performance
-        rmse = MockMetric(0.20)
-        save_model(model, mae, rmse)
-        logging.info("✅ Physics-only model deployed!")
-    
-    if args.train_only:
-        logging.warning(
-            "Training complete. Exiting as requested by --train-only flag."
-        )
         return
 
     # --- Main Control Loop ---
@@ -258,6 +203,116 @@ def main(args):
                     )
                 time.sleep(300)
                 continue
+
+            # --- Step 1: Online Learning from Previous Cycle ---
+            # Learn from the results of the previous cycle. This allows
+            # the model to continuously adapt to the actual house behavior,
+            # whether running in active mode (model controls heating) or
+            # shadow mode (heat curve controls heating).
+            last_run_features = state.get("last_run_features")
+            last_indoor_temp = state.get("last_indoor_temp")
+            last_final_temp_stored = state.get("last_final_temp")
+
+            if (last_run_features is not None and
+                    last_indoor_temp is not None and
+                    last_final_temp_stored is not None):
+
+                # Read the actual target outlet temp that was applied.
+                # This reads what temperature was actually set by either:
+                # - The model in active mode
+                # - The heat curve in shadow mode
+                # By reading it now (start of next cycle), we give it time
+                # to update after the previous cycle's set_state call.
+                actual_applied_temp = ha_client.get_state(
+                    config.ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID, all_states
+                )
+
+                if actual_applied_temp is None:
+                    logging.debug(
+                        "Could not read actual applied temp, using "
+                        "last_final_temp as fallback"
+                    )
+                    actual_applied_temp = last_final_temp_stored
+
+                # Get current indoor temperature to calculate actual change
+                current_indoor = ha_client.get_state(
+                    config.INDOOR_TEMP_ENTITY_ID, all_states
+                )
+
+                if current_indoor is not None:
+                    actual_indoor_change = current_indoor - last_indoor_temp
+
+                    # Create learning features with the actual outlet temp
+                    # that was applied
+                    learning_features = last_run_features.copy()
+                    if isinstance(learning_features, pd.DataFrame):
+                        learning_features = learning_features.to_dict(
+                            orient="records"
+                        )[0]
+
+                    learning_features["outlet_temp"] = actual_applied_temp
+                    learning_features["outlet_temp_sq"] = (
+                        actual_applied_temp ** 2
+                    )
+                    learning_features["outlet_temp_cub"] = (
+                        actual_applied_temp ** 3
+                    )
+
+                    # Learn from the actual result
+                    try:
+                        model.learn_one(
+                            learning_features, actual_indoor_change
+                        )
+                        logging.debug(
+                            "Online learning: applied_temp=%.1f°C, "
+                            "indoor_change=%.3f°C",
+                            actual_applied_temp,
+                            actual_indoor_change
+                        )
+                    except Exception as e:
+                        logging.warning(
+                            "Online learning failed: %s", e, exc_info=True
+                        )
+                    
+                    # Shadow mode error tracking
+                    # Track what error ML and heat curve made
+                    shadow_mode_active = (
+                        config.TARGET_OUTLET_TEMP_ENTITY_ID !=
+                        config.ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID
+                    )
+                    
+                    if shadow_mode_active and actual_applied_temp != last_final_temp_stored:
+                        # ML's hypothetical error (what it would have made)
+                        ml_features = last_run_features.copy()
+                        if isinstance(ml_features, pd.DataFrame):
+                            ml_features = ml_features.to_dict(orient="records")[0]
+                        ml_features["outlet_temp"] = last_final_temp_stored
+                        ml_predicted_change = model.predict_one(ml_features)
+                        ml_error = abs(ml_predicted_change - actual_indoor_change)
+                        
+                        # Heat curve's actual error
+                        hc_predicted_change = model.predict_one(learning_features)
+                        hc_error = abs(hc_predicted_change - actual_indoor_change)
+                        
+                        # Update shadow metrics
+                        shadow_ml_mae.update(0, ml_error)
+                        shadow_ml_rmse.update(0, ml_error)
+                        shadow_hc_mae.update(0, hc_error)
+                        shadow_hc_rmse.update(0, hc_error)
+                        
+                        logging.debug(
+                            "Shadow tracking: ML_error=%.3f, HC_error=%.3f",
+                            ml_error, hc_error
+                        )
+                else:
+                    logging.debug(
+                        "Skipping online learning: "
+                        "current indoor temp unavailable"
+                    )
+            else:
+                logging.debug(
+                    "Skipping online learning: no data from previous cycle"
+                )
 
             # --- Check for blocking modes (DHW, Defrost) ---
             # Skip the control logic if the heat pump is busy with other tasks
@@ -311,26 +366,9 @@ def main(args):
                     last_final_temp = state.get("last_final_temp")
 
                     if last_final_temp is not None:
-                        logging.info(
-                            "Restoring last known target temperature of %.1f°C.",
-                            last_final_temp,
-                        )
-                        ha_client.set_state(
-                            config.TARGET_OUTLET_TEMP_ENTITY_ID,
-                            last_final_temp,
-                            get_sensor_attributes(
-                                config.TARGET_OUTLET_TEMP_ENTITY_ID
-                            ),
-                            round_digits=0,
-                        )
-
                         # Determine whether the outlet is currently hotter or colder than
                         # the last target. For DHW-like events the outlet will be hotter;
-                        # for defrost it can be colder due to reversed flow. Choose the
-                        # waiting direction accordingly and enforce a timeout.
-                        start_time = time.time()
-                        max_seconds = config.GRACE_PERIOD_MAX_MINUTES * 60
-
+                        # for defrost it can be colder due to reversed flow.
                         actual_outlet_temp_start = ha_client.get_state(
                             config.ACTUAL_OUTLET_TEMP_ENTITY_ID,
                             ha_client.get_all_states(),
@@ -347,12 +385,56 @@ def main(args):
                                     last_final_temp,
                                 )
                             else:
-                                # Choose wait condition based on initial direction.
+                                # Choose wait condition and target based on
+                                # initial direction. For faster response:
+                                # cool-down: target + MAX_TEMP_CHANGE
+                                # warm-up: target - MAX_TEMP_CHANGE
                                 wait_for_cooling = delta0 > 0
+                                if wait_for_cooling:
+                                    # Outlet hot: aggressive cool-down target
+                                    grace_target = (
+                                        last_final_temp +
+                                        config.MAX_TEMP_CHANGE_PER_CYCLE
+                                    )
+                                else:
+                                    # Outlet cold: aggressive warm-up target
+                                    grace_target = (
+                                        last_final_temp -
+                                        config.MAX_TEMP_CHANGE_PER_CYCLE
+                                    )
+                                
                                 logging.info(
-                                    "Grace period: initial outlet delta %.1f°C -> waiting for %s (timeout %d min).",
+                                    "Restoring outlet target: %.1f°C "
+                                    "(last=%.1f°C, actual=%.1f°C, %s)",
+                                    grace_target,
+                                    last_final_temp,
+                                    actual_outlet_temp_start,
+                                    (
+                                        "cool-down"
+                                        if wait_for_cooling
+                                        else "warm-up"
+                                    ),
+                                )
+                                ha_client.set_state(
+                                    config.TARGET_OUTLET_TEMP_ENTITY_ID,
+                                    grace_target,
+                                    get_sensor_attributes(
+                                        config.TARGET_OUTLET_TEMP_ENTITY_ID
+                                    ),
+                                    round_digits=0,
+                                )
+
+                                start_time = time.time()
+                                max_seconds = config.GRACE_PERIOD_MAX_MINUTES * 60
+                                logging.info(
+                                    "Grace period: initial outlet delta %.1f°C "
+                                    "-> waiting for %s (timeout %d min).",
                                     delta0,
-                                    "actual <= target" if wait_for_cooling else "actual >= target",
+                                    (
+                                        "actual <= target"
+                                        if wait_for_cooling
+                                        else "actual >= target"
+                                    ),
                                     config.GRACE_PERIOD_MAX_MINUTES,
                                 )
 
@@ -395,22 +477,22 @@ def main(args):
                                         )
                                         break
                                     # If outlet started hotter than target, wait until it cools
-                                    # to <= target. If it started colder (defrost), wait until
-                                    # it warms to >= target.
-                                    if wait_for_cooling and actual_outlet_temp <= last_final_temp:
+                                    # to <= grace_target. If it started colder (defrost), wait until
+                                    # it warms to >= grace_target.
+                                    if wait_for_cooling and actual_outlet_temp <= grace_target:
                                         logging.info(
                                             "Actual outlet temp (%.1f°C) has cooled to or below"
-                                            " target (%.1f°C). Resuming control.",
+                                            " grace target (%.1f°C). Resuming control.",
                                             actual_outlet_temp,
-                                            last_final_temp,
+                                            grace_target,
                                         )
                                         break
-                                    if (not wait_for_cooling) and actual_outlet_temp >= last_final_temp:
+                                    if (not wait_for_cooling) and actual_outlet_temp >= grace_target:
                                         logging.info(
                                             "Actual outlet temp (%.1f°C) has warmed to or above"
-                                            " target (%.1f°C). Resuming control.",
+                                            " grace target (%.1f°C). Resuming control.",
                                             actual_outlet_temp,
-                                            last_final_temp,
+                                            grace_target,
                                         )
                                         break
                                     elapsed = time.time() - start_time
@@ -421,10 +503,16 @@ def main(args):
                                         )
                                         break
                                     logging.info(
-                                        "Waiting for outlet to %s target (current: %.1f°C, target: %.1f°C). Elapsed: %d/%d min",
-                                        "cool to" if wait_for_cooling else "warm to",
+                                        "Waiting for outlet to %s grace target "
+                                        "(current: %.1f°C, target: %.1f°C). "
+                                        "Elapsed: %d/%d min",
+                                        (
+                                            "cool to"
+                                            if wait_for_cooling
+                                            else "warm to"
+                                        ),
                                         actual_outlet_temp,
-                                        last_final_temp,
+                                        grace_target,
                                         int(elapsed / 60),
                                         config.GRACE_PERIOD_MAX_MINUTES,
                                     )
@@ -450,6 +538,43 @@ def main(args):
                         logging.debug(
                             "Failed to refresh HA states after grace period.", exc_info=True
                         )
+
+            # --- Check if heating system is active ---
+            # Skip if the climate entity is not in 'heat' mode
+            heating_state = ha_client.get_state(
+                config.HEATING_STATUS_ENTITY_ID, all_states
+            )
+            if heating_state not in ("heat", "auto"):
+                logging.info(
+                    "Heating system not active (state: %s), skipping cycle.",
+                    heating_state
+                )
+                try:
+                    attributes_state = get_sensor_attributes(
+                        "sensor.ml_heating_state"
+                    )
+                    attributes_state.update(
+                        {
+                            "state_description": f"Heating off ({heating_state})",
+                            "heating_state": heating_state,
+                            "last_updated": datetime.now(
+                                timezone.utc
+                            ).isoformat(),
+                        }
+                    )
+                    ha_client.set_state(
+                        "sensor.ml_heating_state",
+                        6,
+                        attributes_state,
+                        round_digits=None,
+                    )
+                except Exception:
+                    logging.debug(
+                        "Failed to write HEATING_OFF state to HA.",
+                        exc_info=True
+                    )
+                time.sleep(300)
+                continue
 
             if is_blocking:
                 logging.info(
@@ -565,61 +690,9 @@ def main(args):
                 time.sleep(300)
                 continue
 
-            # --- Step 1: Online Learning ---
-            # This is the heart of the "online" or "incremental" learning
-            # process. The script retrieves the features and indoor temperature
-            # from the *previous* cycle. It then calculates the *actual* change
-            # in indoor temperature that occurred during that last cycle. This
-            # actual outcome is used to update (retrain) the model, allowing it
-            # to continuously adapt to changing conditions.
-            last_run_features = state.get("last_run_features")
-            last_indoor_temp = state.get("last_indoor_temp")
-            last_avg_other_rooms_temp = state.get("last_avg_other_rooms_temp")
-            last_fireplace_on = state.get("last_fireplace_on", False)
-
+            # --- Step 1: State Retrieval ---
+            # Retrieve the previous cycle's state for context and history.
             prediction_history = state.get("prediction_history", [])
-            if last_run_features is not None and last_indoor_temp is not None:
-                # Decide which temperature to use for learning based on the fireplace state of the last run
-                if last_fireplace_on and last_avg_other_rooms_temp is not None:
-                    learning_temp_current = avg_other_rooms_temp
-                    learning_temp_last = last_avg_other_rooms_temp
-                    logging.info(
-                        "Fireplace was on. Learning based on avg other rooms temp."
-                    )
-                else:
-                    learning_temp_current = actual_indoor
-                    learning_temp_last = last_indoor_temp
-                    logging.info("Fireplace was off. Learning based on main indoor temp.")
-
-                # Calculate the true temperature change since the last run.
-                actual_delta = learning_temp_current - learning_temp_last
-                logging.info(
-                    "Learning from last cycle's delta_t: %.3f", actual_delta
-                )
-                # Get the features and prediction from the last cycle.
-                x = last_run_features.to_dict(orient="records")[0]
-
-                # Determine if the previous run was a long hot-water blocking event.
-                last_blocking_reasons = state.get("last_blocking_reasons", []) or []
-                dhw_like_blockers = {
-                    config.DHW_STATUS_ENTITY_ID,
-                    config.DISINFECTION_STATUS_ENTITY_ID,
-                    config.DHW_BOOST_HEATER_STATUS_ENTITY_ID,
-                }
-                if any(b in dhw_like_blockers for b in last_blocking_reasons):
-                    logging.info(
-                        "Previous cycle had DHW-like blocking (%s); skipping learning for that cycle.",
-                        last_blocking_reasons,
-                    )
-                else:
-                    y_pred = model.predict_one(x)
-                    # Update the model with the actual outcome.
-                    model.learn_one(x, actual_delta)
-                    # Update the rolling performance metrics.
-                    mae.update(actual_delta, y_pred)
-                    rmse.update(actual_delta, y_pred)
-                    # Persist the updated model and metrics.
-                    save_model(model, mae, rmse)
 
             # --- Step 2: Feature Building ---
             # Gathers all the necessary data points (current sensor values,
@@ -637,8 +710,8 @@ def main(args):
                     "Fireplace is OFF. Using main indoor temp for prediction."
                 )
 
-            features, outlet_history = build_features(
-                ha_client, influx_service, all_states, target_indoor_temp
+            features, outlet_history = build_physics_features(
+                ha_client, influx_service
             )
             if features is None:
                 logging.warning("Feature building failed, skipping cycle.")
@@ -646,15 +719,9 @@ def main(args):
                 continue
 
             # --- Step 3: Prediction ---
-            # This step determines the best outlet temperature for the
-            # upcoming cycle. It involves several sub-steps:
-            # 1. Use the `find_best_outlet_temp` function to simulate different
-            #    outlet temperatures and let the model predict the outcome for
-            #    each. The one that gets closest to the target indoor
-            #    temperature is chosen. Baseline-based logic has been removed;
-            #    the function always returns the ML proposal (state still records
-            #    confidence).
-            # Find the best outlet temperature by simulating different values.
+            # Use the physics model to find the optimal outlet temperature.
+            # The model simulates different temperatures and predicts which
+            # will achieve the target indoor temperature most effectively.
             error_target_vs_actual = target_indoor_temp - prediction_indoor_temp
             (
                 suggested_temp,
@@ -758,13 +825,6 @@ def main(args):
                 get_sensor_attributes(config.TARGET_OUTLET_TEMP_ENTITY_ID),
                 round_digits=0,
             )
-            ha_client.set_state(
-                config.PREDICTED_INDOOR_TEMP_ENTITY_ID,
-                predicted_indoor,
-                get_sensor_attributes(
-                    config.PREDICTED_INDOOR_TEMP_ENTITY_ID
-                ),
-            )
 
             # --- Log Metrics ---
             logging.debug("Logging model metrics")
@@ -825,6 +885,57 @@ def main(args):
                     "Failed to write ML state to HA.", exc_info=True
                 )
 
+            # --- Shadow Mode Comparison Logging ---
+            # If TARGET_OUTLET_TEMP and ACTUAL_TARGET_OUTLET_TEMP are
+            # different entities, we're in shadow mode. Log comparison.
+            shadow_mode_active = (
+                config.TARGET_OUTLET_TEMP_ENTITY_ID !=
+                config.ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID
+            )
+            
+            if shadow_mode_active:
+                # Read what the heat curve actually set
+                heat_curve_temp = ha_client.get_state(
+                    config.ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID, all_states
+                )
+                
+                if heat_curve_temp is not None and heat_curve_temp != final_temp:
+                    # Predict what indoor temp the heat curve will achieve
+                    heat_curve_features = features.copy()
+                    heat_curve_features["outlet_temp"] = heat_curve_temp
+                    heat_curve_predicted = model.predict_one(
+                        heat_curve_features.to_dict(orient="records")[0]
+                    )
+                    heat_curve_indoor = actual_indoor + heat_curve_predicted
+                    
+                    # Calculate errors from target
+                    ml_error = abs(predicted_indoor - target_indoor_temp)
+                    heat_curve_error = abs(heat_curve_indoor - target_indoor_temp)
+                    
+                    logging.info(
+                        "SHADOW MODE COMPARISON: ML: %.1f°C→%.2f°C [err=%.2f] "
+                        "vs HeatCurve: %.1f°C→%.2f°C [err=%.2f] | "
+                        "Target: %.1f°C",
+                        final_temp,
+                        predicted_indoor,
+                        ml_error,
+                        heat_curve_temp,
+                        heat_curve_indoor,
+                        heat_curve_error,
+                        target_indoor_temp,
+                    )
+
+            # Log shadow metrics if in shadow mode
+            if shadow_mode_active:
+                logging.info(
+                    "SHADOW METRICS: ML: MAE=%.3f RMSE=%.3f | "
+                    "HeatCurve: MAE=%.3f RMSE=%.3f",
+                    shadow_ml_mae.get(),
+                    shadow_ml_rmse.get(),
+                    shadow_hc_mae.get(),
+                    shadow_hc_rmse.get(),
+                )
+
             log_message = (
                 "Target: %.1f°C | Suggested: %.1f°C | Final: %.1f°C | "
                 "Actual Indoor: %.2f°C | Predicted Indoor: %.2f°C | "
@@ -842,10 +953,27 @@ def main(args):
                 rmse.get(),
             )
 
-            # --- Step 6: Save State for Next Run ---
-            # The features and indoor temperature from the *current* run are saved
-            # to a file. This data will be loaded at the start of the next loop
-            # iteration to be used in the "Online Learning" step.
+            # --- Step 6: Save Model & State for Next Run ---
+            # Save the model with learned parameters and metrics so they
+            # survive restarts. This preserves continuous learning progress.
+            try:
+                save_model(model, mae, rmse)
+                logging.debug(
+                    "Model saved with MAE=%.3f, RMSE=%.3f",
+                    mae.get(),
+                    rmse.get()
+                )
+            except Exception as save_err:
+                logging.error(
+                    "Failed to save model: %s", save_err, exc_info=True
+                )
+
+            # The features and indoor temperature from the *current* run are
+            # saved to a file. This data will be loaded at the start of the
+            # next loop iteration to be used in the "Online Learning" step.
+            # Note: We save final_temp here, but will read the actual applied
+            # temp from ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID at the start of
+            # the next cycle (after it has had time to update).
             state_to_save = {
                 "last_run_features": features,
                 "last_indoor_temp": actual_indoor,
@@ -854,7 +982,9 @@ def main(args):
                 "prediction_history": prediction_history,
                 "last_final_temp": final_temp,
                 "last_is_blocking": is_blocking,
-                "last_blocking_reasons": blocking_reasons if is_blocking else [],
+                "last_blocking_reasons": (
+                    blocking_reasons if is_blocking else []
+                ),
             }
             save_state(**state_to_save)
             # Update in-memory state so the idle poll uses fresh data
@@ -895,32 +1025,17 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="ML Heating Controller"
-    )
-    parser.add_argument(
-        "--initial-train",
-        action="store_true",
-        help="Run the initial training on historical data.",
-    )
-    parser.add_argument(
-        "--train-only",
-        action="store_true",
-        help="Run the initial training and then exit.",
+        description="Physics-Based Heating Controller"
     )
     parser.add_argument(
         "--calibrate-physics",
         action="store_true",
-        help="Run realistic physics model calibration using target temperature history.",
-    )
-    parser.add_argument(
-        "--physics-only",
-        action="store_true",
-        help="Use only realistic physics model (skip ML training entirely).",
+        help="Calibrate the physics model using historical temperature data.",
     )
     parser.add_argument(
         "--validate-physics",
         action="store_true",
-        help="Test physics behavior across temperature ranges and exit.",
+        help="Test physics model behavior across temperature ranges and exit.",
     )
     parser.add_argument(
         "--debug",

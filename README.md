@@ -3,7 +3,7 @@
 > **Warning**
 > This project is an initial test and proof of concept. It is not recommended for unattended production use. Please use it at your own risk and monitor its behavior carefully.
 
-This project implements a machine learning-based heating control system that integrates with Home Assistant. It uses an online learning model to predict the optimal water outlet temperature for a heat pump to efficiently maintain a target indoor temperature.
+This project implements a physics-based heating control system that integrates with Home Assistant. It uses the RealisticPhysicsModel to predict the optimal water outlet temperature for a heat pump to efficiently maintain a target indoor temperature.
 
 ## Goal
 
@@ -15,7 +15,7 @@ The primary goal of this project is to improve upon traditional heating curves b
 
 ## Feature Set
 
--   **Online Learning:** The system continuously learns and adapts. It uses a `river` machine learning model (Adaptive Random Forest Regressor) that updates itself after every cycle based on real-world results.
+-   **Physics-Based Model:** The system uses a RealisticPhysicsModel that learns house characteristics and external heat source effects from historical data. The model adapts its parameters based on real-world results.
 -   **Home Assistant Integration:** Seamlessly fetches sensor data (temperatures, PV power, etc.) from and sends control commands (target outlet temperature) back to Home Assistant.
 -   **InfluxDB for Historical Data:** Uses an InfluxDB database to fetch historical data for initial model training.
 -   **Dynamic Boost:** Applies a final correction based on the current error between the target and actual indoor temperatures to react quickly to changes.
@@ -77,46 +77,40 @@ The model uses a rich set of features engineered from various data sources to un
 
 ## Model and Approach
 
-The controller includes history-derived defrost metrics (`defrost_recent`, `defrost_count`, `defrost_age_min`) computed from the historical InfluxDB window so short defrost events are visible to the model. The online learning loop now skips learning for long hot-water blocking activities (DHW, disinfection, DHW boost heater) to avoid contaminating the learning signal; defrost cycles remain part of the learning signal and are represented via the new defrost metrics.
+The controller uses a **RealisticPhysicsModel** that learns actual house characteristics and external heat source effects from historical data. The model includes:
 
-### Online Training
+-   **Core Physics Parameters:** Base heating rate, target temperature influence, outdoor temperature factor
+-   **External Heat Sources:** PV solar warming, fireplace heating, TV heat contribution
+-   **System States:** DHW heating, defrosting, disinfection handling
+-   **Forecast Integration:** 4-hour weather and PV forecasts for anticipatory control
 
-This project uses an **online machine learning** approach, which means the model learns incrementally from a stream of live data.
+### Physics Model Calibration
 
-1.  **Initial Training (Optional):** When first run with the `--initial-train` flag, the model is "warmed up" using historical data from InfluxDB. The duration of this lookback period is configurable via the `TRAINING_LOOKBACK_HOURS` environment variable (default is 168 hours, or 7 days). This gives the model a solid initial understanding of the home's thermal dynamics.
-2.  **Live Learning Cycle:**
-    -   The system sets a target outlet temperature.
-    -   It waits for a cycle (e.g., 5 minutes).
-    -   It measures the *actual* change in indoor temperature.
-    -   It compares this to what it *predicted* would happen.
-    -   It calls the `learn_one` function to update the model with this new data point.
+The RealisticPhysicsModel can be calibrated using historical data:
 
-This continuous feedback loop allows the model to adapt to changing seasons, variations in home occupancy, and other dynamic factors without needing to be manually retrained. The model used is a `river.forest.ARFRegressor`, an Adaptive Random Forest that is well-suited for this kind of streaming data.
+1.  **Calibration (Recommended):** Run with the `--calibrate-physics` flag to train the model on historical data from InfluxDB. The duration of this lookback period is configurable via the `TRAINING_LOOKBACK_HOURS` environment variable (default is 168 hours, or 7 days).
+2.  **Adaptive Learning:** The model continuously adapts its parameters based on prediction errors, learning:
+    -   Base heating effectiveness
+    -   Target temperature influence
+    -   PV warming coefficient
+    -   Fireplace heating rate  
+    -   TV heat contribution
 
-### Preprocessing Pipeline
+### Why Physics-Based Model?
 
-Before the features are fed into the `ARFRegressor`, they go through a preprocessing pipeline created with `river.compose.Pipeline`. This pipeline ensures that different types of features are handled appropriately:
+The RealisticPhysicsModel approach was chosen for several key reasons:
 
-1.  **Numerical Feature Scaling:** Most features, such as temperatures, forecasts, and historical trends, are numerical. These are passed through a `river.preprocessing.StandardScaler`. This process standardizes the features by removing the mean and scaling to unit variance. Scaling is crucial for many machine learning algorithms as it helps prevent features with larger ranges from dominating the learning process.
-
-2.  **Binary Feature Passthrough:** Features that are inherently binary (e.g., `dhw_heating`, `is_weekend`, `tv_on`) are passed through without any transformation. Since they are already in a meaningful 0 or 1 representation, scaling is unnecessary.
-
-This combined pipeline ensures that the model receives well-conditioned data, which is essential for stable and effective online learning.
-
-### Why Adaptive Random Forest Regressor?
-
-The `ARFRegressor` from the `river` library was specifically chosen for several key reasons:
-
-1.  **Designed for Online Learning:** Unlike traditional batch models (e.g., from scikit-learn) that require periodic retraining on large datasets, `river` models are designed to learn from a continuous stream of data, one sample at a time. This is ideal for a system that needs to run and adapt 24/7.
-2.  **Adaptability to Concept Drift:** The "A" in ARF stands for "Adaptive." The model has built-in drift detection mechanisms (`PageHinkley` and `ADWIN`). This allows it to detect and adapt to "concept drift"—fundamental changes in the data's underlying patterns, such as the transition from winter to summer.
-3.  **Robustness of Ensembles:** As a random forest, it is an ensemble of many decision trees. This makes it more robust and less prone to overfitting than a single model.
-4.  **Built-in Uncertainty Measure:** The ensemble nature allows us to easily measure the model's uncertainty. By calculating the standard deviation of the predictions from all the individual trees, we get a reliable indicator of the model's "confidence." This is the basis for the confidence reporting mechanism.
+1.  **Transparency:** Physics-based calculations are interpretable and debuggable, unlike black-box ML models.
+2.  **Stability:** The model provides consistent, predictable behavior based on thermodynamic principles.
+3.  **Adaptability:** Parameters self-tune based on actual house behavior while respecting physical constraints.
+4.  **Efficiency:** No complex feature preprocessing or ensemble calculations required.
+5.  **Confidence:** Physics-based predictions have inherent high confidence due to their foundation in thermodynamics.
 
 ### The Prediction Pipeline: A Step-by-Step Filter
 
 The final target temperature is not a single prediction but the result of a multi-stage filtering and adjustment pipeline. This process is designed to ensure safety, stability, and accuracy, with each step refining the output of the previous one.
 
-1.  **Step 1: Confidence Check & Recording:** The model calculates its confidence by measuring the agreement among its internal decision trees and records it in the ML state sensor. Low confidence is noted but does not automatically bypass the ML pipeline; automations can inspect the `confidence` attribute to decide whether to ignore the ML suggestion.
+1.  **Step 1: Confidence Check & Recording:** The physics model has inherently high confidence due to its thermodynamic foundation. Confidence is recorded in the ML state sensor for monitoring purposes.
 
 2.  **Step 2: ML-Powered Search:** The model searches the configured absolute clamp range (`CLAMP_MIN_ABS` to `CLAMP_MAX_ABS`, step 0.5°C). For each candidate, it predicts the resulting indoor temperature and identifies the floating-point temperature that is predicted to get closest to the user's target. If multiple candidates are tied for being the closest, the one with the **lowest temperature** is chosen. This prioritizes energy efficiency by selecting the minimum required outlet temperature to achieve the best possible outcome.
 
@@ -160,6 +154,7 @@ State codes (numeric)
 - 3 = NETWORK_ERROR — Failed to fetch Home Assistant states or network calls
 - 4 = NO_DATA — Missing critical sensors or insufficient history for features
 - 5 = TRAINING — Running initial training / warm-up
+- 6 = HEATING_OFF — Heating system not in 'heat' or 'auto' mode — skipping this cycle
 - 7 = MODEL_ERROR — Exception occurred during prediction/learning
 
 Typical attributes
@@ -293,13 +288,13 @@ short defrost events but increase the Home Assistant API load. Set
 
 ### 4. Initial Training (Recommended)
 
-Run the script with the `--initial-train` flag. This will train the model on your recent historical data from InfluxDB.
+Run the script with the `--calibrate-physics` flag to calibrate the physics model on your recent historical data from InfluxDB.
 
 ```bash
-python3 -m src.main --initial-train
+python3 -m src.main --calibrate-physics
 ```
 
-You can use the `--train-only` flag to exit after training is complete.
+You can also validate the physics model behavior with `--validate-physics`.
 
 ### 5. Running as a systemd Service
 
@@ -347,6 +342,6 @@ To run the script continuously in the background, create a systemd service file.
 
 ## Script Parameters
 
--   `--initial-train`: Runs the initial training process on historical data from InfluxDB before starting the main loop.
--   `--train-only`: Runs the initial training process and then exits. Useful for warming up the model without starting the control loop.
+-   `--calibrate-physics`: Calibrates the RealisticPhysicsModel on historical data from InfluxDB, then starts the main control loop.
+-   `--validate-physics`: Validates the physics model behavior across temperature ranges and exits. Useful for testing model predictions.
 -   `--debug`: Enables verbose debug logging. Note that this may cause very noisy output from underlying libraries like `urllib3`. The application attempts to suppress this, but some messages may still appear.

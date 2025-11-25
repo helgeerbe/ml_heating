@@ -7,12 +7,10 @@ using historical target temperature data and actual house behavior.
 
 import logging
 import pandas as pd
-from river import metrics
 
 from . import config
 from .physics_model import RealisticPhysicsModel
-from .model_wrapper import save_model
-from .feature_builder import build_features_for_training
+from .model_wrapper import save_model, MAE, RMSE
 from .influx_service import InfluxService
 
 
@@ -23,8 +21,8 @@ def train_realistic_physics_model():
     
     # Initialize components
     model = RealisticPhysicsModel()
-    mae = metrics.MAE()
-    rmse = metrics.RMSE()
+    mae = MAE()
+    rmse = RMSE()
     
     influx = InfluxService(
         url=config.INFLUX_URL,
@@ -46,31 +44,76 @@ def train_realistic_physics_model():
     labels_list = []
     
     logging.info("Building features with target temperature context...")
+    
+    # Get column names
+    outlet_col = config.ACTUAL_OUTLET_TEMP_ENTITY_ID.split(".", 1)[-1]
+    indoor_col = config.INDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
+    outdoor_col = config.OUTDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
+    target_col = config.TARGET_INDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
+    dhw_col = config.DHW_STATUS_ENTITY_ID.split(".", 1)[-1]
+    disinfect_col = config.DISINFECTION_STATUS_ENTITY_ID.split(".", 1)[-1]
+    boost_col = config.DHW_BOOST_HEATER_STATUS_ENTITY_ID.split(".", 1)[-1]
+    defrost_col = config.DEFROST_STATUS_ENTITY_ID.split(".", 1)[-1]
+    pv1_col = config.PV1_POWER_ENTITY_ID.split(".", 1)[-1]
+    pv2_col = config.PV2_POWER_ENTITY_ID.split(".", 1)[-1]
+    pv3_col = config.PV3_POWER_ENTITY_ID.split(".", 1)[-1]
+    fireplace_col = config.FIREPLACE_STATUS_ENTITY_ID.split(".", 1)[-1]
+    tv_col = config.TV_STATUS_ENTITY_ID.split(".", 1)[-1]
+    
     for idx in range(12, len(df) - config.PREDICTION_HORIZON_STEPS):
-        features = build_features_for_training(df, idx)
-        if features is None:
-            continue
+        row = df.iloc[idx]
         
-        # Add target temperature to features
-        target_temp_col = config.TARGET_INDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
-        target_temp = df.iloc[idx].get(target_temp_col, 21.0)
-        features['target_temp'] = float(target_temp)
+        # Extract core temperatures
+        outlet_temp = row.get(outlet_col)
+        indoor_temp = row.get(indoor_col)
+        outdoor_temp = row.get(outdoor_col)
+        target_temp = row.get(target_col, 21.0)
+        
+        # Get indoor lag (30 min = 3 steps back at 10 min intervals)
+        if idx >= 3:
+            indoor_lag_30m = df.iloc[idx - 3].get(indoor_col)
+        else:
+            indoor_lag_30m = indoor_temp
+        
+        # Skip if missing critical data
+        if pd.isna(outlet_temp) or pd.isna(indoor_temp) or pd.isna(outdoor_temp):
+            continue
         
         # Calculate actual temperature change
-        indoor_col = config.INDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
-        current_indoor = df.iloc[idx].get(indoor_col)
         future_indoor = df.iloc[idx + config.PREDICTION_HORIZON_STEPS].get(indoor_col)
-        
-        if pd.isna(current_indoor) or pd.isna(future_indoor) or pd.isna(target_temp):
+        if pd.isna(future_indoor) or pd.isna(target_temp):
             continue
         
-        actual_delta = float(future_indoor) - float(current_indoor)
+        actual_delta = float(future_indoor) - float(indoor_temp)
         
         # Filter for realistic heating scenarios
-        temp_gap = target_temp - current_indoor
-        if abs(temp_gap) > 2.0:  # Only learn from active heating/cooling needs
+        temp_gap = target_temp - indoor_temp
+        if abs(temp_gap) > 2.0:
             continue
-            
+        
+        # Build feature dictionary (only 19 features needed)
+        features = {
+            'outlet_temp': float(outlet_temp),
+            'indoor_temp_lag_30m': float(indoor_lag_30m),
+            'target_temp': float(target_temp),
+            'outdoor_temp': float(outdoor_temp),
+            'dhw_heating': float(row.get(dhw_col, 0.0)),
+            'dhw_disinfection': float(row.get(disinfect_col, 0.0)),
+            'dhw_boost_heater': float(row.get(boost_col, 0.0)),
+            'defrosting': float(row.get(defrost_col, 0.0)),
+            'pv_now': float(row.get(pv1_col, 0.0)) + float(row.get(pv2_col, 0.0)) + float(row.get(pv3_col, 0.0)),
+            'fireplace_on': float(row.get(fireplace_col, 0.0)),
+            'tv_on': float(row.get(tv_col, 0.0)),
+            'temp_forecast_1h': float(outdoor_temp),
+            'temp_forecast_2h': float(outdoor_temp),
+            'temp_forecast_3h': float(outdoor_temp),
+            'temp_forecast_4h': float(outdoor_temp),
+            'pv_forecast_1h': 0.0,
+            'pv_forecast_2h': 0.0,
+            'pv_forecast_3h': 0.0,
+            'pv_forecast_4h': 0.0,
+        }
+        
         features_list.append(features)
         labels_list.append(actual_delta)
     

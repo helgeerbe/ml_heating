@@ -55,12 +55,9 @@ STATE_FILE: str = os.getenv("STATE_FILE", "/opt/ml_heating/ml_state.pkl")
 # predicts.
 HISTORY_STEPS: int = int(os.getenv("HISTORY_STEPS", "6"))
 HISTORY_STEP_MINUTES: int = int(os.getenv("HISTORY_STEP_MINUTES", "10"))
-# Defines the prediction horizon for the model. Not currently used in the core logic.
+# Prediction horizon used during calibration to determine future target.
 PREDICTION_HORIZON_STEPS: int = int(
     os.getenv("PREDICTION_HORIZON_STEPS", "24")
-)
-PREDICTION_HORIZON_MINUTES: int = (
-    PREDICTION_HORIZON_STEPS * 5
 )
 # The number of hours of historical data to use for initial training.
 TRAINING_LOOKBACK_HOURS: int = int(
@@ -77,8 +74,6 @@ TRAINING_LOOKBACK_HOURS: int = int(
 # temperature.
 # TARGET_OUTLET_TEMP_ENTITY_ID: The sensor this script will create/update
 # with its calculated temperature.
-# PREDICTED_INDOOR_TEMP_ENTITY_ID: The sensor for the model's indoor temp
-# prediction.
 TARGET_INDOOR_TEMP_ENTITY_ID: str = os.getenv(
     "TARGET_INDOOR_TEMP_ENTITY_ID",
     "input_number.hp_auto_correct_target",
@@ -93,9 +88,11 @@ ACTUAL_OUTLET_TEMP_ENTITY_ID: str = os.getenv(
 TARGET_OUTLET_TEMP_ENTITY_ID: str = os.getenv(
     "TARGET_OUTLET_TEMP_ENTITY_ID", "sensor.ml_vorlauftemperatur"
 )
-# The entity for the predicted indoor temperature sensor.
-PREDICTED_INDOOR_TEMP_ENTITY_ID: str = os.getenv(
-    "PREDICTED_INDOOR_TEMP_ENTITY_ID", "sensor.ml_predicted_indoor_temp"
+# The entity to read what outlet temperature was actually set (for learning).
+# In active mode: should match TARGET_OUTLET_TEMP_ENTITY_ID
+# In shadow mode: reads the heat curve's setting
+ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID: str = os.getenv(
+    "ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID", "sensor.hp_target_temp_circuit1"
 )
 
 # --- Blocking & Status Entity IDs ---
