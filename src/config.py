@@ -198,3 +198,31 @@ RMSE_ENTITY_ID: str = os.getenv("RMSE_ENTITY_ID", "sensor.ml_model_rmse")
 # Use environment variables CLAMP_MIN_ABS and CLAMP_MAX_ABS to override defaults.
 CLAMP_MIN_ABS: float = float(os.getenv("CLAMP_MIN_ABS", "14.0"))
 CLAMP_MAX_ABS: float = float(os.getenv("CLAMP_MAX_ABS", "65.0"))
+
+# --- Multi-Lag Learning Configuration ---
+# Enable time-delayed learning for external heat sources (PV, fireplace, TV)
+# to capture realistic time delays (e.g., PV warming peaks 60-90min after production)
+ENABLE_MULTI_LAG_LEARNING: bool = (
+    os.getenv("ENABLE_MULTI_LAG_LEARNING", "true").lower() == "true"
+)
+PV_LAG_STEPS: int = int(os.getenv("PV_LAG_STEPS", "4"))
+FIREPLACE_LAG_STEPS: int = int(os.getenv("FIREPLACE_LAG_STEPS", "4"))
+TV_LAG_STEPS: int = int(os.getenv("TV_LAG_STEPS", "2"))
+
+# --- Seasonal Adaptation Configuration ---
+# Enable automatic seasonal learning to eliminate need for recalibration
+# between winter and summer. Uses cos/sin modulation.
+ENABLE_SEASONAL_ADAPTATION: bool = (
+    os.getenv("ENABLE_SEASONAL_ADAPTATION", "true").lower() == "true"
+)
+SEASONAL_LEARNING_RATE: float = float(
+    os.getenv("SEASONAL_LEARNING_RATE", "0.01")
+)
+MIN_SEASONAL_SAMPLES: int = int(os.getenv("MIN_SEASONAL_SAMPLES", "100"))
+
+# --- Summer Learning Configuration ---
+# Enable learning from periods when HVAC is off (typically summer) for
+# cleaner signal of external source effects
+ENABLE_SUMMER_LEARNING: bool = (
+    os.getenv("ENABLE_SUMMER_LEARNING", "true").lower() == "true"
+)

@@ -851,6 +851,13 @@ def main(args):
             influx_service.write_feature_importances(
                 importances, bucket=config.INFLUX_FEATURES_BUCKET
             )
+            
+            # Export learning metrics to InfluxDB
+            learning_metrics = model.export_learning_metrics()
+            influx_service.write_feature_importances(
+                learning_metrics, bucket=config.INFLUX_FEATURES_BUCKET,
+                measurement="learning_parameters"
+            )
 
             # --- Update ML State sensor ---
             try:

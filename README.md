@@ -25,6 +25,9 @@ The primary goal is to improve upon traditional heat curves by creating a **self
 
 -   **Physics-Based Machine Learning:** Uses RealisticPhysicsModel that understands thermodynamic principles while learning your house's unique characteristics from real data
 -   **Online Learning:** Continuously adapts after every heating cycle - learns from what actually happened vs what was predicted
+-   **Multi-Lag Learning:** Captures time-delayed effects of heat sources (PV: 4 lags up to 120min, Fireplace: 4 lags up to 90min, TV: 2 lags up to 30min)
+-   **Seasonal Adaptation:** Automatic cos/sin modulation learns seasonal variations (±30-50%) without manual recalibration
+-   **Summer Learning:** Collects clean baseline data during HVAC-off periods for improved seasonal accuracy
 -   **Active & Shadow Modes:** Can run in active mode (controlling heating) or shadow mode (calculating but not applying, for safe testing and comparison)
 -   **Home Assistant Integration:** Seamless bi-directional integration - reads sensors, writes control temperatures, publishes metrics and diagnostics
 -   **InfluxDB Historical Data:** Leverages your existing Home Assistant/InfluxDB setup for initial calibration and historical feature engineering
@@ -65,13 +68,15 @@ The primary goal is to improve upon traditional heat curves by creating a **self
 -   **Performance Metrics:** Real-time MAE (Mean Absolute Error) and RMSE (Root Mean Square Error) tracking
 -   **Shadow Mode Metrics:** When in shadow mode, tracks separate metrics for ML vs heat curve performance comparison
 -   **Feature Importance Export:** Exports feature importance to InfluxDB for visualization and analysis
+-   **Learning Metrics Export:** Exports 43 learning parameters (core, multi-lag, seasonal, sample counts) to InfluxDB every cycle
+-   **Learning Dashboard:** Interactive Jupyter notebook (`00_learning_dashboard.ipynb`) for at-a-glance learning status
 -   **Detailed Logging:** Comprehensive logging of decisions, predictions, and learning progress
 
 ### Deployment
 
 -   **Systemd Service:** Production-ready systemd service configuration for reliable background operation
 -   **Automatic Restart:** Configured to restart on failure with 5-minute delay
--   **Jupyter Notebooks:** Four analysis notebooks included for model diagnosis, performance monitoring, behavior analysis, and validation
+-   **Jupyter Notebooks:** Six analysis notebooks included for learning dashboard, model diagnosis, performance monitoring, behavior analysis, validation, and multi-lag/seasonal analysis
 
 ## Contributing
 
@@ -110,10 +115,12 @@ ml_heating/
 │   ├── state_manager.py     # State persistence
 │   └── config.py            # Configuration
 ├── notebooks/               # Analysis notebooks
+│   ├── 00_learning_dashboard.ipynb
 │   ├── 01_physics_model_diagnosis.ipynb
 │   ├── 02_performance_monitoring.ipynb
 │   ├── 03_behavior_analysis.ipynb
-│   └── 04_model_validation.ipynb
+│   ├── 04_model_validation.ipynb
+│   └── 05_multilag_seasonal_analysis.ipynb
 ├── tests/                   # Unit tests
 ├── .env                     # Your configuration (not in git)
 ├── .env_sample              # Configuration template
@@ -189,9 +196,15 @@ The controller uses **RealisticPhysicsModel** - a physics-based machine learning
 - Outdoor temperature factor: Impact of outdoor conditions on heat loss
 
 **External Heat Sources (automatically calibrated):**
-- PV solar warming: Heat gain from solar power generation
-- Fireplace heating rate: Contribution from secondary heat sources
-- TV/electronics heat: Heat from appliances and devices
+- PV solar warming: Heat gain from solar power generation (with 4-lag time delays: 30, 60, 90, 120 min)
+- Fireplace heating rate: Contribution from secondary heat sources (with 4-lag time delays: 0, 30, 60, 90 min)
+- TV/electronics heat: Heat from appliances and devices (with 2-lag time delays: 0, 30 min)
+
+**Enhanced Learning Features:**
+- Multi-lag learning: Captures time-delayed thermal mass effects (activates at 200+ cycles)
+- Seasonal adaptation: Cos/sin modulation for automatic seasonal variation (±30-50% ranges)
+- Summer learning: Collects HVAC-off baseline data for clean seasonal learning (needs 100+ samples)
+- Backward compatible: Old models auto-initialize new features on first use
 
 **System States & Blocking:**
 - DHW heating, defrosting, disinfection, DHW boost heater
@@ -246,8 +259,9 @@ if error is large:
 Example: If the model consistently under-predicts temperature rise, it increases `base_heating_rate`, making future predictions higher for the same outlet temperature.
 
 **Level 2: External Heat Source Effects (Tracked Every Cycle)**
-The model tracks when external heat sources are active and correlates them with temperature changes:
+The model tracks when external heat sources are active and correlates them with temperature changes.
 
+**Basic tracking** (before cycle 200):
 ```python
 # When PV is active
 if pv_power > 100W:
@@ -260,6 +274,26 @@ if fireplace_on:
 # When TV is on
 if tv_on:
     track: (tv_status, actual_temperature_change)
+```
+
+**Multi-lag tracking** (after cycle 200):
+```python
+# Maintain history buffers (ring buffers)
+pv_history = [pv_30min_ago, pv_60min_ago, pv_90min_ago, pv_120min_ago]
+fireplace_history = [fp_now, fp_30min_ago, fp_60min_ago, fp_90min_ago]
+tv_history = [tv_now, tv_30min_ago]
+
+# Track detailed effects with lags
+if sufficient_data:
+    track: (pv_history, fireplace_history, tv_history, actual_temp_change)
+```
+
+**Seasonal tracking** (during HVAC-off periods):
+```python
+# When heating is off (summer)
+if not heating_active:
+    month = current_month
+    track: (month, external_sources, temp_change)  # Clean baseline without heating interference
 ```
 
 **Level 3: Effect Correlation Learning (Every 50 Cycles)**
@@ -323,28 +357,46 @@ if enough_pv_samples:
 **Example Learning Session:**
 
 ```
-Cycle 1-49: Collecting data
+Cycle 1-199: Collecting data (simple coefficients)
   PV effects tracked: [(500W, +0.15°C), (800W, +0.22°C), ...]
   Fireplace effects: [(1, +0.45°C), (1, +0.51°C), ...]
   Prediction errors: [-0.03°C, +0.05°C, +0.02°C, ...]
 
-Cycle 50: Learning update
+Cycle 200: Multi-lag activation
+  History buffers filled, switching to multi-lag learning
+  PV: 4 lag coefficients initialized
+  Fireplace: 4 lag coefficients initialized
+  TV: 2 lag coefficients initialized
+  
+Cycle 250: Learning update
   Core parameters:
     base_heating_rate: 0.002 → 0.00205 (increased due to under-prediction)
     target_influence: 0.01 → 0.0102
     
-  External effects:
+  External effects (simple):
     PV: 20+ samples collected
     avg_pv_power = 650W, avg_change = +0.18°C
     learned_coefficient = (0.18/650)*100 = 0.0277
     pv_warming_coefficient: 0.015 → 0.0178 (80% old + 20% new)
     
-    Fireplace: 12 samples collected
-    avg_change = +0.48°C
-    fireplace_heating_rate: 0.03 → 0.126 (70% old + 30% new)
+  Multi-lag effects:
+    PV lags: [0.008, 0.012, 0.015, 0.010] → total: 0.045°C/100W
+    Fireplace lags: [0.15, 0.12, 0.08, 0.05] → total: 0.40°C/hr
+    TV lags: [0.015, 0.010] → total: 0.025°C
     
+  HVAC-off samples: 45/100 (seasonal learning pending)
+  
   Log: "Adapted: heating_rate=0.00205, target_influence=0.0102"
   Log: "Learned effects: PV=0.0178, fireplace=0.126, TV=0.005"
+  Log: "Multi-lag active: PV total=0.045, FP total=0.40, TV total=0.025"
+
+Cycle 500: Seasonal adaptation activation
+  HVAC-off samples: 102/100 ✓
+  Seasonal coefficients learned:
+    PV: cos=0.15, sin=-0.20 (modulates 0.5x-1.3x through year)
+    TV: cos=0.08, sin=-0.10 (modulates 0.7x-1.2x through year)
+  
+  Log: "Seasonal adaptation active"
 ```
 
 **Key Learning Characteristics:**
@@ -526,27 +578,53 @@ The system publishes `sensor.ml_heating_state` with numeric state codes and rich
 
 ### Jupyter Notebooks
 
-Four analysis notebooks are included in `notebooks/`:
+Six analysis notebooks are included in `notebooks/` with comprehensive interpretation guides:
+
+**00_learning_dashboard.ipynb** ⭐ Start here!
+- At-a-glance learning status and progress
+- Core heating parameters visualization with interpretation
+- Multi-lag coefficient breakdown (PV, fireplace, TV time delays)
+- Seasonal modulation curves (monthly variation patterns)
+- Learning milestones and activation status
+- Includes detailed "How to interpret" sections for all charts
 
 **01_physics_model_diagnosis.ipynb**
 - Deep dive into physics model structure
-- Test physics compliance
+- Test physics compliance (monotonicity)
 - Verify model predictions
+- Production readiness assessment
 
 **02_performance_monitoring.ipynb**
 - Track model performance over time
 - Detect performance degradation
-- Set alert thresholds
+- Alert thresholds and trend analysis
+- 30-day performance charts
 
 **03_behavior_analysis.ipynb**
-- Analyze heating patterns
-- Seasonal behavior analysis
-- Energy efficiency insights
+- Analyze heating patterns across seasons
+- External heat source impact analysis
+- Energy efficiency optimization insights
+- Seasonal behavior comparisons
 
 **04_model_validation.ipynb**
 - Comprehensive validation checks
-- Production readiness assessment
-- Physics validation across scenarios
+- Physics validation across multiple scenarios
+- Range validation and bounds checking
+- Production deployment decision criteria
+
+**05_multilag_seasonal_analysis.ipynb**
+- Detailed multi-lag coefficient analysis
+- Time-delayed effect visualization (30-120min lags)
+- Seasonal modulation pattern analysis
+- Correlation analysis and statistical validation
+- Summer learning effectiveness tracking
+
+All notebooks now include **"How to interpret"** sections explaining:
+- What each value means
+- Typical/good ranges to expect  
+- Real calculation examples
+- When to take action
+- Activation requirements
 
 To use notebooks:
 ```bash
@@ -728,9 +806,9 @@ When reporting issues, include:
 
 ## Advanced Topics
 
-### Feature Importance Analysis
+### Feature Importance & Learning Metrics
 
-The system exports feature importance to InfluxDB for analysis and visualization.
+The system exports both feature importance and learning parameters to InfluxDB for analysis and visualization.
 
 **Configuration:**
 ```ini
@@ -739,10 +817,27 @@ INFLUX_FEATURES_BUCKET=ml_heating_features
 ```
 
 **InfluxDB Schema:**
+
+*Feature Importance:*
 - Bucket: `ml_heating_features`
 - Measurement: `feature_importance`
 - Fields: Each feature as float (e.g., `temp_forecast_3h`, `indoor_hist_mean`)
 - Tags: `exported` (UNIX timestamp)
+
+*Learning Parameters:*
+- Bucket: `ml_heating_features`
+- Measurement: `learning_parameters`
+- Fields: 43 parameters including:
+  - Core: `base_heating_rate`, `target_influence`, `outdoor_factor`
+  - Simple coefficients: `pv_warming_coefficient`, `fireplace_heating_rate`, `tv_heat_contribution`
+  - Multi-lag PV: `pv_lag_1` through `pv_lag_4` (4 coefficients)
+  - Multi-lag Fireplace: `fireplace_immediate`, `fireplace_lag_1` through `fireplace_lag_3` (4 coefficients)
+  - Multi-lag TV: `tv_immediate`, `tv_lag_1` (2 coefficients)
+  - Seasonal: `pv_seasonal_cos`, `pv_seasonal_sin`, `tv_seasonal_cos`, `tv_seasonal_sin`
+  - Totals: `pv_total_effect`, `fireplace_total_effect`, `tv_total_effect`
+  - Sample counts: `training_count`, `pv_samples`, `fireplace_samples`, `tv_samples`, `hvac_off_samples`
+- Tags: `exported` (UNIX timestamp)
+- Frequency: Every prediction cycle (default: every 10 minutes)
 
 **Example Flux Queries:**
 
