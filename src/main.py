@@ -385,23 +385,20 @@ def main(args):
                                     last_final_temp,
                                 )
                             else:
-                                # Choose wait condition and target based on
-                                # initial direction. For faster response:
-                                # cool-down: target + MAX_TEMP_CHANGE
-                                # warm-up: target - MAX_TEMP_CHANGE
+                                # Choose wait condition based on initial direction.
                                 wait_for_cooling = delta0 > 0
                                 if wait_for_cooling:
-                                    # Outlet hot: aggressive cool-down target
+                                    # Outlet hot (DHW): use aggressive cool-down target
+                                    # to speed up recovery without overshooting
                                     grace_target = (
                                         last_final_temp +
                                         config.MAX_TEMP_CHANGE_PER_CYCLE
                                     )
                                 else:
-                                    # Outlet cold: aggressive warm-up target
-                                    grace_target = (
-                                        last_final_temp -
-                                        config.MAX_TEMP_CHANGE_PER_CYCLE
-                                    )
+                                    # Outlet cold (defrost): restore exact pre-defrost
+                                    # target and wait for full recovery to prevent
+                                    # sawtooth patterns
+                                    grace_target = last_final_temp
                                 
                                 logging.info(
                                     "Restoring outlet target: %.1f°C "

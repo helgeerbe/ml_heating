@@ -42,15 +42,15 @@ The primary goal is to improve upon traditional heat curves by creating a **self
 ### Safety & Robustness
 
 -   **Blocking Event Handling:** Automatically pauses and waits during DHW heating, defrosting, disinfection, and DHW boost heater operation
--   **Grace Period after Blocking:** After blocking events end, intelligently waits for outlet temperature to stabilize before resuming ML control The controller determines the required waiting direction from the measured outlet vs. restored target:
+-   **Grace Period after Blocking:** After blocking events end, intelligently waits for outlet temperature to stabilize before resuming ML control:
     
-    - If the outlet is hotter than the restored target (typical after DHW), the controller waits for the outlet to cool to <= target.
-    - If the outlet is colder than the restored target (possible after defrost with reversed flow), the controller waits for the outlet to warm to >= target.
+    - **After DHW heating** (outlet hotter): Sets aggressive cool-down target (`last_target + MAX_TEMP_CHANGE_PER_CYCLE`) and waits for outlet to cool, speeding recovery
+    - **After defrost** (outlet colder): Restores exact pre-defrost target and waits for outlet to fully recover, preventing sawtooth patterns and maintaining heat pump efficiency
     
     - Intelligently determines whether to wait for cooling or warming based on measured outlet vs target
     - Enforces maximum timeout (`GRACE_PERIOD_MAX_MINUTES`) to prevent indefinite stalling
     - Skips one cycle after grace completes to allow system to fully stabilize
-    - Prevents large, inefficient temperature jumps and protects model learning quality
+    - Prevents inefficient temperature oscillations and protects model learning quality
 
 -   **Heating Status Check:** Skips prediction and learning when heating system is not in 'heat' or 'auto' mode
 -   **Absolute Temperature Clamping:** Enforces safe minimum/maximum outlet temperatures (`CLAMP_MIN_ABS`, `CLAMP_MAX_ABS`)
