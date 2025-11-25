@@ -224,6 +224,144 @@ After calibration, the model learns from every heating cycle:
 
 This happens automatically in both **active mode** (ML controls heating) and **shadow mode** (heat curve controls, ML learns).
 
+### How Learning Works: Feature Contribution Attribution
+
+The physics model learns which features contribute how much through a **multi-level learning system**:
+
+**Level 1: Core Physics Parameters (Every 50 Cycles)**
+The model tracks prediction errors and adapts fundamental physics:
+
+```python
+error = actual_temperature_change - predicted_temperature_change
+
+# Adapt base heating rate
+if error is significant:
+    base_heating_rate += error * learning_rate
+    
+# Adapt target temperature influence
+if error is large:
+    target_influence += error * learning_rate * 0.5
+```
+
+Example: If the model consistently under-predicts temperature rise, it increases `base_heating_rate`, making future predictions higher for the same outlet temperature.
+
+**Level 2: External Heat Source Effects (Tracked Every Cycle)**
+The model tracks when external heat sources are active and correlates them with temperature changes:
+
+```python
+# When PV is active
+if pv_power > 100W:
+    track: (pv_power, actual_temperature_change)
+    
+# When fireplace is active  
+if fireplace_on:
+    track: (fireplace_status, actual_temperature_change)
+    
+# When TV is on
+if tv_on:
+    track: (tv_status, actual_temperature_change)
+```
+
+**Level 3: Effect Correlation Learning (Every 50 Cycles)**
+After collecting sufficient data, the model calculates correlations:
+
+```python
+# Learn PV contribution
+if enough_pv_samples:
+    average_pv_power = mean(all_tracked_pv_powers)
+    average_temp_change = mean(all_tracked_temp_changes_with_pv)
+    
+    # Calculate warming per 100W
+    pv_warming_coefficient = (average_temp_change / average_pv_power) * 100
+    
+    # Blend with current estimate (20% new, 80% old for stability)
+    pv_coefficient = 0.8 * old_coefficient + 0.2 * learned_coefficient
+```
+
+**How Each Feature Contributes:**
+
+1. **Outlet Temperature** (Primary Control Variable)
+   - Contribution: `outlet_temp * base_heating_rate`
+   - Learned via: Core parameter adaptation
+   - Physics: Higher outlet = more heat transfer
+
+2. **Target Temperature** (Setpoint Influence)
+   - Contribution: `(target - indoor) * target_influence`
+   - Learned via: Core parameter adaptation
+   - Physics: Larger gap = more aggressive heating needed
+
+3. **Outdoor Temperature** (Heat Loss Factor)
+   - Contribution: `outdoor_penalty * outdoor_factor`
+   - Built-in physics: Colder outside = more heat loss
+   - Where: `outdoor_penalty = max(0, 10 - outdoor_temp) / 15`
+
+4. **PV Solar Power** (External Heat Gain)
+   - Contribution: `pv_now * pv_warming_coefficient * 0.01`
+   - Learned via: Effect tracking and correlation
+   - Updated: Every 50 cycles with sufficient data (20+ samples)
+
+5. **Fireplace** (Secondary Heat Source)
+   - Contribution: `fireplace_on * fireplace_heating_rate`
+   - Learned via: Effect tracking during fireplace active periods
+   - Updated: Every 50 cycles with sufficient data (10+ samples)
+
+6. **TV/Electronics** (Minor Heat Source)
+   - Contribution: `tv_on * tv_heat_contribution`
+   - Learned via: Effect tracking when TV active
+   - Updated: Every 50 cycles with sufficient data (10+ samples)
+
+7. **Weather Forecast** (Anticipatory Adjustment)
+   - Contribution: Calculated from 4-hour temperature forecast
+   - Built-in logic: Reduce heating if warming expected
+   - Time-decayed: Closer hours have more influence
+
+8. **PV Forecast** (Solar Heat Anticipation)
+   - Contribution: Calculated from 4-hour PV forecast
+   - Built-in logic: Reduce heating if solar gain expected
+   - Time-decayed: Closer hours have more influence
+
+**Example Learning Session:**
+
+```
+Cycle 1-49: Collecting data
+  PV effects tracked: [(500W, +0.15°C), (800W, +0.22°C), ...]
+  Fireplace effects: [(1, +0.45°C), (1, +0.51°C), ...]
+  Prediction errors: [-0.03°C, +0.05°C, +0.02°C, ...]
+
+Cycle 50: Learning update
+  Core parameters:
+    base_heating_rate: 0.002 → 0.00205 (increased due to under-prediction)
+    target_influence: 0.01 → 0.0102
+    
+  External effects:
+    PV: 20+ samples collected
+    avg_pv_power = 650W, avg_change = +0.18°C
+    learned_coefficient = (0.18/650)*100 = 0.0277
+    pv_warming_coefficient: 0.015 → 0.0178 (80% old + 20% new)
+    
+    Fireplace: 12 samples collected
+    avg_change = +0.48°C
+    fireplace_heating_rate: 0.03 → 0.126 (70% old + 30% new)
+    
+  Log: "Adapted: heating_rate=0.00205, target_influence=0.0102"
+  Log: "Learned effects: PV=0.0178, fireplace=0.126, TV=0.005"
+```
+
+**Key Learning Characteristics:**
+
+- **Gradual Adaptation:** Uses weighted averaging (70-80% old, 20-30% new) to prevent sudden changes
+- **Bounded Learning:** All parameters have min/max limits to prevent runaway values
+- **Frequency Control:** Core parameters adapt every 50 cycles, external effects every 50 cycles
+- **Data Requirements:** External effects need minimum samples (10-20) before learning
+- **Error Threshold:** Core parameters only adapt if error > 0.03°C (significant)
+- **Physics Preservation:** Learning adjusts coefficients but respects thermodynamic relationships
+
+This multi-level approach ensures:
+- **Stability:** No wild swings from single outlier measurements
+- **Accuracy:** Continuous refinement based on real outcomes
+- **Transparency:** Each parameter has clear physical meaning
+- **Robustness:** Bounded values prevent model degradation
+
 ### The Prediction Pipeline
 
 The final outlet temperature goes through a sophisticated multi-stage pipeline:
