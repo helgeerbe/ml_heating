@@ -24,26 +24,20 @@ try:
     
     # Create a simple feature builder mock for notebooks
     def get_feature_names():
-        """Return the list of feature names"""
+        """Return the list of features used by RealisticPhysicsModel"""
         return [
-            'outlet_temp', 'outlet_temp_sq', 'outlet_temp_cub',
-            'indoor_temp_lag_10m', 'indoor_temp_lag_30m', 'indoor_temp_lag_60m',
-            'outdoor_temp', 'temp_diff_indoor_outdoor',
-            'outlet_indoor_diff', 'outdoor_temp_x_outlet_temp',
-            'outlet_temp_lag_10m', 'outlet_temp_lag_30m', 'outlet_temp_lag_60m',
-            'outlet_temp_delta_10m', 'outlet_temp_delta_30m', 'outlet_temp_delta_60m',
-            'outlet_temp_change_from_last', 'outlet_temp_gradient',
-            'indoor_temp_delta_10m', 'indoor_temp_delta_30m', 'indoor_temp_delta_60m',
-            'indoor_temp_gradient', 'outlet_hist_mean', 'outlet_hist_std',
-            'outlet_hist_min', 'outlet_hist_max', 'outlet_hist_q25', 'outlet_hist_q75',
-            'outlet_hist_trend', 'indoor_hist_mean', 'indoor_hist_std',
-            'indoor_hist_min', 'indoor_hist_max', 'indoor_hist_q25', 'indoor_hist_q75',
-            'indoor_hist_trend', 'hour_sin', 'hour_cos', 'month_sin', 'month_cos',
-            'day_of_week_sin', 'day_of_week_cos', 'is_weekend',
-            'pv_now', 'pv_forecast_1h', 'pv_forecast_2h', 'pv_forecast_3h', 'pv_forecast_4h',
+            # Core blocking status (4)
+            'dhw_heating', 'dhw_disinfection', 'dhw_boost_heater', 'defrosting',
+            # Core temperatures (4)
+            'outlet_temp', 'indoor_temp_lag_30m', 'target_temp', 'outdoor_temp',
+            # External heat sources (3)
+            'pv_now', 'fireplace_on', 'tv_on',
+            # Seasonal modulation (2)
+            'month_cos', 'month_sin',
+            # Temperature forecasts (4)
             'temp_forecast_1h', 'temp_forecast_2h', 'temp_forecast_3h', 'temp_forecast_4h',
-            'dhw_heating', 'defrosting', 'dhw_disinfection', 'dhw_boost_heater',
-            'fireplace_on', 'tv_on', 'defrost_count', 'defrost_recent', 'defrost_age_min'
+            # PV forecasts (4)
+            'pv_forecast_1h', 'pv_forecast_2h', 'pv_forecast_3h', 'pv_forecast_4h',
         ]
     print("  ✓ get_feature_names")
     
