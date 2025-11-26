@@ -12,7 +12,7 @@ arch:
 startup: services
 init: false
 map:
-  - addon_config:/data:rw
+  - addon_config:rw
 ports:
   3001/tcp: 3001
 ports_description:
