@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - develop
+      - ha-addon
     tags:
       - "v*"
   pull_request:

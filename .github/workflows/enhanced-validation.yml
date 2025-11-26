@@ -2,7 +2,7 @@ name: Enhanced Container Validation
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, ha-addon ]
   pull_request:
     branches: [ main ]
 
