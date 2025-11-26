@@ -1,0 +1,7 @@
+influxdb-client
+pandas
+numpy
+joblib
+requests
+python-dotenv
+lightgbm
