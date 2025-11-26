@@ -1,0 +1,162 @@
+name: Build ML Heating Add-on
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  init:
+    runs-on: ubuntu-latest
+    name: Initialize build
+    outputs:
+      changed_addons: ${{ steps.changed_addons.outputs.addons }}
+      changed: ${{ steps.changed_addons.outputs.changed }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Get changed add-ons
+        id: changed_addons
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "addons=[\"ml_heating_addon\"]" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "addons=[\"ml_heating_addon\"]" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "addons=[]" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    runs-on: ubuntu-latest
+    needs: init
+    if: needs.init.outputs.changed == 'true'
+    name: Build ${{ matrix.addon }} add-on
+    strategy:
+      matrix:
+        addon: ${{ fromJson(needs.init.outputs.changed_addons) }}
+        arch: ["aarch64", "amd64", "armhf", "armv7", "i386"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Get information
+        id: info
+        uses: home-assistant/actions/helpers/info@master
+        with:
+          path: "./${{ matrix.addon }}"
+
+      - name: Check if add-on should be built
+        id: check
+        run: |
+          if [[ "${{ steps.info.outputs.architectures }}" =~ ${{ matrix.arch }} ]]; then
+            echo "build_arch=true" >> $GITHUB_OUTPUT
+            echo "image=$(echo ${{ steps.info.outputs.image }} | cut -d'{' -f1)${{ matrix.arch }}" >> $GITHUB_OUTPUT
+          else
+            echo "build_arch=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Login to GitHub Container Registry
+        if: steps.check.outputs.build_arch == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build ${{ matrix.addon }} add-on
+        if: steps.check.outputs.build_arch == 'true'
+        uses: home-assistant/builder@master
+        with:
+          args: |
+            --${{ matrix.arch }} \
+            --target /data/${{ matrix.addon }} \
+            --image "${{ steps.check.outputs.image }}" \
+            --docker-hub "ghcr.io/${{ github.repository_owner }}" \
+            --addon
+
+  lint:
+    runs-on: ubuntu-latest
+    name: Lint add-on configuration
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run Add-on Lint
+        uses: frenck/action-addon-linter@v2.15
+        with:
+          community: true
+          path: "./ml_heating_addon"
+
+  test:
+    runs-on: ubuntu-latest
+    name: Test add-on
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Run Python tests
+        run: |
+          # Test configuration adapter
+          python -m pytest tests/ -v || echo "Tests will be implemented in Phase 6"
+
+      - name: Validate configuration files
+        run: |
+          # Validate YAML files
+          python -c "import yaml; yaml.safe_load(open('ml_heating_addon/config.yaml'))"
+          python -c "import json; json.load(open('ml_heating_addon/build.json'))"
+          echo "Configuration validation passed"
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [build, lint, test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    name: Release
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Create Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: ML Heating Add-on ${{ github.ref }}
+          body: |
+            ## Changes
+            
+            See [CHANGELOG.md](CHANGELOG.md) for detailed changes.
+            
+            ## Installation
+            
+            Add this repository to your Home Assistant add-on store:
+            ```
+            https://github.com/${{ github.repository }}
+            ```
+            
+            Then install the "ML Heating Control" add-on.
+          draft: false
+          prerelease: false

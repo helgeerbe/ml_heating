@@ -1,0 +1,156 @@
+name: "ML Heating Control"
+version: "1.0.0"
+slug: "ml_heating"
+description: "Physics-based machine learning heating control system with online learning"
+url: "https://github.com/helgeerbe/ml_heating"
+arch:
+  - armhf
+  - armv7
+  - aarch64
+  - amd64
+  - i386
+startup: services
+boot: auto
+init: false
+map:
+  - addon_config:/data
+ports:
+  3001/tcp: 3001
+ports_description:
+  3001/tcp: "ML Heating Dashboard"
+webui: "http://[HOST]:[PORT:3001]"
+panel_icon: mdi:heat-pump
+panel_title: "ML Heating Control"
+host_network: false
+privileged:
+  - SYS_RAWIO
+apparmor: false
+hassio_api: true
+hassio_role: default
+homeassistant_api: true
+image: "ghcr.io/helgeerbe/ml-heating-{arch}"
+options:
+  # Core Entity Configuration
+  target_indoor_temp_entity: "climate.thermostat"
+  indoor_temp_entity: "sensor.living_room_temperature"
+  outdoor_temp_entity: "sensor.outdoor_temperature"
+  heating_control_entity: "switch.heating_system"
+  outlet_temp_entity: "sensor.heat_pump_outlet_temp"
+  
+  # ML Learning Parameters
+  learning_rate: 0.01
+  prediction_horizon_minutes: 30
+  cycle_interval_minutes: 30
+  max_temp_change_per_cycle: 2.0
+  
+  # Safety Configuration
+  safety_max_temp: 25.0
+  safety_min_temp: 18.0
+  clamp_min_abs: 14.0
+  clamp_max_abs: 65.0
+  
+  # External Heat Sources (Optional)
+  pv_power_entity: ""
+  fireplace_status_entity: ""
+  tv_power_entity: ""
+  
+  # InfluxDB Configuration
+  influxdb_host: "a0d7b954-influxdb"
+  influxdb_port: 8086
+  influxdb_database: "homeassistant"
+  influxdb_username: ""
+  influxdb_password: ""
+  influxdb_token: ""
+  influxdb_org: ""
+  influxdb_bucket: "homeassistant"
+  
+  # Blocking Detection
+  dhw_status_entity: ""
+  defrost_status_entity: ""
+  disinfection_status_entity: ""
+  dhw_boost_heater_entity: ""
+  
+  # Model Management
+  auto_backup_enabled: true
+  backup_retention_days: 30
+  import_existing_model: false
+  existing_model_path: ""
+  
+  # Dashboard Configuration
+  dashboard_update_interval: 30
+  show_advanced_metrics: true
+  dashboard_theme: "auto"
+  
+  # Development Settings
+  enable_dev_api: false
+  dev_api_key: ""
+  log_level: "INFO"
+  
+  # Performance Tuning
+  smoothing_alpha: 0.3
+  confidence_threshold: 0.7
+  physics_validation_enabled: true
+  seasonal_learning_enabled: true
+
+schema:
+  # Core Entity Configuration
+  target_indoor_temp_entity: "str"
+  indoor_temp_entity: "str"
+  outdoor_temp_entity: "str"
+  heating_control_entity: "str"
+  outlet_temp_entity: "str"
+  
+  # ML Learning Parameters
+  learning_rate: "float(0.001,0.1)"
+  prediction_horizon_minutes: "int(15,60)"
+  cycle_interval_minutes: "int(15,60)"
+  max_temp_change_per_cycle: "float(0.5,5.0)"
+  
+  # Safety Configuration
+  safety_max_temp: "float(18.0,30.0)"
+  safety_min_temp: "float(15.0,25.0)"
+  clamp_min_abs: "float(10.0,20.0)"
+  clamp_max_abs: "float(50.0,80.0)"
+  
+  # External Heat Sources (Optional)
+  pv_power_entity: "str?"
+  fireplace_status_entity: "str?"
+  tv_power_entity: "str?"
+  
+  # InfluxDB Configuration
+  influxdb_host: "str"
+  influxdb_port: "port"
+  influxdb_database: "str?"
+  influxdb_username: "str?"
+  influxdb_password: "password?"
+  influxdb_token: "str?"
+  influxdb_org: "str?"
+  influxdb_bucket: "str?"
+  
+  # Blocking Detection
+  dhw_status_entity: "str?"
+  defrost_status_entity: "str?"
+  disinfection_status_entity: "str?"
+  dhw_boost_heater_entity: "str?"
+  
+  # Model Management
+  auto_backup_enabled: "bool"
+  backup_retention_days: "int(1,365)"
+  import_existing_model: "bool"
+  existing_model_path: "str?"
+  
+  # Dashboard Configuration
+  dashboard_update_interval: "int(5,300)"
+  show_advanced_metrics: "bool"
+  dashboard_theme: "list(auto|light|dark)"
+  
+  # Development Settings
+  enable_dev_api: "bool"
+  dev_api_key: "str?"
+  log_level: "list(DEBUG|INFO|WARNING|ERROR)"
+  
+  # Performance Tuning
+  smoothing_alpha: "float(0.1,0.9)"
+  confidence_threshold: "float(0.5,0.95)"
+  physics_validation_enabled: "bool"
+  seasonal_learning_enabled: "bool"
