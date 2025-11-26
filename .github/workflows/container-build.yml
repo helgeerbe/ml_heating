@@ -95,7 +95,7 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_PAT }}
           
       - name: Extract metadata
         id: meta
@@ -141,6 +141,9 @@ jobs:
     runs-on: ubuntu-latest
     name: Build Home Assistant Add-on
     needs: build-container
+    permissions:
+      contents: read
+      packages: write
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     
     steps:
@@ -152,7 +155,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_PAT }}
           
       - name: Prepare add-on build context
         run: |
