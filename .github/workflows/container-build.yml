@@ -165,7 +165,8 @@ jobs:
         uses: home-assistant/builder@master
         with:
           args: |
-            --all \
+            --amd64 \
+            --aarch64 \
             --target ml_heating_addon \
             --docker-hub ghcr.io/${{ github.repository_owner }}
 
