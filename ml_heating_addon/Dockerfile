@@ -1,4 +1,4 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.11
+ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.11-alpine3.18
 FROM $BUILD_FROM
 
 # Build arguments
@@ -33,22 +33,21 @@ LABEL \
 # Environment
 ENV LANG=C.UTF-8
 
-# Install system dependencies (Debian-based)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install system dependencies
+RUN apk add --no-cache \
     bash \
     curl \
     jq \
     tzdata \
     procps \
     supervisor \
-    build-essential \
+    gcc \
+    g++ \
+    musl-dev \
+    linux-headers \
     gfortran \
-    libopenblas-dev \
-    liblapack-dev \
-    libatlas-base-dev \
-    python3-dev \
-    pkg-config \
- && rm -rf /var/lib/apt/lists/*
+    openblas-dev \
+    lapack-dev
 
 # Set working directory
 WORKDIR /app
