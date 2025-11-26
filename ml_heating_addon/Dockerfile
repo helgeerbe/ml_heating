@@ -31,7 +31,7 @@ LABEL \
     org.opencontainers.image.version=${BUILD_VERSION}
 
 # Environment
-ENV LANG C.UTF-8
+ENV LANG=C.UTF-8
 
 # Install system dependencies
 RUN apk add --no-cache \
@@ -40,7 +40,14 @@ RUN apk add --no-cache \
     jq \
     tzdata \
     procps \
-    supervisor
+    supervisor \
+    gcc \
+    g++ \
+    musl-dev \
+    linux-headers \
+    gfortran \
+    openblas-dev \
+    lapack-dev
 
 # Set working directory
 WORKDIR /app
@@ -67,9 +74,9 @@ RUN mkdir -p /data/models \
     && mkdir -p /data/logs \
     && mkdir -p /data/config
 
-# Copy dashboard files (placeholder structure for Phase 3)
+# Copy dashboard files
 RUN mkdir -p /app/dashboard
-COPY ml_heating_addon/dashboard/ /app/dashboard/ 2>/dev/null || echo "Dashboard files will be added in Phase 3"
+COPY ml_heating_addon/dashboard/ /app/dashboard/
 
 # Make run script executable
 RUN chmod a+x /app/run.sh
