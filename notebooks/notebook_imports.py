@@ -46,7 +46,7 @@ try:
     # Import model functions directly
     try:
         import pickle
-        from river import metrics
+        from src import utils_metrics as metrics
         
         def load_model():
             """Load production model from config file"""
