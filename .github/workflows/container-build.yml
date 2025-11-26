@@ -1,0 +1,182 @@
+name: Build and Publish ML Heating Container
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-container:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux/amd64
+          - linux/arm64
+          - linux/arm/v7
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            
+      - name: Build and push container
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ml_heating_addon/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.11-alpine3.18
+            BUILD_ARCH=${{ matrix.platform == 'linux/amd64' && 'amd64' || matrix.platform == 'linux/arm64' && 'aarch64' || matrix.platform == 'linux/arm/v7' && 'armv7' }}
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            BUILD_DESCRIPTION=ML Heating Control Add-on
+            BUILD_NAME=ML Heating Control
+            BUILD_REF=${{ github.sha }}
+            BUILD_REPOSITORY=${{ github.server_url }}/${{ github.repository }}
+            BUILD_VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  build-addon:
+    runs-on: ubuntu-latest
+    name: Build Home Assistant Add-on
+    needs: build-container
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Build Add-on
+        uses: home-assistant/builder@master
+        with:
+          args: |
+            --all \
+            --target ml_heating_addon \
+            --docker-hub ghcr.io/${{ github.repository_owner }}
+
+  validate:
+    runs-on: ubuntu-latest
+    name: Validate Add-on Configuration
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Validate Add-on Configuration
+        uses: frenck/action-addon-linter@v2.15
+        with:
+          community: true
+          path: "./ml_heating_addon"
+
+  test:
+    runs-on: ubuntu-latest
+    name: Test Container Build
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Test build (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ml_heating_addon/Dockerfile
+          platforms: linux/amd64
+          push: false
+          build-args: |
+            BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.11-alpine3.18
+            BUILD_ARCH=amd64
+            BUILD_DATE=${{ github.event.repository.pushed_at }}
+            BUILD_DESCRIPTION=ML Heating Control Add-on
+            BUILD_NAME=ML Heating Control
+            BUILD_REF=${{ github.sha }}
+            BUILD_REPOSITORY=${{ github.server_url }}/${{ github.repository }}
+            BUILD_VERSION=test
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-container, build-addon, validate, test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Create Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: ML Heating v${{ github.ref_name }}
+          body: |
+            ## ML Heating Control Add-on Release
+            
+            ### Installation
+            Add this repository to your Home Assistant:
+            ```
+            https://github.com/${{ github.repository }}
+            ```
+            
+            ### Features
+            - Physics-based machine learning heating optimization
+            - Real-time dashboard with advanced analytics
+            - Multi-model performance comparison
+            - Automated backup and recovery system
+            
+            ### Container Images
+            - `ghcr.io/${{ github.repository }}:${{ github.ref_name }}`
+            - Multi-architecture support (amd64, arm64, armv7)
+          draft: false
+          prerelease: false
