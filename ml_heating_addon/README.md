@@ -219,6 +219,32 @@ Your learning progress will be preserved!
 - **Issues**: [Report Bugs](https://github.com/helgeerbe/ml_heating/issues)
 - **Discussions**: [Community Forum](https://github.com/helgeerbe/ml_heating/discussions)
 
+## Developer Notes
+
+### Build Requirements
+
+This add-on uses symbolic links to reference code from the parent repository:
+- `ml_heating_addon/src/` → `../src/`
+- `ml_heating_addon/notebooks/` → `../notebooks/`
+- `ml_heating_addon/requirements.txt` (copied from root)
+
+These are created automatically during setup and allow the Home Assistant Builder to access necessary files. The symlinks are ignored by git but should be recreated if you clone the repository:
+
+```bash
+cd ml_heating_addon
+ln -s ../src src
+ln -s ../notebooks notebooks
+cp ../requirements.txt requirements.txt
+```
+
+### Docker Build Context
+
+The Dockerfile is designed to work with two different build contexts:
+- **Repository root** - Used by GitHub Actions for multi-arch builds
+- **Add-on directory** - Used by Home Assistant Builder
+
+Both contexts work because of the symlinks and relative COPY paths in the Dockerfile.
+
 ## License
 
 MIT License - see [LICENSE](https://github.com/helgeerbe/ml_heating/blob/main/LICENSE) for details.

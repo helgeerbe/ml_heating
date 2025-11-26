@@ -54,7 +54,7 @@ WORKDIR /app
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt /app/
-COPY ml_heating_addon/dashboard_requirements.txt /app/
+COPY dashboard_requirements.txt /app/
 RUN pip3 install --no-cache-dir --upgrade pip \
     && pip3 install --no-cache-dir -r requirements.txt \
     && pip3 install --no-cache-dir -r dashboard_requirements.txt
@@ -64,9 +64,9 @@ COPY src/ /app/src/
 COPY notebooks/ /app/notebooks/
 
 # Copy add-on specific files
-COPY ml_heating_addon/run.sh /app/
-COPY ml_heating_addon/config_adapter.py /app/
-COPY ml_heating_addon/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY run.sh /app/
+COPY config_adapter.py /app/
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # Create necessary directories
 RUN mkdir -p /data/models \
@@ -76,7 +76,7 @@ RUN mkdir -p /data/models \
 
 # Copy dashboard files
 RUN mkdir -p /app/dashboard
-COPY ml_heating_addon/dashboard/ /app/dashboard/
+COPY dashboard/ /app/dashboard/
 
 # Make run script executable
 RUN chmod a+x /app/run.sh
