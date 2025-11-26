@@ -260,14 +260,30 @@ def main(args):
 
                     # Learn from the actual result
                     try:
+                        # Get model's prediction for this cycle to track prediction error
+                        predicted_change = model.predict_one(learning_features)
+                        
+                        # Update MAE/RMSE with actual vs predicted
+                        mae.update(actual_indoor_change, predicted_change)
+                        rmse.update(actual_indoor_change, predicted_change)
+                        
+                        # Track prediction error for real-time confidence
+                        model.track_prediction_error(predicted_change, actual_indoor_change)
+                        
+                        # Now learn from the result
                         model.learn_one(
                             learning_features, actual_indoor_change
                         )
+                        
+                        prediction_error = abs(predicted_change - actual_indoor_change)
                         logging.debug(
                             "Online learning: applied_temp=%.1f°C, "
-                            "indoor_change=%.3f°C",
+                            "predicted_change=%.3f°C, actual_change=%.3f°C, "
+                            "error=%.3f°C",
                             actual_applied_temp,
-                            actual_indoor_change
+                            predicted_change,
+                            actual_indoor_change,
+                            prediction_error
                         )
                     except Exception as e:
                         logging.warning(

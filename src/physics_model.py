@@ -24,6 +24,15 @@ class RealisticPhysicsModel:
         self.base_heating_rate = 0.002  # Start higher for proper physics
         self.target_influence = 0.01    # How target temp affects heating
         self.outdoor_factor = 0.003     # Outdoor temperature influence
+
+        # External heat source coefficients (learned from data)
+        self.pv_warming_coefficient = 0.001 # Initial value for PV warming
+        self.fireplace_heating_rate = 0.01  # Initial value for fireplace
+        self.tv_heat_contribution = 0.005   # Initial value for TV
+        
+        # Live performance tracking
+        self.prediction_errors = []  # Rolling window of recent errors
+        self.max_error_history = 50  # Keep last 50 predictions for performance
         
         # SEASONAL: Learned seasonal modulation (cos/sin components)
         # Applied to core parameters for automatic seasonal adaptation
@@ -495,14 +504,21 @@ class RealisticPhysicsModel:
         
         # Calculate correlations for each lag
         correlations = []
+        std_changes = np.std(changes)
+        if std_changes == 0: # Avoid division by zero if all changes are the same
+            return # No meaningful correlation to calculate
+
         for lag_idx in range(1, 5):  # lags 1-4 (t-30 to t-120)
             lag_powers = np.array([e['power_history'][-1-lag_idx]
                                   for e in recent])
-            if np.std(lag_powers) > 0.1:
-                corr = np.corrcoef(lag_powers, changes)[0, 1]
-                correlations.append(max(0, corr))
+            
+            std_lag_powers = np.std(lag_powers)
+            if std_lag_powers == 0: # If no variation in lag_powers, correlation is 0
+                corr = 0.0
             else:
-                correlations.append(0.0)
+                # Calculate correlation, handling potential NaN/inf with nan_to_num
+                corr = np.nan_to_num(np.corrcoef(lag_powers, changes)[0, 1])
+            correlations.append(max(0, corr))
         
         # Distribute total effect across lags by correlation
         if sum(correlations) > 0:
@@ -525,16 +541,23 @@ class RealisticPhysicsModel:
         
         recent = self.fireplace_effects_detailed[-50:]
         changes = np.array([e['actual_change'] for e in recent])
+
+        std_changes = np.std(changes)
+        if std_changes == 0:  # Avoid division by zero if all changes are the same
+            return  # No meaningful correlation to calculate
         
         correlations = []
         for lag_idx in range(4):  # immediate, lag1, lag2, lag3
             lag_on = np.array([e['on_history'][-1-lag_idx]
                               for e in recent])
-            if np.std(lag_on) > 0.01:
-                corr = np.corrcoef(lag_on, changes)[0, 1]
-                correlations.append(max(0, corr))
+            
+            std_lag_on = np.std(lag_on)
+            if std_lag_on == 0: # If no variation in lag_on, correlation is 0
+                corr = 0.0
             else:
-                correlations.append(0.0)
+                # Calculate correlation, handling potential NaN/inf with nan_to_num
+                corr = np.nan_to_num(np.corrcoef(lag_on, changes)[0, 1])
+            correlations.append(max(0, corr))
         
         if sum(correlations) > 0:
             weights = np.array(correlations) / sum(correlations)
@@ -557,16 +580,23 @@ class RealisticPhysicsModel:
         
         recent = self.tv_effects_detailed[-50:]
         changes = np.array([e['actual_change'] for e in recent])
+
+        std_changes = np.std(changes)
+        if std_changes == 0:  # Avoid division by zero if all changes are the same
+            return  # No meaningful correlation to calculate
         
         correlations = []
         for lag_idx in range(2):  # immediate, lag1
             lag_on = np.array([e['on_history'][-1-lag_idx]
                               for e in recent])
-            if np.std(lag_on) > 0.01:
-                corr = np.corrcoef(lag_on, changes)[0, 1]
-                correlations.append(max(0, corr))
+            
+            std_lag_on = np.std(lag_on)
+            if std_lag_on == 0: # If no variation in lag_on, correlation is 0
+                corr = 0.0
             else:
-                correlations.append(0.0)
+                # Calculate correlation, handling potential NaN/inf with nan_to_num
+                corr = np.nan_to_num(np.corrcoef(lag_on, changes)[0, 1])
+            correlations.append(max(0, corr))
         
         if sum(correlations) > 0:
             weights = np.array(correlations) / sum(correlations)
@@ -596,18 +626,30 @@ class RealisticPhysicsModel:
             sin_vals = np.array([s['month_sin'] for s in pv_samples])
             
             # Simple linear regression for cos/sin components
-            if np.std(changes) > 0.01:
-                cos_coeff = np.corrcoef(cos_vals, changes)[0, 1] * 0.3
-                sin_coeff = np.corrcoef(sin_vals, changes)[0, 1] * 0.3
+            std_changes = np.std(changes)
+            if std_changes > 0.01:
+                std_cos_vals = np.std(cos_vals)
+                std_sin_vals = np.std(sin_vals)
+
+                cos_corr = 0.0
+                if std_cos_vals > 0:
+                    cos_corr = np.nan_to_num(np.corrcoef(cos_vals, changes)[0, 1])
+
+                sin_corr = 0.0
+                if std_sin_vals > 0:
+                    sin_corr = np.nan_to_num(np.corrcoef(sin_vals, changes)[0, 1])
+                
+                cos_coeff = cos_corr * 0.3
+                sin_coeff = sin_corr * 0.3
                 
                 self.pv_seasonal_cos = (0.9 * self.pv_seasonal_cos +
-                                       0.1 * cos_coeff)
+                                        0.1 * cos_coeff)
                 self.pv_seasonal_sin = (0.9 * self.pv_seasonal_sin +
-                                       0.1 * sin_coeff)
+                                        0.1 * sin_coeff)
                 self.pv_seasonal_cos = np.clip(self.pv_seasonal_cos,
-                                              -0.5, 0.5)
+                                                -0.5, 0.5)
                 self.pv_seasonal_sin = np.clip(self.pv_seasonal_sin,
-                                              -0.5, 0.5)
+                                                -0.5, 0.5)
         
         # Learn TV seasonal (±30%)
         tv_samples = [e for e in recent if e['tv'] > 0]
@@ -616,21 +658,82 @@ class RealisticPhysicsModel:
             cos_vals = np.array([s['month_cos'] for s in tv_samples])
             sin_vals = np.array([s['month_sin'] for s in tv_samples])
             
-            if np.std(changes) > 0.01:
-                cos_coeff = np.corrcoef(cos_vals, changes)[0, 1] * 0.2
-                sin_coeff = np.corrcoef(sin_vals, changes)[0, 1] * 0.2
+            std_changes = np.std(changes)
+            if std_changes > 0.01:
+                std_cos_vals = np.std(cos_vals)
+                std_sin_vals = np.std(sin_vals)
+                
+                cos_corr = 0.0
+                if std_cos_vals > 0:
+                    cos_corr = np.nan_to_num(np.corrcoef(cos_vals, changes)[0, 1])
+
+                sin_corr = 0.0
+                if std_sin_vals > 0:
+                    sin_corr = np.nan_to_num(np.corrcoef(sin_vals, changes)[0, 1])
+                
+                cos_coeff = cos_corr * 0.2
+                sin_coeff = sin_corr * 0.2
                 
                 self.tv_seasonal_cos = (0.9 * self.tv_seasonal_cos +
-                                       0.1 * cos_coeff)
+                                        0.1 * cos_coeff)
                 self.tv_seasonal_sin = (0.9 * self.tv_seasonal_sin +
-                                       0.1 * sin_coeff)
+                                        0.1 * sin_coeff)
                 self.tv_seasonal_cos = np.clip(self.tv_seasonal_cos,
-                                              -0.3, 0.3)
+                                                -0.3, 0.3)
                 self.tv_seasonal_sin = np.clip(self.tv_seasonal_sin,
-                                              -0.3, 0.3)
+                                                -0.3, 0.3)
+    
+    def track_prediction_error(self, predicted_change, actual_change):
+        """Track prediction error for real-time performance monitoring"""
+        # Initialize prediction_errors if missing (backward compatibility)
+        if not hasattr(self, 'prediction_errors'):
+            self.prediction_errors = []
+            self.max_error_history = 50
+        
+        error = abs(predicted_change - actual_change)
+        self.prediction_errors.append(error)
+        
+        # Maintain rolling window
+        if len(self.prediction_errors) > self.max_error_history:
+            self.prediction_errors.pop(0)
+    
+    def get_realtime_sigma(self):
+        """Calculate real-time uncertainty (sigma) based on recent prediction errors"""
+        # Initialize prediction_errors if missing (backward compatibility)
+        if not hasattr(self, 'prediction_errors'):
+            self.prediction_errors = []
+            self.max_error_history = 50
+        
+        if len(self.prediction_errors) < 5:
+            # Not enough data yet, use conservative estimate
+            return 0.15  # Higher uncertainty when starting
+        
+        # Calculate standard deviation of recent errors
+        sigma = np.std(self.prediction_errors)
+        
+        # Add minimum uncertainty to prevent overconfidence
+        min_sigma = 0.02
+        sigma = max(sigma, min_sigma)
+        
+        # Cap maximum uncertainty to prevent total lack of confidence
+        max_sigma = 0.5
+        sigma = min(sigma, max_sigma)
+        
+        return sigma
+    
+    def get_realtime_confidence(self):
+        """Calculate real-time confidence based on recent prediction accuracy"""
+        sigma = self.get_realtime_sigma()
+        confidence = 1.0 / (1.0 + sigma)
+        return confidence
     
     def export_learning_metrics(self):
         """Export current learning parameters for InfluxDB monitoring"""
+        # Initialize prediction_errors if missing (backward compatibility)
+        if not hasattr(self, 'prediction_errors'):
+            self.prediction_errors = []
+            self.max_error_history = 50
+        
         metrics = {
             # Core parameters
             'base_heating_rate': self.base_heating_rate,
@@ -666,6 +769,12 @@ class RealisticPhysicsModel:
             'pv_seasonal_sin': self.pv_seasonal_sin,
             'tv_seasonal_cos': self.tv_seasonal_cos,
             'tv_seasonal_sin': self.tv_seasonal_sin,
+            
+            # Live performance metrics
+            'realtime_sigma': self.get_realtime_sigma(),
+            'realtime_confidence': self.get_realtime_confidence(),
+            'prediction_error_count': len(self.prediction_errors),
+            'avg_prediction_error': np.mean(self.prediction_errors) if self.prediction_errors else 0.0,
             
             # Sample counts
             'training_count': self.training_count,

@@ -205,11 +205,12 @@ def find_best_outlet_temp(
     last_outlet_temp = outlet_history[-1] if outlet_history else 35.0
 
     # --- Confidence Monitoring ---
-    # RealisticPhysicsModel has high confidence by design (physics-based)
-    sigma = 0.01  # Very low uncertainty
-    confidence = 1.0 / (1.0 + sigma)
+    # Use real-time sigma based on recent prediction accuracy
+    sigma = model.get_realtime_sigma()
+    confidence = model.get_realtime_confidence()
     logging.info(
-        "RealisticPhysicsModel: using high confidence (physics-based)"
+        "RealisticPhysicsModel: real-time confidence=%.3f (σ=%.3f°C)",
+        confidence, sigma
     )
 
     if confidence < config.CONFIDENCE_THRESHOLD:
@@ -417,7 +418,8 @@ def find_best_outlet_temp(
             "outlet_temp_change_from_last": floor_temp - last_outlet_temp,
             "outlet_indoor_diff": floor_temp - current_temp,
             "outdoor_temp_x_outlet_temp": (
-                floor_features.get("outdoor_temp", outdoor_temp) * floor_temp
+                floor_features.get("outdoor_temp", outdoor_temp) *
+                floor_temp
             ),
         })
         
