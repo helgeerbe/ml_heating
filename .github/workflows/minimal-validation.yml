@@ -1,0 +1,108 @@
+name: Minimal ML Heating Validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  basic-check:
+    runs-on: ubuntu-latest
+    name: Basic Repository Check
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Check files exist
+        run: |
+          echo "Checking required files..."
+          
+          if [ -f "ml_heating_addon/config.yaml" ]; then
+            echo "✅ config.yaml exists"
+          else
+            echo "❌ config.yaml missing"
+            exit 1
+          fi
+          
+          if [ -f "ml_heating_addon/build.json" ]; then
+            echo "✅ build.json exists"
+          else
+            echo "❌ build.json missing"
+            exit 1
+          fi
+          
+          if [ -f "ml_heating_addon/Dockerfile" ]; then
+            echo "✅ Dockerfile exists"
+          else
+            echo "❌ Dockerfile missing"
+            exit 1
+          fi
+          
+          if [ -f "repository.json" ]; then
+            echo "✅ repository.json exists"
+          else
+            echo "❌ repository.json missing"  
+            exit 1
+          fi
+          
+          echo "🎉 All required files present!"
+
+  yaml-check:
+    runs-on: ubuntu-latest
+    name: YAML Syntax Check
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Install PyYAML
+        run: pip install pyyaml
+        
+      - name: Validate config.yaml
+        run: |
+          echo "Validating config.yaml syntax..."
+          python3 -c "import yaml; yaml.safe_load(open('ml_heating_addon/config.yaml'))"
+          echo "✅ config.yaml is valid YAML"
+
+  json-check:
+    runs-on: ubuntu-latest 
+    name: JSON Syntax Check
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Validate JSON files
+        run: |
+          echo "Validating JSON syntax..."
+          
+          # Check build.json
+          python3 -c "import json; json.load(open('ml_heating_addon/build.json'))"
+          echo "✅ build.json is valid JSON"
+          
+          # Check repository.json
+          python3 -c "import json; json.load(open('repository.json'))"
+          echo "✅ repository.json is valid JSON"
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: [basic-check, yaml-check, json-check]
+    name: Validation Summary
+    
+    steps:
+      - name: Report success
+        run: |
+          echo "🎉 All validations passed!"
+          echo "✅ Required files present"
+          echo "✅ YAML syntax valid"
+          echo "✅ JSON syntax valid"
+          echo ""
+          echo "ML Heating Add-on structure is valid!"
