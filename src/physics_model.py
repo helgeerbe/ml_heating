@@ -80,9 +80,9 @@ class RealisticPhysicsModel:
         self.pv_forecast_coeff = 0.008
         self.forecast_decay = [1.0, 0.8, 0.6, 0.4]
         
-        # Physics bounds
-        self.min_prediction = -0.05  # Allow some cooling
-        self.max_prediction = 0.25   # Reasonable heating limit
+        # Physics bounds - heating systems should never cool!
+        self.min_prediction = 0.0   # No negative heating effects allowed
+        self.max_prediction = 0.25  # Reasonable heating limit
         
         # Learning tracking
         self.training_count = 0

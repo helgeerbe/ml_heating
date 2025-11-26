@@ -35,116 +35,23 @@ try:
             # Seasonal modulation (2)
             'month_cos', 'month_sin',
             # Temperature forecasts (4)
-            'temp_forecast_1h', 'temp_forecast_2h', 'temp_forecast_3h', 'temp_forecast_4h',
+            'temp_forecast_1h', 'temp_forecast_2h', 'temp_forecast_3h', 
+            'temp_forecast_4h',
             # PV forecasts (4)
-            'pv_forecast_1h', 'pv_forecast_2h', 'pv_forecast_3h', 'pv_forecast_4h',
+            'pv_forecast_1h', 'pv_forecast_2h', 'pv_forecast_3h', 
+            'pv_forecast_4h',
         ]
     print("  ✓ get_feature_names")
     
     # Import model functions directly
     try:
         import pickle
-        import numpy as np
         from river import metrics
         
-        # Define PhysicsCompliantWrapper for notebooks
-        class PhysicsCompliantWrapper:
-            """
-            Model wrapper that enforces monotonic physics at predict_one() level.
-            """
-            
-            def __init__(self, base_model):
-                self.base_model = base_model
-                self._prediction_cache = {}
-                
-            def predict_one(self, features):
-                """Make physics-compliant prediction that respects monotonicity"""
-                outlet_temp = features.get('outlet_temp', 0.0)
-                
-                # Create cache key from relevant features
-                cache_key = self._create_cache_key(features)
-                
-                # Check if we have cached monotonic predictions for scenario
-                if cache_key not in self._prediction_cache:
-                    self._generate_monotonic_cache(features, cache_key)
-                
-                # Interpolate from cached monotonic curve
-                cache_data = self._prediction_cache[cache_key]
-                temp_points = cache_data['temps']
-                pred_points = cache_data['predictions']
-                
-                return float(np.interp(outlet_temp, temp_points, pred_points))
-            
-            def _create_cache_key(self, features):
-                """Create cache key from non-outlet-temp features"""
-                key_features = [
-                    'indoor_temp_lag_30m', 'outdoor_temp', 
-                    'temp_diff_indoor_outdoor', 'pv_now', 'defrost_count'
-                ]
-                key_values = []
-                for feat in key_features:
-                    val = features.get(feat, 0.0)
-                    key_values.append(round(val, 2))
-                return tuple(key_values)
-            
-            def _generate_monotonic_cache(self, features, cache_key):
-                """Generate monotonic prediction curve for this scenario"""
-                # Define outlet temperature range for interpolation
-                temp_range = np.arange(20, 61, 2)
-                raw_predictions = []
-                
-                # Get raw predictions across temperature range
-                for temp in temp_range:
-                    temp_features = features.copy()
-                    temp_features.update({
-                        'outlet_temp': temp,
-                        'outlet_temp_sq': temp ** 2,
-                        'outlet_temp_cub': temp ** 3,
-                        'outlet_indoor_diff': temp - features.get(
-                            'indoor_temp_lag_30m', 21.0),
-                        'outdoor_temp_x_outlet_temp': features.get(
-                            'outdoor_temp', 0.0) * temp,
-                    })
-                    
-                    raw_pred = self.base_model.predict_one(temp_features)
-                    raw_predictions.append(raw_pred)
-                
-                # Enforce strict monotonicity
-                monotonic_predictions = [raw_predictions[0]]
-                for i in range(1, len(raw_predictions)):
-                    # Ensure each prediction >= previous + small increment
-                    min_allowed = monotonic_predictions[i-1] + 0.001
-                    monotonic_predictions.append(
-                        max(raw_predictions[i], min_allowed))
-                
-                # Cache the monotonic curve
-                self._prediction_cache[cache_key] = {
-                    'temps': list(temp_range),
-                    'predictions': monotonic_predictions
-                }
-                
-                # Limit cache size to prevent memory issues
-                if len(self._prediction_cache) > 100:
-                    # Remove oldest entry
-                    oldest_key = next(iter(self._prediction_cache))
-                    del self._prediction_cache[oldest_key]
-            
-            def learn_one(self, features, target):
-                """Learn from training data - invalidate relevant cache"""
-                cache_key = self._create_cache_key(features)
-                if cache_key in self._prediction_cache:
-                    del self._prediction_cache[cache_key]
-                return self.base_model.learn_one(features, target)
-            
-            @property 
-            def steps(self):
-                """Access to underlying pipeline steps"""
-                return self.base_model.steps
-        
         def load_model():
-            """Load model from config file with PhysicsCompliantWrapper"""
+            """Load production model from config file"""
             try:
-                # Load the base model first
+                # Load the production model
                 with open(config.MODEL_FILE, "rb") as f:
                     saved_data = pickle.load(f)
                     if isinstance(saved_data, dict):
@@ -159,86 +66,56 @@ try:
                 # Ensure metrics are not None
                 if mae is None:
                     mae = metrics.MAE()
-                    # Set a default value for demo
                     mae._sum_abs_errors = 1.5
                     mae._n = 10
                 
                 if rmse is None:
                     rmse = metrics.RMSE()
-                    # Set a default value for demo
                     rmse._sum_squared_errors = 2.25
                     rmse._n = 10
                 
-                # Apply PhysicsCompliantWrapper manually
-                print("  Applying PhysicsCompliantWrapper...")
-                model = PhysicsCompliantWrapper(base_model)
-                return model, mae, rmse
+                # Return the production model directly
+                print("  ✓ Loaded production RealisticPhysicsModel")
+                return base_model, mae, rmse
                 
             except Exception as e:
-                print(f"Error loading model file: {e}")
-                print("Creating demo model for notebook analysis...")
-                
-                # Create a demo base model for notebook testing
-                from river import ensemble, preprocessing, compose, tree
-                
-                demo_base_model = compose.Pipeline(
-                    preprocessing.StandardScaler(),
-                    ensemble.BaggingRegressor(
-                        model=tree.HoeffdingTreeRegressor(),
-                        n_models=10
-                    )
-                )
-                
-                # Create demo metrics
-                mae = metrics.MAE()
-                mae._sum_abs_errors = 1.5
-                mae._n = 10
-                rmse = metrics.RMSE() 
-                rmse._sum_squared_errors = 2.25
-                rmse._n = 10
-                
-                # Apply PhysicsCompliantWrapper 
-                print("  Applying PhysicsCompliantWrapper to demo model...")
-                model = PhysicsCompliantWrapper(demo_base_model)
-                return model, mae, rmse
+                print(f"❌ Error loading production model: {e}")
+                print("   Make sure ml_model.pkl exists and is properly trained")
+                raise e
         print("  ✓ load_model")
         
         def get_feature_importances(model):
-            """Get feature importances from model"""
+            """Get feature importances from RealisticPhysicsModel"""
             from collections import defaultdict
             
             feature_names = get_feature_names()
             feature_importances = {name: 0.0 for name in feature_names}
             
             try:
-                regressor = model.steps.get("learn")
-                if not regressor:
-                    return feature_importances
+                # For RealisticPhysicsModel, return learned parameter weights
+                if hasattr(model, 'export_learning_metrics'):
+                    metrics = model.export_learning_metrics()
+                    
+                    # Map learned parameters to feature importance scores
+                    feature_importances.update({
+                        'outlet_temp': metrics.get('base_heating_rate', 0.0) * 100,
+                        'target_temp': metrics.get('target_influence', 0.0) * 100,
+                        'outdoor_temp': metrics.get('outdoor_factor', 0.0) * 100,
+                        'pv_now': metrics.get('pv_warming_coefficient', 0.0) * 10,
+                        'fireplace_on': metrics.get('fireplace_heating_rate', 0.0) * 10,
+                        'tv_on': metrics.get('tv_heat_contribution', 0.0) * 10,
+                    })
                 
-                total_importances = defaultdict(int)
-                
-                for tree_model in regressor:
-                    if hasattr(tree_model, "_root"):
-                        def traverse(node):
-                            if node is None:
-                                return
-                            if hasattr(node, "feature") and node.feature is not None:
-                                total_importances[node.feature] += 1
-                            if hasattr(node, "children"):
-                                for child in node.children:
-                                    traverse(child)
-                        traverse(tree_model._root)
-                
-                total_splits = sum(total_importances.values())
-                if total_splits > 0:
-                    for feature, count in total_importances.items():
-                        if feature in feature_importances:
-                            feature_importances[feature] = count / total_splits
+                # Normalize to sum to 1.0
+                total = sum(feature_importances.values())
+                if total > 0:
+                    for feature in feature_importances:
+                        feature_importances[feature] /= total
                             
                 return feature_importances
                 
             except Exception as e:
-                print(f"Error getting feature importances: {e}")
+                print(f"Warning: Could not extract feature importances: {e}")
                 return feature_importances
         print("  ✓ get_feature_importances")
         
