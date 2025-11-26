@@ -5,3 +5,6 @@ joblib
 requests
 python-dotenv
 lightgbm
+streamlit
+streamlit-option-menu
+plotly

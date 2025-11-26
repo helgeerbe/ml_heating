@@ -12,29 +12,7 @@ same definitions as sklearn's mean_absolute_error and
 sqrt(mean_squared_error), and the physics model's confidence
 formula.
 """
-from typing import Sequence
-import numpy as np
 
-def _to_np(x) -> np.ndarray:
-    if isinstance(x, np.ndarray):
-        return x
-    return np.array(x, dtype=float)
-
-def mae(y_true: Sequence, y_pred: Sequence) -> float:
-    """Mean Absolute Error (batch). Returns 0.0 for empty inputs."""
-    y_t = _to_np(y_true)
-    y_p = _to_np(y_pred)
-    if y_t.size == 0:
-        return 0.0
-    return float(np.mean(np.abs(y_t - y_p)))
-
-def rmse(y_true: Sequence, y_pred: Sequence) -> float:
-    """Root Mean Squared Error (batch). Returns 0.0 for empty inputs."""
-    y_t = _to_np(y_true)
-    y_p = _to_np(y_pred)
-    if y_t.size == 0:
-        return 0.0
-    return float(np.sqrt(np.mean((y_t - y_p) ** 2)))
 
 def rolling_sigma(errors: Sequence, window: int = 50, min_sigma: float = 0.02) -> float:
     """
@@ -63,3 +41,58 @@ def confidence_from_sigma(sigma: float) -> float:
     except Exception:
         s = 0.5
     return 1.0 / (1.0 + s)
+
+class MAE:
+    """Incremental Mean Absolute Error tracker (compatible API)."""
+    def __init__(self):
+        self._sum_abs_errors = 0.0
+        self._n = 0
+
+    def update(self, y_true, y_pred):
+        """Update metric with a single sample or with arrays (vectorized)."""
+        # support scalar or sequence
+        try:
+            import numpy as _np
+            if _np is not None and (_np.ndim(y_true) if hasattr(y_true, '__array__') else 0):
+                y_t = _np.array(y_true, dtype=float)
+                y_p = _np.array(y_pred, dtype=float)
+                self._sum_abs_errors += float(_np.sum(_np.abs(y_t - y_p)))
+                self._n += int(y_t.size)
+                return
+        except Exception:
+            pass
+        # scalar fallback
+        self._sum_abs_errors += abs(y_true - y_pred)
+        self._n += 1
+
+    def get(self) -> float:
+        if self._n == 0:
+            return 0.0
+        return self._sum_abs_errors / self._n
+
+class RMSE:
+    """Incremental Root Mean Squared Error tracker (compatible API)."""
+    def __init__(self):
+        self._sum_squared_errors = 0.0
+        self._n = 0
+
+    def update(self, y_true, y_pred):
+        """Update metric with a single sample or with arrays (vectorized)."""
+        try:
+            import numpy as _np
+            if _np is not None and (_np.ndim(y_true) if hasattr(y_true, '__array__') else 0):
+                y_t = _np.array(y_true, dtype=float)
+                y_p = _np.array(y_pred, dtype=float)
+                self._sum_squared_errors += float(_np.sum((y_t - y_p) ** 2))
+                self._n += int(y_t.size)
+                return
+        except Exception:
+            pass
+        # scalar fallback
+        self._sum_squared_errors += (y_true - y_pred) ** 2
+        self._n += 1
+
+    def get(self) -> float:
+        if self._n == 0:
+            return 0.0
+        import math as _math
