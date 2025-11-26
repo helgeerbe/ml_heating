@@ -1,5 +1,5 @@
 name: "ML Heating Control"
-version: "1.0.0"
+version: "dev"
 slug: "ml_heating"
 description: "Physics-based machine learning heating control system with online learning"
 url: "https://github.com/helgeerbe/ml_heating"
@@ -10,10 +10,9 @@ arch:
   - amd64
   - i386
 startup: services
-boot: auto
 init: false
 map:
-  - addon_config:/data
+  - addon_config:/data:rw
 ports:
   3001/tcp: 3001
 ports_description:
@@ -21,12 +20,10 @@ ports_description:
 webui: "http://[HOST]:[PORT:3001]"
 panel_icon: mdi:heat-pump
 panel_title: "ML Heating Control"
-host_network: false
 privileged:
   - SYS_RAWIO
 apparmor: false
 hassio_api: true
-hassio_role: default
 homeassistant_api: true
 image: "ghcr.io/helgeerbe/ml_heating"
 options:

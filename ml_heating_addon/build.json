@@ -6,7 +6,6 @@
     "armv7": "ghcr.io/home-assistant/armv7-base-python:3.11-alpine3.18",
     "i386": "ghcr.io/home-assistant/i386-base-python:3.11-alpine3.18"
   },
-  "squash": false,
   "args": {
     "BUILD_ARCH": "{arch}",
     "BUILD_DATE": "{build_date}",
