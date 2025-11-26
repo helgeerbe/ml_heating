@@ -39,10 +39,17 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         
+      - name: Prepare add-on build context (local)
+        run: |
+          rm -rf ml_heating_addon/src ml_heating_addon/notebooks || true
+          cp -R src ml_heating_addon/src || true
+          cp -R notebooks ml_heating_addon/notebooks || true
+          cp requirements.txt ml_heating_addon/requirements.txt || true
+
       - name: Test build (no push)
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ml_heating_addon
           file: ml_heating_addon/Dockerfile
           platforms: linux/amd64
           push: false
@@ -102,10 +109,17 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
             
+      - name: Prepare add-on build context
+        run: |
+          rm -rf ml_heating_addon/src ml_heating_addon/notebooks || true
+          cp -R src ml_heating_addon/src || true
+          cp -R notebooks ml_heating_addon/notebooks || true
+          cp requirements.txt ml_heating_addon/requirements.txt || true
+
       - name: Build and push container
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ml_heating_addon
           file: ml_heating_addon/Dockerfile
           platforms: ${{ matrix.platform }}
           push: ${{ github.event_name != 'pull_request' }}
@@ -140,6 +154,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
           
+      - name: Prepare add-on build context
+        run: |
+          rm -rf ml_heating_addon/src ml_heating_addon/notebooks || true
+          cp -R src ml_heating_addon/src
+          cp -R notebooks ml_heating_addon/notebooks || true
+          cp requirements.txt ml_heating_addon/requirements.txt || true
+
       - name: Build Add-on
         uses: home-assistant/builder@master
         with:
