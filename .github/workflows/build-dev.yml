@@ -2,7 +2,7 @@ name: Build Development Release
 
 on:
   push:
-    tags: ['v*-dev.*']  # Only trigger on development tags
+    tags: ['v*-alpha.*']  # Only trigger on alpha development tags
   workflow_dispatch:
 
 env:

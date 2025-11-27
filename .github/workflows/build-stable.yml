@@ -26,9 +26,9 @@ jobs:
           TAG_NAME=${GITHUB_REF#refs/tags/}
           VERSION=${TAG_NAME#v}
           
-          if [[ "$VERSION" =~ -dev\. ]]; then
+          if [[ "$VERSION" =~ -alpha\. ]] || [[ "$VERSION" =~ -dev\. ]]; then
             echo "is-stable=false" >> $GITHUB_OUTPUT
-            echo "This is a development release, skipping stable build"
+            echo "This is a development/alpha release, skipping stable build"
           else
             echo "is-stable=true" >> $GITHUB_OUTPUT
             echo "version=$VERSION" >> $GITHUB_OUTPUT
