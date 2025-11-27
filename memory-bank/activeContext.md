@@ -2,30 +2,73 @@
 
 ## Current Work Focus
 
-### Current Phase: Development Workflow Documentation (Complete)
-**Status**: ✅ **COMPLETED** - Comprehensive development workflow documentation created with GitHub issue management
+### Current Phase: Complete Dev Branch Merge & Documentation Consolidation (In Progress)
+**Status**: 🔄 **IN PROGRESS** - Merging complete dev branch with comprehensive documentation and dual-channel build system
+
+**What is being accomplished**:
+
+**Complete Dev Branch Integration**:
+- Merging sophisticated tag-only, branch-based dual-channel build system from dev
+- Integrating comprehensive GitHub issue templates and contributor workflows
+- Consolidating development documentation with GitHub CLI management workflows
+- Bringing in enhanced release automation and container build processes
+
+**Documentation Consolidation**:
+- **From Dev Branch**: Dual-channel release system, contributor workflows, issue templates
+- **From Main Branch**: GitHub CLI integration, development workflow documentation
+- **Result**: Comprehensive development ecosystem with professional build processes
+
+**Release System Benefits**:
+- **Stable Channel** (main branch): Auto-update enabled, production-ready releases
+- **Dev Channel** (dev/feature branches): Auto-update disabled, manual updates for safety
+- **Version Processing**: v0.1.0 → stable, v0.1.0-dev.1 → dev with validation
+- **Container Strategy**: Separate tagging for ghcr.io/helgeerbe/ml_heating builds
+
+### Previous Phase: Branch-Based Dual-Channel Release System (Complete)
+**Status**: ✅ **COMPLETED** - Implemented sophisticated tag-only, branch-based dual-channel build system
 
 **What was accomplished**:
 
-**GitHub Issue Management Documentation**:
-- Created comprehensive `memory-bank/developmentWorkflow.md` with complete GitHub CLI workflows
-- Documented issue creation process: local drafting → GitHub issue → cleanup workflow
-- Included GitHub CLI commands for issue management (`gh issue create`, `gh issue list`, etc.)
-- Added issue templates and content standards for feature requests and bug reports
-- Documented label strategy and troubleshooting for CLI issues
+**Dual-Channel Release Architecture**:
+- Created branch-based build type detection system (main = stable, others = dev)
+- Modified GitHub Actions to trigger only on tags, not commits
+- Implemented automatic version and auto_update configuration based on build type
+- Built comprehensive container tagging strategy for stable vs dev releases
+- Added dev branch for development channel testing
 
-**Development Process Documentation**:
-- Git workflow with branch strategy and semantic versioning
-- Home Assistant add-on development specific workflows
-- Container build process and tag-based releases
-- Quality assurance checklists and release processes
-- Project-specific workflows (physics calibration, notebook development)
+**Release Automation Features**:
+- **Stable Channel** (main branch): Auto-update enabled, production-ready releases
+- **Dev Channel** (dev/feature branches): Auto-update disabled, manual updates for safety
+- **Version Processing**: v0.1.0 → stable, v0.1.0-dev.1 → dev with validation
+- **Container Strategy**: Separate tagging for ghcr.io/helgeerbe/ml_heating:v0.1.0 vs :v0.1.0-dev.1
+- **Release Notes**: Dynamic release descriptions based on build type with prerelease flags
 
-**Best Practices Integration**:
-- Issue workflow integration with commit references
-- Local documentation → GitHub issue process
-- Memory bank update procedures
-- Pre-commit checklists and development standards
+**Documentation & Workflow**:
+- Created comprehensive CONTRIBUTOR_WORKFLOW.md with practical examples
+- Documented branch workflows, version naming rules, and troubleshooting
+- Established clear contributor guidelines for feature development and hotfixes
+- Implemented safety validations preventing incorrect dev tag formats
+
+### Previous Phase: GitHub Issues Transition & Project Management Setup (Complete)
+**Status**: ✅ **COMPLETED** - Transitioned from progress.md tracking to professional GitHub Issues management
+
+**What was accomplished**:
+
+**GitHub Issues Infrastructure Setup**:
+- Created comprehensive issue templates: Feature Request, Bug Report, Documentation
+- Designed 4 detailed issues ready for GitHub creation:
+  - Issue #1: Design Custom Logo/Icon for Home Assistant Add-on
+  - Issue #2: Implement Automatic Backup Scheduling System
+  - Issue #3: Validate Enhanced Add-on Configuration Features
+  - Issue #4: Enhance Documentation with Visual Guides and User Examples
+- Established project management structure with labels, milestones, and organization
+- Created instruction guide for creating and managing GitHub issues
+
+**Memory Bank Role Evolution**:
+- **Previous Role**: Active development tracking via progress.md
+- **New Role**: Historical context and architectural documentation for AI assistant sessions
+- **GitHub Issues**: Now handle active development planning, community collaboration, and feature tracking
+- **Benefit**: Enables community visibility and contribution while maintaining internal context
 
 ### Previous Phase: Complete PV Entity Migration & Configuration Optimization (Complete)
 **Status**: ✅ **COMPLETED** - Successfully migrated from multiple PV entities to single entity across entire project
@@ -136,29 +179,6 @@
 - **Deployment**: Home Assistant add-on can build successfully across all architectures
 - **Performance**: Equivalent functionality to scikit-learn with lighter dependencies
 
-### November 26, 2025 (Later Session) - Physics Compliance Fix
-
-**Critical Physics Issue Resolved**: Fixed negative heating predictions that violated physical laws:
-- **Root Cause**: Physics bounds allowed `min_prediction = -0.05` (impossible cooling from heating system)
-- **Impact**: Notebooks showed negative heating effects at cold temperatures, violating thermodynamics
-- **Resolution**: Updated bounds to `min_prediction = 0.0` ensuring heating systems can only heat, never cool
-
-**Demo Model Infrastructure Removed**: Cleaned up notebook complexity:
-- **Removed**: 130+ lines of `PhysicsCompliantWrapper` and demo model fallback logic
-- **Simplified**: Notebooks now load production model directly with clear error handling
-- **Improved**: Consistent behavior between notebooks and production system
-
-**Model Recalibration**: Force-retrained model with corrected physics:
-- **Fresh Calibration**: Deleted old model and retrained with proper bounds from 4,303 samples
-- **Performance**: Achieved MAE=0.1419°C, RMSE=0.1812°C with physics compliance
-- **Validation**: Perfect physics score (1.00) across all temperature ranges
-
-**Production Impact**:
-- **Winter Scenarios**: Now show 0.000000°C (minimum bound) instead of negative predictions
-- **Spring/Summer**: Show natural physics range or maximum bound (0.250000°C) as appropriate
-- **Notebook Consistency**: All analysis notebooks now reflect real production model behavior
-- **Ready for Deployment**: Requires service restart to load corrected model
-
 ### System Sophistication Level
 This is a **production-grade, highly sophisticated** heating control system with:
 
@@ -267,39 +287,10 @@ This is a **production-grade, highly sophisticated** heating control system with
 - **activeContext.md**: Current state tracking and decisions
 - **progress.md**: Status of development and remaining work
 
-### Key Technical Insights Documented
-
-**Live Performance Tracking Innovation**:
-- **Dynamic Confidence**: Real-time calculation based on rolling prediction error window
-- **Adaptive Uncertainty**: Sigma bounds automatically adjust to model performance
-- **Prediction Error Attribution**: Track actual vs predicted temperature changes every cycle
-- **Performance Metric Evolution**: MAE/RMSE become living metrics instead of static calibration values
-- **Production Readiness**: System maintains excellent performance (0.141°C MAE, 99% confidence)
-
-**Physics-Based Learning**:
-- Hybrid approach combining thermodynamic principles with data learning
-- Multi-level learning hierarchy (core physics → external sources → correlations)
-- Interpretable predictions respecting physical constraints
-- **Enhanced Robustness**: Improved error handling prevents learning disruption from edge cases
-
-**Safety Architecture**:
-- Multiple protection layers preventing dangerous operation
-- Grace periods with intelligent recovery after blocking events
-- DHW vs defrost differentiation for appropriate restoration behavior
-
-**Advanced Learning Features**:
-- Multi-lag coefficients automatically learned via correlation analysis
-- Seasonal modulation eliminates manual recalibration
-- Summer learning from HVAC-off periods for clean baseline signals
-
 ## Next Steps & Priorities
 
 ### Immediate Next Action
-**Update Documentation**: Complete memory bank and README updates documenting:
-- Live performance tracking system implementation
-- Real-time confidence calculation capabilities
-- Enhanced error handling and robustness improvements
-- Production deployment verification and performance results
+**Complete Dev Branch Merge**: Finalize merging process and consolidate documentation ecosystem
 
 ### Recently Completed
 
@@ -320,48 +311,4 @@ This is a **production-grade, highly sophisticated** heating control system with
 - ✅ Improved error handling for robust correlation calculations
 - ✅ Verified production deployment and excellent performance
 
-### Future Memory Bank Updates
-**When to Update**:
-- After reviewing any additional codebase components
-- When implementing new features or modifications
-- If architectural patterns change or evolve
-- During operational deployment or configuration changes
-
-**Update Process**:
-- Review ALL memory bank files when triggered by "update memory bank"
-- Focus particularly on `activeContext.md` and `progress.md` for current state
-- Document new insights, patterns, or technical decisions
-- Maintain accuracy of implementation details and code examples
-
-## Important Patterns & Preferences
-
-### Live Performance Tracking Patterns
-- **Rolling Window Approach**: Use 50-sample window for stability vs responsiveness balance
-- **Bounded Adaptation**: Constrain sigma between practical limits (0.02°C to 0.5°C)
-- **Real-time Integration**: Update performance metrics during normal operation cycles
-- **Backward Compatibility**: Ensure old models seamlessly gain new capabilities
-- **Production Verification**: Validate enhancements with actual operational data
-
-### Documentation Standards
-- **Code Examples**: Include actual implementation snippets for key patterns
-- **Technical Depth**: Capture sophisticated architectural decisions and reasoning
-- **Practical Focus**: Emphasize deployment, configuration, and operational concerns
-- **Hierarchical Structure**: Build concepts progressively across files
-- **Enhancement History**: Document major improvements and their impact on system capability
-
-### System Understanding Principles
-- **Physics First**: Thermodynamic principles guide ML architecture
-- **Safety Critical**: Multiple protection layers essential for heating systems
-- **Continuous Learning**: Online adaptation preferred over batch retraining
-- **Transparency**: Feature importance and diagnostics crucial for trust
-- **Robustness**: Graceful degradation and error recovery required
-
-### Development Philosophy
-- **Production Ready**: Built for 24/7 operation with comprehensive monitoring
-- **User Focused**: Technical users need control and understanding
-- **Risk Mitigation**: Shadow mode enables safe testing and validation
-- **Iterative Improvement**: Continuous learning and seasonal adaptation
-- **Documentation First**: Comprehensive workflow documentation for consistent development practices
-- **Issue-Driven Development**: GitHub integration for transparent project management
-
-This memory bank captures a sophisticated, production-ready ML heating control system with advanced learning capabilities, comprehensive safety mechanisms, mature deployment practices, **cutting-edge live performance tracking**, and **comprehensive development workflow documentation**. The November 2025 enhancements add real-time confidence adaptation and complete GitHub CLI integration that makes the development process significantly more efficient and transparent. The system represents a significant achievement in physics-based machine learning for residential heating optimization with **industry-leading adaptive performance monitoring** and **professional development practices**.
+## Important

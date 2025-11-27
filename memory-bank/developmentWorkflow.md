@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document captures the development workflows, tools, and processes used in the ML Heating project. It serves as a reference for maintaining consistent development practices and efficient project management.
+This document captures the comprehensive development workflows, tools, and processes used in the ML Heating project. It serves as a reference for maintaining consistent development practices, efficient project management, and professional build processes.
 
 ## Git Workflow
 
@@ -81,113 +81,124 @@ gh issue edit 10 --add-label "priority:high"
 gh issue close 10 --comment "Resolved in commit abc123"
 ```
 
-### Label Strategy
-**Standard Labels Available**:
-- `enhancement` - Feature requests and improvements
-- `bug` - Bug reports and fixes
-- `documentation` - Documentation updates
-- `question` - Support questions
-
-**Note**: Check available labels with `gh label list` before creating issues to avoid "label not found" errors.
-
-### Issue Documentation Process
-
-#### When to Create GitHub Issues
-1. **Feature Requests**: New functionality or significant enhancements
-2. **Bug Reports**: Issues with current functionality
-3. **Documentation**: Missing or incorrect documentation
-4. **Architecture Changes**: Major system modifications
-5. **User Experience**: UI/UX improvements
-
-#### Issue Content Standards
-**Feature Request Template**:
-```markdown
-# Feature Request: [Title]
-
-## Current State
-- Brief description of current functionality
-
-## Requested Enhancement
-- Detailed description of desired feature
-- Benefits and use cases
-
-## Implementation Plan
-- Technical approach
-- Breaking changes (if any)
-- Migration strategy
-
-## Success Criteria
-- [ ] Acceptance criteria
-- [ ] Testing requirements
-- [ ] Documentation updates
-
-## Priority: [High/Medium/Low]
-**Rationale**: Why this feature is needed
-
-## Labels
-- enhancement
-- [additional relevant labels]
-```
-
-**Bug Report Template**:
-```markdown
-# Bug: [Title]
-
-## Problem Description
-- What's happening vs what should happen
-
-## Steps to Reproduce
-1. Step 1
-2. Step 2
-3. Step 3
-
-## Environment
-- Version: 
-- Platform:
-- Configuration:
-
-## Expected vs Actual Behavior
-**Expected**: 
-**Actual**: 
-
-## Error Messages
-```
-[error logs or screenshots]
-```
-
-## Impact
-- Severity level and user impact
-
-## Labels
-- bug
-- [additional relevant labels]
-```
-
-### Issue Workflow Integration
-
-#### Local Documentation → GitHub Issue Process
+### Local Documentation → GitHub Issue Process
 1. **Draft locally** - Create detailed markdown file for complex issues
 2. **Review content** - Ensure completeness and clarity
 3. **Create issue** - Use `gh issue create --body-file` command
 4. **Clean up** - Remove local draft file after successful creation
 5. **Reference** - Link to issue in commits: `Closes #10` or `Refs #10`
 
-#### Example: Feature Enhancement Process
+## Development Build Process
+
+### Current Status
+**Latest Development Build**: `v0.1.0-dev.3`
+- **Purpose**: Fix Home Assistant add-on discovery with proper semantic versioning
+- **Container**: `ghcr.io/helgeerbe/ml_heating:v0.1.0-dev.3`
+
+### When to Create Development Builds
+- Bug fixes that need immediate testing
+- Experimental features requiring feedback
+- Configuration changes needing validation
+- Performance improvements requiring measurement
+- Any changes affecting add-on functionality
+
+### Development Build Workflow
 ```bash
-# 1. Create detailed enhancement document
-nano enhancement_proposal.md
+# 1. Make changes to code/configuration
+# 2. Update version in ml_heating_addon/config.yaml
+version: "0.1.0-dev.4"  # Increment dev build number
 
-# 2. Create GitHub issue from document  
-gh issue create --title "Feature Request: Enhancement Title" --body-file enhancement_proposal.md --label "enhancement"
+# 3. Update CHANGELOG.md [Unreleased] section
+### Added
+- New feature or fix description
 
-# 3. Note the issue URL (e.g., https://github.com/user/repo/issues/10)
+# 4. Commit with conventional message
+git add .
+git commit -m "feat(addon): add new feature description
 
-# 4. Clean up local file
-rm enhancement_proposal.md
+### Added
+- Detailed description of changes
+- Impact on functionality
 
-# 5. Reference in commits
-git commit -m "feat: implement new feature (refs #10)"
+Addresses testing requirement for XYZ."
+
+# 5. Create and push development tag
+git tag v0.1.0-dev.4
+git push origin main && git push origin v0.1.0-dev.4
+
+# 6. Monitor GitHub Actions for build success
+# 7. Test deployment in Home Assistant
 ```
+
+### Development Build Naming Convention
+- **Format**: `0.x.x-dev.N`
+- **Examples**: 
+  - `0.1.0-dev.3` - Current development build
+  - `0.1.0-dev.4` - Next iteration with fixes
+  - `0.2.0-dev.1` - New minor version development
+- **Git Tags**: `v0.1.0-dev.3`, `v0.1.0-dev.4`
+
+## Release Build Process
+
+### When to Create Release Builds
+- Multiple dev builds tested and stable
+- Feature milestones completed
+- Community feedback incorporated
+- Documentation updated
+- Ready for broader user testing
+
+### Release Build Workflow
+```bash
+# 1. Ensure all dev builds are tested and stable
+# 2. Update version to remove -dev suffix
+version: "0.1.0"  # Clean version number
+
+# 3. Move CHANGELOG.md [Unreleased] entries to versioned section
+## [0.1.0] - 2025-XX-XX
+### Added
+- Consolidated features from dev builds
+- Tested and validated functionality
+
+# 4. Commit release
+git commit -m "release: v0.1.0 development release
+
+Stable development release incorporating tested changes from:
+- v0.1.0-dev.3: Home Assistant discovery fix
+- v0.1.0-dev.4: Additional improvements
+
+Ready for broader beta testing community."
+
+# 5. Create release tag
+git tag v0.1.0
+git push origin main && git push origin v0.1.0
+
+# 6. Monitor build and container publication
+# 7. Announce to community for testing
+```
+
+### Release Build Naming Convention
+- **Development Releases**: `0.x.0` (e.g., 0.1.0, 0.2.0)
+- **Beta Releases**: `0.x.0` with broader testing (e.g., 0.5.0, 0.8.0)  
+- **Production Releases**: `x.0.0` (e.g., 1.0.0, 2.0.0)
+- **Git Tags**: `v0.1.0`, `v0.5.0`, `v1.0.0`
+
+## GitHub Actions Integration
+
+### Workflow Triggers
+- **Dev Builds**: Tags matching `v*-dev.*` pattern
+- **Releases**: Tags matching `v*` pattern (without -dev)
+
+### Build Process
+1. **Multi-architecture container build**
+2. **Publishing to GitHub Container Registry (GHCR)**
+3. **Container tagging**:
+   - Dev: `ghcr.io/helgeerbe/ml_heating:v0.1.0-dev.3`
+   - Release: `ghcr.io/helgeerbe/ml_heating:v0.1.0`, `:latest`
+
+### Monitoring Builds
+- Check GitHub Actions tab after pushing tags
+- Verify container publication in repository packages
+- Test Home Assistant add-on discovery and installation
 
 ## Home Assistant Add-on Development
 
@@ -197,6 +208,14 @@ git commit -m "feat: implement new feature (refs #10)"
 - Add-on files must be on `main` branch (Home Assistant only reads default branch)
 - Container image must exist and be accessible
 - `config.yaml` structure must be valid
+
+### Repository Configuration
+- **Repository URL**: `https://github.com/helgeerbe/ml_heating`
+- **Add-on Path**: `ml_heating_addon/`
+- **Discovery Requirements**:
+  - Valid `config.yaml` with proper semantic versioning
+  - Proper `build.json` for container builds
+  - `repository.json` at root level
 
 ### Add-on Version Management
 ```bash
@@ -210,17 +229,16 @@ git commit -m "fix(addon): update version to 0.1.0-dev.3 for HA discovery"
 git push origin main
 ```
 
-### Container Build Process
-**Tag-based Builds**:
-- Git tags trigger GitHub Actions container builds
-- Container name: `ghcr.io/helgeerbe/ml_heating:v{version}`
-- Ensure tag matches `config.yaml` version exactly
-
 ### Testing Add-on Discovery
 1. **Remove repository** from HA (Settings → Add-ons → Add-on Store → ⋮ → Repositories)
 2. **Wait 2-3 minutes** for cache clearance
 3. **Re-add repository**: `https://github.com/helgeerbe/ml_heating`
 4. **Verify add-on appears** with correct version
+
+### Expected Add-on Appearance
+- **Name**: "ML Heating Control"
+- **Current Version**: "0.1.0-dev.3" 
+- **Description**: "Physics-based machine learning heating control system with online learning"
 
 ## Documentation Standards
 
@@ -291,12 +309,25 @@ gh repo set-default helgeerbe/ml_heating
 - [ ] **Documentation updates** - Memory bank updated for significant changes
 - [ ] **Testing** - Changes tested in appropriate environment
 
-### Release Process
-1. **Tag version** - Create semantic version tag
-2. **Build containers** - Verify GitHub Actions success
-3. **Test add-on** - Verify HA discovery and installation
-4. **Update documentation** - Memory bank and README updates
-5. **Close issues** - Reference resolved issues in commits
+### Before Every Development Build
+- [ ] Code changes tested locally
+- [ ] Configuration syntax validated
+- [ ] Version number incremented properly
+- [ ] CHANGELOG.md updated in [Unreleased]
+- [ ] Commit message follows conventional format
+
+### Before Every Release
+- [ ] All related dev builds tested successfully
+- [ ] Community feedback reviewed and incorporated
+- [ ] Documentation updated and accurate
+- [ ] CHANGELOG.md entries moved to versioned section
+- [ ] Version number updated to clean format (no -dev)
+
+### After Every Tag Push
+- [ ] Monitor GitHub Actions for build success
+- [ ] Verify container publication to GHCR
+- [ ] Test Home Assistant add-on discovery
+- [ ] Validate installation and basic functionality
 
 ## Project-Specific Workflows
 
@@ -338,6 +369,18 @@ from notebook_imports import *  # Loads all required modules
 2. **Verify main branch** - HA only reads default branch
 3. **Container availability** - Ensure image exists at registry
 4. **Clear HA cache** - Remove and re-add repository
+
+### Build Failures
+1. Review GitHub Actions logs
+2. Validate YAML syntax in configuration files
+3. Check container build process
+4. Verify multi-architecture compatibility
+
+### Version Conflicts
+1. Ensure version increments are logical
+2. Check for duplicate tags
+3. Validate changelog consistency
+4. Review commit message format
 
 ### GitHub CLI Issues
 ```bash
@@ -386,9 +429,29 @@ git pull origin main
 - **Structure hierarchically** across files
 - **Focus on practical operations** and deployment
 
+## Benefits of This Workflow
+
+### Development Efficiency
+- **Rapid iteration** with frequent dev builds
+- **Clear progression** from experimental to stable
+- **Community feedback** integration at multiple stages
+- **Risk mitigation** through staged releases
+
+### Project Quality
+- **Structured versioning** prevents confusion
+- **Professional appearance** builds community trust
+- **Documentation standards** ensure maintainability
+- **Automated processes** reduce human error
+
+### User Experience
+- **Version transparency** sets clear expectations
+- **Choice of stability** (dev vs release builds)
+- **Predictable updates** following semantic versioning
+- **Quality assurance** through testing phases
+
 ---
 
 **Last Updated**: November 27, 2025  
 **Next Review**: When implementing new development tools or major workflow changes
 
-This workflow documentation ensures consistent development practices and efficient project management for the sophisticated ML Heating control system.
+This workflow documentation ensures consistent development practices and efficient project management for the sophisticated ML Heating control system, combining comprehensive GitHub CLI integration with professional build and release processes.
