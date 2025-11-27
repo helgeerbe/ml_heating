@@ -74,6 +74,11 @@ jobs:
           cp -R notebooks container_build/ || true
           cp requirements.txt container_build/
           cp ml_heating_addon/Dockerfile container_build/
+          cp ml_heating_addon/run.sh container_build/
+          cp ml_heating_addon/supervisord.conf container_build/
+          cp ml_heating_addon/config_adapter.py container_build/
+          cp ml_heating_addon/dashboard_requirements.txt container_build/
+          cp -R ml_heating_addon/dashboard container_build/
 
       - name: Build and push development container
         uses: docker/build-push-action@v5
