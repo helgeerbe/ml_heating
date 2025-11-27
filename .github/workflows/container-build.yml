@@ -40,12 +40,19 @@ jobs:
           
           # Check if main branch contains this tag
           if echo "$BRANCHES" | grep -q "origin/main"; then
-            echo "type=stable" >> $GITHUB_OUTPUT
-            echo "is-stable=true" >> $GITHUB_OUTPUT
-            # For stable builds, use clean version (remove v prefix)
+            # Check if this is a development release (has -dev suffix)
             VERSION=${TAG_NAME#v}
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
-            echo "🎯 STABLE BUILD detected from main branch - Version: $VERSION"
+            if [[ "$VERSION" =~ -dev\. ]]; then
+              echo "type=dev" >> $GITHUB_OUTPUT
+              echo "is-stable=false" >> $GITHUB_OUTPUT
+              echo "version=dev" >> $GITHUB_OUTPUT
+              echo "🚧 DEV BUILD from main branch (has -dev suffix) - Version: dev"
+            else
+              echo "type=stable" >> $GITHUB_OUTPUT
+              echo "is-stable=true" >> $GITHUB_OUTPUT
+              echo "version=$VERSION" >> $GITHUB_OUTPUT
+              echo "🎯 STABLE BUILD detected from main branch - Version: $VERSION"
+            fi
           else
             echo "type=dev" >> $GITHUB_OUTPUT
             echo "is-stable=false" >> $GITHUB_OUTPUT
@@ -55,8 +62,8 @@ jobs:
               echo "❌ Dev builds must have -dev.N suffix in tag"
               exit 1
             fi
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
-            echo "🚧 DEV BUILD detected from feature/dev branch - Version: $VERSION"
+            echo "version=dev" >> $GITHUB_OUTPUT
+            echo "🚧 DEV BUILD detected from feature/dev branch - Version: dev"
           fi
 
   # Stage 1: Quick Validation - Fail Fast
