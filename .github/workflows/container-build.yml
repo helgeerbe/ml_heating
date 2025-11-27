@@ -2,8 +2,7 @@ name: Build and Publish ML Heating Container
 
 on:
   push:
-    branches: [main, develop]
-    tags: ['v*']
+    tags: ['v*']  # Only build on tags, not commits
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -13,8 +12,56 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # Stage 0: Determine Build Type Based on Branch
+  determine-build-type:
+    runs-on: ubuntu-latest
+    name: Determine Build Type
+    outputs:
+      build-type: ${{ steps.build-type.outputs.type }}
+      is-stable: ${{ steps.build-type.outputs.is-stable }}
+      version: ${{ steps.build-type.outputs.version }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history to determine branch
+          
+      - name: Determine build type from branch
+        id: build-type
+        run: |
+          # Get the tag name
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          echo "Tag: $TAG_NAME"
+          
+          # Find which branch contains this tag
+          BRANCHES=$(git branch -r --contains $GITHUB_SHA | grep -v HEAD || true)
+          echo "Branches containing this commit: $BRANCHES"
+          
+          # Check if main branch contains this tag
+          if echo "$BRANCHES" | grep -q "origin/main"; then
+            echo "type=stable" >> $GITHUB_OUTPUT
+            echo "is-stable=true" >> $GITHUB_OUTPUT
+            # For stable builds, use clean version (remove v prefix)
+            VERSION=${TAG_NAME#v}
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "🎯 STABLE BUILD detected from main branch - Version: $VERSION"
+          else
+            echo "type=dev" >> $GITHUB_OUTPUT
+            echo "is-stable=false" >> $GITHUB_OUTPUT
+            # For dev builds, ensure version has -dev suffix
+            VERSION=${TAG_NAME#v}
+            if [[ ! "$VERSION" =~ -dev\. ]]; then
+              echo "❌ Dev builds must have -dev.N suffix in tag"
+              exit 1
+            fi
+            echo "version=dev" >> $GITHUB_OUTPUT
+            echo "🚧 DEV BUILD detected from feature/dev branch - Version: dev"
+          fi
+
   # Stage 1: Quick Validation - Fail Fast
   validate:
+    needs: determine-build-type
     runs-on: ubuntu-latest
     name: Validate Add-on Configuration
     
@@ -29,6 +76,7 @@ jobs:
           path: "./ml_heating_addon"
 
   test:
+    needs: determine-build-type
     runs-on: ubuntu-latest
     name: Test Container Build
     
@@ -38,6 +86,36 @@ jobs:
         
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        
+      - name: Update add-on version based on build type
+        run: |
+          VERSION="${{ needs.determine-build-type.outputs.version }}"
+          BUILD_TYPE="${{ needs.determine-build-type.outputs.build-type }}"
+          echo "Build Type: $BUILD_TYPE"
+          echo "Updating add-on config version to: $VERSION"
+          
+          # Update version
+          sed -i "s/^version: .*/version: \"$VERSION\"/" ml_heating_addon/config.yaml
+          
+          # Set auto_update based on build type
+          if [ "$BUILD_TYPE" = "stable" ]; then
+            echo "Setting auto_update: true for stable build"
+            if grep -q "^auto_update:" ml_heating_addon/config.yaml; then
+              sed -i "s/^auto_update: .*/auto_update: true/" ml_heating_addon/config.yaml
+            else
+              echo "auto_update: true" >> ml_heating_addon/config.yaml
+            fi
+          else
+            echo "Setting auto_update: false for dev build"
+            if grep -q "^auto_update:" ml_heating_addon/config.yaml; then
+              sed -i "s/^auto_update: .*/auto_update: false/" ml_heating_addon/config.yaml
+            else
+              echo "auto_update: false" >> ml_heating_addon/config.yaml
+            fi
+          fi
+          
+          echo "Updated config.yaml:"
+          grep -E "^(version|auto_update):" ml_heating_addon/config.yaml
         
       - name: Prepare add-on build context (local)
         run: |
@@ -140,11 +218,11 @@ jobs:
   build-addon:
     runs-on: ubuntu-latest
     name: Build Home Assistant Add-on
-    needs: build-container
+    needs: [determine-build-type, build-container]
     permissions:
       contents: read
       packages: write
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v')
     
     steps:
       - name: Checkout repository
@@ -156,6 +234,36 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_PAT }}
+          
+      - name: Update add-on version based on build type
+        run: |
+          VERSION="${{ needs.determine-build-type.outputs.version }}"
+          BUILD_TYPE="${{ needs.determine-build-type.outputs.build-type }}"
+          echo "Build Type: $BUILD_TYPE"
+          echo "Updating add-on config version to: $VERSION"
+          
+          # Update version
+          sed -i "s/^version: .*/version: \"$VERSION\"/" ml_heating_addon/config.yaml
+          
+          # Set auto_update based on build type
+          if [ "$BUILD_TYPE" = "stable" ]; then
+            echo "Setting auto_update: true for stable build"
+            if grep -q "^auto_update:" ml_heating_addon/config.yaml; then
+              sed -i "s/^auto_update: .*/auto_update: true/" ml_heating_addon/config.yaml
+            else
+              echo "auto_update: true" >> ml_heating_addon/config.yaml
+            fi
+          else
+            echo "Setting auto_update: false for dev build"
+            if grep -q "^auto_update:" ml_heating_addon/config.yaml; then
+              sed -i "s/^auto_update: .*/auto_update: false/" ml_heating_addon/config.yaml
+            else
+              echo "auto_update: false" >> ml_heating_addon/config.yaml
+            fi
+          fi
+          
+          echo "Updated config.yaml:"
+          grep -E "^(version|auto_update):" ml_heating_addon/config.yaml
           
       - name: Prepare add-on build context
         run: |
@@ -176,7 +284,7 @@ jobs:
   # Stage 3: Release - Only for tagged versions
   release:
     runs-on: ubuntu-latest
-    needs: [validate, test, build-container, build-addon]
+    needs: [determine-build-type, validate, test, build-container, build-addon]
     if: startsWith(github.ref, 'refs/tags/v')
     
     steps:
@@ -189,15 +297,22 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.ref }}
-          release_name: ML Heating v${{ github.ref_name }}
+          release_name: ML Heating v${{ github.ref_name }}${{ needs.determine-build-type.outputs.build-type == 'dev' && ' (Development)' || '' }}
           body: |
             ## ML Heating Control Add-on Release
+            
+            **Build Type:** ${{ needs.determine-build-type.outputs.build-type == 'stable' && '🎯 **STABLE** - Auto-updates enabled' || '🚧 **DEV** - Auto-updates disabled' }}
+            **Version:** `${{ needs.determine-build-type.outputs.version }}`
+            **Branch:** ${{ needs.determine-build-type.outputs.build-type == 'stable' && 'main (stable)' || 'development/feature branch' }}
             
             ### Installation
             Add this repository to your Home Assistant:
             ```
             https://github.com/${{ github.repository }}
             ```
+            
+            ### Auto-Update Behavior
+            ${{ needs.determine-build-type.outputs.build-type == 'stable' && '✅ **Stable releases** from `main` branch automatically update in Home Assistant' || '❌ **Dev releases** from feature branches require manual updates for safety' }}
             
             ### Features
             - Physics-based machine learning heating optimization
@@ -208,5 +323,9 @@ jobs:
             ### Container Images
             - `ghcr.io/${{ github.repository }}:${{ github.ref_name }}`
             - Multi-architecture support (amd64, arm64, armv7)
+            
+            ### Dual-Channel Release Strategy
+            - **Stable Channel** (`main` branch): Production-ready, auto-updating releases
+            - **Dev Channel** (other branches): Development versions for testing, manual updates only
           draft: false
-          prerelease: false
+          prerelease: ${{ needs.determine-build-type.outputs.build-type == 'dev' }}

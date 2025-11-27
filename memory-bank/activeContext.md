@@ -2,7 +2,53 @@
 
 ## Current Work Focus
 
-### Current Phase: Complete PV Entity Migration & Configuration Optimization (Complete)
+### Current Phase: Branch-Based Dual-Channel Release System (Complete)
+**Status**: ✅ **COMPLETED** - Implemented sophisticated tag-only, branch-based dual-channel build system
+
+**What was accomplished**:
+
+**Dual-Channel Release Architecture**:
+- Created branch-based build type detection system (main = stable, others = dev)
+- Modified GitHub Actions to trigger only on tags, not commits
+- Implemented automatic version and auto_update configuration based on build type
+- Built comprehensive container tagging strategy for stable vs dev releases
+- Added dev branch for development channel testing
+
+**Release Automation Features**:
+- **Stable Channel** (main branch): Auto-update enabled, production-ready releases
+- **Dev Channel** (dev/feature branches): Auto-update disabled, manual updates for safety
+- **Version Processing**: v0.1.0 → stable, v0.1.0-dev.1 → dev with validation
+- **Container Strategy**: Separate tagging for ghcr.io/helgeerbe/ml_heating:v0.1.0 vs :v0.1.0-dev.1
+- **Release Notes**: Dynamic release descriptions based on build type with prerelease flags
+
+**Documentation & Workflow**:
+- Created comprehensive CONTRIBUTOR_WORKFLOW.md with practical examples
+- Documented branch workflows, version naming rules, and troubleshooting
+- Established clear contributor guidelines for feature development and hotfixes
+- Implemented safety validations preventing incorrect dev tag formats
+
+### Previous Phase: GitHub Issues Transition & Project Management Setup (Complete)
+**Status**: ✅ **COMPLETED** - Transitioned from progress.md tracking to professional GitHub Issues management
+
+**What was accomplished**:
+
+**GitHub Issues Infrastructure Setup**:
+- Created comprehensive issue templates: Feature Request, Bug Report, Documentation
+- Designed 4 detailed issues ready for GitHub creation:
+  - Issue #1: Design Custom Logo/Icon for Home Assistant Add-on
+  - Issue #2: Implement Automatic Backup Scheduling System
+  - Issue #3: Validate Enhanced Add-on Configuration Features
+  - Issue #4: Enhance Documentation with Visual Guides and User Examples
+- Established project management structure with labels, milestones, and organization
+- Created instruction guide for creating and managing GitHub issues
+
+**Memory Bank Role Evolution**:
+- **Previous Role**: Active development tracking via progress.md
+- **New Role**: Historical context and architectural documentation for AI assistant sessions
+- **GitHub Issues**: Now handle active development planning, community collaboration, and feature tracking
+- **Benefit**: Enables community visibility and contribution while maintaining internal context
+
+### Previous Phase: Complete PV Entity Migration & Configuration Optimization (Complete)
 **Status**: ✅ **COMPLETED** - Successfully migrated from multiple PV entities to single entity across entire project
 
 **What was accomplished**:
