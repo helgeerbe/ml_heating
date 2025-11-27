@@ -180,7 +180,7 @@ jobs:
           cp -R ml_heating_addon/dashboard "$ADDON_PATH/"
 
       - name: Build Stable Add-on
-        uses: home-assistant/builder@master
+        uses: home-assistant/builder@2025.09.0
         with:
           args: |
             --amd64 \
