@@ -2,7 +2,32 @@
 
 ## Current Work Focus
 
-### Current Phase: Complete PV Entity Migration & Configuration Optimization (Complete)
+### Current Phase: Development Workflow Documentation (Complete)
+**Status**: ✅ **COMPLETED** - Comprehensive development workflow documentation created with GitHub issue management
+
+**What was accomplished**:
+
+**GitHub Issue Management Documentation**:
+- Created comprehensive `memory-bank/developmentWorkflow.md` with complete GitHub CLI workflows
+- Documented issue creation process: local drafting → GitHub issue → cleanup workflow
+- Included GitHub CLI commands for issue management (`gh issue create`, `gh issue list`, etc.)
+- Added issue templates and content standards for feature requests and bug reports
+- Documented label strategy and troubleshooting for CLI issues
+
+**Development Process Documentation**:
+- Git workflow with branch strategy and semantic versioning
+- Home Assistant add-on development specific workflows
+- Container build process and tag-based releases
+- Quality assurance checklists and release processes
+- Project-specific workflows (physics calibration, notebook development)
+
+**Best Practices Integration**:
+- Issue workflow integration with commit references
+- Local documentation → GitHub issue process
+- Memory bank update procedures
+- Pre-commit checklists and development standards
+
+### Previous Phase: Complete PV Entity Migration & Configuration Optimization (Complete)
 **Status**: ✅ **COMPLETED** - Successfully migrated from multiple PV entities to single entity across entire project
 
 **What was accomplished**:
@@ -196,6 +221,21 @@ This is a **production-grade, highly sophisticated** heating control system with
 
 ## Active Decisions & Considerations
 
+### Development Workflow Documentation Decisions
+
+**Documentation Approach Chosen**:
+- **Comprehensive GitHub CLI Integration**: Complete command reference with examples
+- **Issue-Driven Development**: Local drafting → GitHub issue → commit reference workflow
+- **Template Standards**: Consistent issue content structure for feature requests and bugs
+- **Workflow Integration**: Git, GitHub, and project-specific processes in single document
+- **Troubleshooting Focus**: Common issues and solutions documented for efficiency
+
+**Memory Bank Integration**:
+- **Standalone Workflow Document**: `developmentWorkflow.md` as dedicated reference
+- **Cross-Reference Architecture**: Links to other memory bank files for complete context
+- **Version Control Integration**: Document git commands and branch strategies
+- **Tool Requirements**: Complete CLI tool setup and authentication procedures
+
 ### Live Performance Tracking Implementation Decisions
 
 **Architecture Approach Chosen**:
@@ -262,6 +302,16 @@ This is a **production-grade, highly sophisticated** heating control system with
 - Production deployment verification and performance results
 
 ### Recently Completed
+
+**Development Workflow Documentation Enhancement**:
+- ✅ Created comprehensive `memory-bank/developmentWorkflow.md` documentation
+- ✅ Documented GitHub CLI issue management workflows and commands
+- ✅ Added issue templates and content standards for consistency
+- ✅ Integrated git workflow, branch strategy, and semantic versioning
+- ✅ Documented Home Assistant add-on development specific processes
+- ✅ Added troubleshooting guides for common development issues
+- ✅ Established quality assurance checklists and best practices
+
 **Live Performance Tracking Enhancement**: 
 - ✅ Fixed AttributeError preventing physics calibration
 - ✅ Implemented real-time sigma calculation with rolling window
@@ -311,5 +361,7 @@ This is a **production-grade, highly sophisticated** heating control system with
 - **User Focused**: Technical users need control and understanding
 - **Risk Mitigation**: Shadow mode enables safe testing and validation
 - **Iterative Improvement**: Continuous learning and seasonal adaptation
+- **Documentation First**: Comprehensive workflow documentation for consistent development practices
+- **Issue-Driven Development**: GitHub integration for transparent project management
 
-This memory bank captures a sophisticated, production-ready ML heating control system with advanced learning capabilities, comprehensive safety mechanisms, mature deployment practices, and **cutting-edge live performance tracking**. The November 2025 enhancement adds real-time confidence adaptation that makes the system significantly more robust and transparent in its operation. The system represents a significant achievement in physics-based machine learning for residential heating optimization with **industry-leading adaptive performance monitoring**.
+This memory bank captures a sophisticated, production-ready ML heating control system with advanced learning capabilities, comprehensive safety mechanisms, mature deployment practices, **cutting-edge live performance tracking**, and **comprehensive development workflow documentation**. The November 2025 enhancements add real-time confidence adaptation and complete GitHub CLI integration that makes the development process significantly more efficient and transparent. The system represents a significant achievement in physics-based machine learning for residential heating optimization with **industry-leading adaptive performance monitoring** and **professional development practices**.
