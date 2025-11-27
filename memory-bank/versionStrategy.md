@@ -1,156 +1,231 @@
-# Version Strategy and Development Workflow
+# Version Strategy and Multi-Add-on Deployment
 
 ## Project Maturity and Versioning
 
-### Current Phase: **Development/Testing Phase**
-The ML Heating project is in active development and testing. We use a two-track deployment system for controlled releases.
+### Current Phase: **Multi-Channel Deployment Phase**
+The ML Heating project now uses a professional dual-channel strategy with alpha and stable releases, inspired by the t0bst4r approach.
 
-## Semantic Versioning Strategy
+## Dual Channel Strategy
 
-### Version Number Format: `MAJOR.MINOR.PATCH[-PRERELEASE][.BUILD]`
+### **Stable Channel** (`ml_heating`)
+- **Version Format**: `MAJOR.MINOR.PATCH` (semantic versioning)
+- **Git Tags**: `v*` (e.g., `v0.1.0`, `v0.2.0`, `v1.0.0`)
+- **Container**: `ghcr.io/helgeerbe/ml_heating:{version}`
+- **Auto-Updates**: ✅ Enabled for production reliability
+- **Target Audience**: Production users, stable deployments
+- **Release Frequency**: When features are tested and stable
 
-#### **Development Builds (Testing Phase)**
-- **Format**: `0.0.x-dev.N`
-- **Examples**: `0.0.1-dev.1`, `0.0.1-dev.2`, `0.0.2-dev.1`
-- **Purpose**: Frequent testing deployments, experimental features, bug fixes
-- **Frequency**: Multiple per day/week during active development
-- **Audience**: Internal testing, early adopters willing to test unstable builds
-- **Git Tags**: `v0.0.1-dev.1`, `v0.0.1-dev.2`
+### **Alpha Channel** (`ml_heating_dev`)
+- **Version Format**: `MAJOR.MINOR.PATCH-alpha.BUILD`
+- **Git Tags**: `v*-alpha.*` (e.g., `v0.1.0-alpha.1`, `v0.1.0-alpha.8`)
+- **Container**: `ghcr.io/helgeerbe/ml_heating:{alpha-version}`
+- **Auto-Updates**: ❌ Disabled for safety (manual testing)
+- **Target Audience**: Testers, early adopters, developers
+- **Release Frequency**: Frequent testing deployments
 
-#### **Development Releases (Stable Testing)**
-- **Format**: `0.0.x`
-- **Examples**: `0.0.1`, `0.0.2`, `0.0.3`
-- **Purpose**: Tested features, more stable for broader testing
-- **Frequency**: When dev builds are tested and features are ready
-- **Audience**: Beta testers, community feedback
-- **Git Tags**: `v0.0.1`, `v0.0.2`
+## Version Number Format: `MAJOR.MINOR.PATCH[-alpha.BUILD]`
 
-#### **Beta Releases (Feature Complete)**
-- **Format**: `0.x.0`
-- **Examples**: `0.1.0`, `0.2.0`
-- **Purpose**: Feature-complete versions with all planned functionality
-- **Frequency**: Major feature milestones
-- **Audience**: Broader testing community
-- **Git Tags**: `v0.1.0`, `v0.2.0`
+### **Alpha Releases (Development Channel)**
+- **Format**: `0.1.0-alpha.1`, `0.1.0-alpha.2`, `0.2.0-alpha.1`
+- **Purpose**: Testing new features, bug fixes, experimental functionality
+- **Frequency**: Multiple per week during active development
+- **Audience**: Beta testers, developers, community contributors
+- **Add-on Name**: "ML Heating Control (Alpha {version})"
+- **Configuration**: DEBUG logging, development API enabled
 
-#### **Production Releases (Stable)**
-- **Format**: `x.0.0`
-- **Examples**: `1.0.0`, `2.0.0`
-- **Purpose**: Production-ready, fully supported releases
-- **Frequency**: When confident in stability and feature completeness
-- **Audience**: General public, production use
-- **Git Tags**: `v1.0.0`, `v2.0.0`
+### **Stable Releases (Production Channel)**
+- **Format**: `0.1.0`, `0.2.0`, `1.0.0`
+- **Purpose**: Tested, stable functionality for production use
+- **Frequency**: When alpha releases are thoroughly tested
+- **Audience**: End users, production deployments
+- **Add-on Name**: "ML Heating Control"
+- **Configuration**: INFO logging, development API disabled
+
+### **Version Progression Examples**
+
+```
+Development Cycle Example:
+v0.1.0-alpha.1  →  First alpha of v0.1.0
+v0.1.0-alpha.2  →  Bug fixes for v0.1.0
+v0.1.0-alpha.3  →  Feature additions
+v0.1.0-alpha.4  →  Final testing
+v0.1.0          →  Stable release
+
+Next Feature Cycle:
+v0.1.1-alpha.1  →  Patch improvements
+v0.1.1          →  Stable patch
+
+Major Feature Cycle:
+v0.2.0-alpha.1  →  New major features
+v0.2.0-alpha.5  →  After multiple iterations
+v0.2.0          →  Stable feature release
+```
+
+## Git Tag Strategy and Workflow Triggers
+
+### **Alpha Development Workflow**
+```yaml
+# .github/workflows/build-dev.yml
+on:
+  push:
+    tags: ['v*-alpha.*']  # Only alpha tags
+```
+
+**Alpha Tag Examples**:
+- `v0.1.0-alpha.1` - First alpha build
+- `v0.1.0-alpha.8` - Latest testing build
+- `v0.2.0-alpha.1` - New feature alpha
+
+### **Stable Release Workflow**
+```yaml
+# .github/workflows/build-stable.yml
+on:
+  push:
+    tags: ['v*']         # All version tags
+    branches-ignore: ['**']
+
+jobs:
+  check-release-type:    # Skip alpha releases
+    if: ${{ !contains(github.ref, 'alpha') }}
+```
+
+**Stable Tag Examples**:
+- `v0.1.0` - First stable release
+- `v0.2.0` - Major feature release
+- `v1.0.0` - Production ready
+
+## Dynamic Version Management (t0bst4r-inspired)
+
+### **Alpha Build Process**
+```bash
+# Workflow automatically updates version during build
+yq eval ".version = \"$VERSION\"" -i ml_heating_addons/ml_heating_dev/config.yaml
+yq eval ".name = \"ML Heating Control (Alpha $VERSION)\"" -i ml_heating_addons/ml_heating_dev/config.yaml
+```
+
+### **Stable Build Process**
+```bash
+# Workflow updates stable configuration
+sed -i "s/^version: .*/version: \"$VERSION\"/" ml_heating_addons/ml_heating/config.yaml
+```
 
 ## Development Workflow
 
-### **Phase 1: Dev Builds (Current)**
+### **Alpha Development Cycle**
 ```bash
-# Development iteration cycle
-1. Make changes/fixes
-2. Update version: 0.0.1-dev.1, 0.0.1-dev.2, etc.
-3. Commit with conventional message
-4. Tag: git tag v0.0.1-dev.N
-5. Push: git push origin main && git push origin v0.0.1-dev.N
-6. Test deployment
-7. Repeat
+# 1. Make changes and test locally
+git add .
+git commit -m "feat: new heating optimization algorithm"
+git push origin main
+
+# 2. Create alpha release for testing
+git tag v0.1.0-alpha.9
+git push origin v0.1.0-alpha.9
+
+# 3. Workflow automatically:
+#    - Validates add-on configuration  
+#    - Updates version dynamically
+#    - Builds multi-platform containers
+#    - Creates alpha release with warnings
+
+# 4. Test alpha release in Home Assistant
+# 5. Iterate with more alpha builds if needed
 ```
 
-### **Phase 2: Development Release**
+### **Stable Release Cycle**
 ```bash
-# When dev builds are stable
-1. Final testing of dev builds
-2. Update version: 0.0.1 (remove -dev suffix)
-3. Update changelog
-4. Commit: "release: v0.0.1 development release"
-5. Tag: git tag v0.0.1
-6. Push and announce
+# When alpha testing is complete
+git tag v0.1.0
+git push origin v0.1.0
+
+# Workflow automatically:
+# - Validates it's not an alpha release
+# - Builds stable containers
+# - Creates production release
+# - Enables auto-updates for users
 ```
-
-### **Phase 3: Beta Release**
-```bash
-# When feature set is complete
-1. Version: 0.1.0
-2. Comprehensive testing
-3. Documentation updates
-4. Community feedback integration
-```
-
-### **Phase 4: Production Release**
-```bash
-# When ready for general use
-1. Version: 1.0.0
-2. Full documentation
-3. Support processes
-4. Stable API commitment
-```
-
-## Git Tag Strategy
-
-### **Tag Patterns**
-- **Dev Builds**: `v0.0.x-dev.N` (triggers dev build workflow)
-- **Releases**: `v0.0.x`, `v0.x.0`, `vx.0.0` (triggers release workflow)
-
-### **GitHub Actions Integration**
-```yaml
-# Example workflow triggers
-on:
-  push:
-    tags:
-      - 'v*-dev.*'    # Dev builds
-      - 'v*'          # Releases (without -dev)
-```
-
-### **Container Tagging**
-- **Dev builds**: `ghcr.io/helgeerbe/ml_heating:v0.0.1-dev.1`
-- **Releases**: `ghcr.io/helgeerbe/ml_heating:v0.0.1`, `ghcr.io/helgeerbe/ml_heating:latest`
 
 ## Version Progression Rules
 
 ### **Increment Guidelines**
-- **Build number (+dev.N)**: Bug fixes, small changes, testing iterations
+- **Alpha Build (+alpha.1)**: Bug fixes, small changes, testing iterations
 - **Patch (+0.0.1)**: Bug fixes, minor improvements, no breaking changes
 - **Minor (+0.1.0)**: New features, significant improvements, backward compatible
-- **Major (+1.0.0)**: Breaking changes, major architecture changes, API changes
+- **Major (+1.0.0)**: Breaking changes, major architecture changes
 
-### **When to Create Dev Builds**
-- Bug fixes that need immediate testing
-- Experimental features for feedback
-- Configuration changes requiring validation
-- Performance improvements needing measurement
-- Any change that affects add-on functionality
+### **When to Create Alpha Releases**
+- New feature development and testing
+- Bug fixes requiring community validation
+- Performance optimizations needing measurement
+- Configuration changes requiring testing
+- Integration improvements
+- Dashboard enhancements
 
-### **When to Create Releases**
-- Set of dev builds tested and stable
-- Feature milestones completed
-- Community feedback incorporated
-- Documentation updated
-- Ready for broader user testing
+### **When to Create Stable Releases**
+- Alpha releases tested and validated by community
+- No critical bugs reported for 1+ weeks
+- Documentation updated and complete
+- All planned features for version complete
+- Automated tests passing
+
+## Container Strategy
+
+### **Alpha Containers**
+```
+ghcr.io/helgeerbe/ml_heating:0.1.0-alpha.1
+ghcr.io/helgeerbe/ml_heating:0.1.0-alpha.8
+```
+
+### **Stable Containers**  
+```
+ghcr.io/helgeerbe/ml_heating:0.1.0
+ghcr.io/helgeerbe/ml_heating:latest   # Points to latest stable
+```
+
+### **Multi-Platform Support**
+- `linux/amd64` - Standard x86_64 systems
+- `linux/aarch64` - Raspberry Pi 4, newer ARM systems
+- `linux/arm/v7` - Raspberry Pi 3, older ARM systems
 
 ## Current Version Status
 
-**Current Version**: `1.0.0` (incorrect, needs correction)
-**Target Version**: `0.0.1-dev.1` (first development build)
-**Phase**: Development/Testing
-**Next Steps**: Establish proper dev build workflow
+**Latest Alpha**: `v0.1.0-alpha.8` (completed multi-add-on architecture)
+**Latest Stable**: Not yet released (pending alpha testing completion)
+**Phase**: Alpha Testing and Validation
+**Next Steps**: Community testing of alpha builds → stable release
 
-## Benefits of This Strategy
-
-### **For Development**
-- **Rapid Iteration**: Quick dev builds for testing
-- **Clear Progression**: Obvious path from dev to production
-- **Risk Management**: Dev builds clearly marked as experimental
-- **Feedback Integration**: Multiple opportunities for community input
+## Multi-Add-on Benefits
 
 ### **For Users**
-- **Clear Expectations**: Version clearly indicates stability level
-- **Choice**: Can choose stable releases or help with dev testing
-- **Transparency**: Development progress is visible
-- **Safety**: Won't accidentally install unstable versions
+- **Stable Channel**: Reliable, auto-updating production experience
+- **Alpha Channel**: Early access to features, contribute to testing
+- **Dual Installation**: Run both channels for A/B testing
+- **Clear Expectations**: Channel name indicates stability level
+
+### **For Development**
+- **Safe Testing**: Alpha channel isolates experimental features
+- **Rapid Iteration**: Quick alpha deployment for community feedback
+- **Quality Control**: Thorough testing before stable release
+- **Professional CI/CD**: Automated multi-platform builds
 
 ### **For Project Management**
-- **Milestone Tracking**: Clear version milestones
-- **Release Planning**: Structured approach to releases
-- **Quality Control**: Multiple testing phases before production
-- **Documentation**: Changelog tracks all changes
+- **Clear Roadmap**: Alpha → stable progression path
+- **Community Engagement**: Alpha testers contribute to quality
+- **Risk Management**: Stable users protected from experimental changes
+- **Release Planning**: Structured approach with clear milestones
 
-This strategy provides professional project management while maintaining flexibility for rapid development and testing iterations.
+## Release Notes Strategy
+
+### **Alpha Release Notes**
+- Include development warnings
+- Highlight experimental features
+- List known issues and limitations
+- Provide testing instructions
+
+### **Stable Release Notes**
+- Focus on proven features and improvements
+- Include upgrade instructions
+- Provide production configuration guidance
+- Highlight stability and performance gains
+
+This dual-channel strategy provides professional release management while maintaining rapid development velocity and community engagement through comprehensive alpha testing.

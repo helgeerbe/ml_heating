@@ -369,4 +369,110 @@ except Exception as e:
 - Multi-lag feature activation status
 - Seasonal adaptation readiness
 
-This architecture provides a robust, safe, and continuously improving heating control system that combines physics knowledge with machine learning adaptation while maintaining comprehensive monitoring and safety mechanisms.
+## Multi-Add-on Deployment Architecture
+
+### Dual Channel Strategy
+
+**Stable Channel** (`ml_heating`):
+- Version tags: `v*` (e.g., `v0.1.0`, `v0.2.0`) - excludes alpha releases
+- Add-on slug: `ml_heating`
+- Container: `ghcr.io/helgeerbe/ml_heating:{version}`
+- Auto-updates: ✅ Enabled for production reliability
+- Log level: INFO (production optimized)
+- Development API: ❌ Disabled for security
+
+**Alpha Channel** (`ml_heating_dev`):
+- Version tags: `v*-alpha.*` (e.g., `v0.1.0-alpha.1`, `v0.1.0-alpha.8`)
+- Add-on slug: `ml_heating_dev`
+- Container: `ghcr.io/helgeerbe/ml_heating:{alpha-version}`
+- Auto-updates: ❌ Disabled (manual updates for safety)
+- Log level: DEBUG (detailed diagnostics)
+- Development API: ✅ Enabled for Jupyter notebooks
+
+### Workflow Architecture (t0bst4r-inspired)
+
+**Development Workflow** (`.github/workflows/build-dev.yml`):
+```yaml
+on:
+  push:
+    tags: ['v*-alpha.*']  # Only alpha tags
+
+jobs:
+  validate:    # HA linter validation
+  build-addon: # Dynamic version update + multi-platform build
+  release:     # Alpha release with development warnings
+```
+
+**Stable Workflow** (`.github/workflows/build-stable.yml`):
+```yaml
+on:
+  push:
+    tags: ['v*']         # All tags
+    branches-ignore: ['**']
+
+jobs:
+  check-release-type:  # Skip if alpha/dev tags
+  validate:           # HA linter validation (if stable)
+  build-addon:        # Version update + multi-platform build
+  release:            # Production release
+```
+
+### Dynamic Version Management
+
+**Alpha Development Process**:
+```bash
+# Development workflow dynamically updates config during build
+yq eval ".version = \"$VERSION\"" -i ml_heating_addons/ml_heating_dev/config.yaml
+yq eval ".name = \"ML Heating Control (Alpha $VERSION)\"" -i ml_heating_addons/ml_heating_dev/config.yaml
+```
+
+**Stable Release Process**:
+```bash
+# Stable workflow updates version in production config
+sed -i "s/^version: .*/version: \"$VERSION\"/" ml_heating_addons/ml_heating/config.yaml
+```
+
+### Multi-Platform Container Building
+
+Both channels support all Home Assistant platforms:
+- **linux/amd64** - Standard x86_64 systems
+- **linux/aarch64** - Raspberry Pi 4, newer ARM64 systems  
+- **linux/arm/v7** - Raspberry Pi 3, older ARM systems
+
+Home Assistant Builder handles all platform compilation automatically.
+
+### Add-on Configuration Differences
+
+**File Structure**:
+```
+ml_heating_addons/
+├── ml_heating/          # Stable channel
+│   ├── config.yaml      # Production config
+│   └── build.json       # Build metadata
+└── ml_heating_dev/      # Alpha channel
+    ├── config.yaml      # Development config
+    └── build.json       # Build metadata
+```
+
+**Key Configuration Differences**:
+- **Version**: Stable uses semantic versions, Dev uses alpha versions
+- **Auto-updates**: Stable enabled, Dev disabled  
+- **Logging**: Stable INFO, Dev DEBUG
+- **Dev API**: Stable disabled, Dev enabled
+- **Add-on names**: Include channel identification
+
+### Release Channel Benefits
+
+**Users can**:
+- Install both channels simultaneously for A/B testing
+- Choose appropriate risk level (stable vs cutting-edge)
+- Access latest features without affecting production systems
+- Maintain separate configurations for different use cases
+
+**Developers get**:
+- Safe testing environment with alpha releases
+- Comprehensive CI/CD with multi-platform builds
+- Automatic version management and release notes
+- Clear separation between experimental and production code
+
+This architecture provides a robust, safe, and continuously improving heating control system that combines physics knowledge with machine learning adaptation while maintaining comprehensive monitoring and safety mechanisms, delivered through professional dual-channel deployment infrastructure.

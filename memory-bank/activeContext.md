@@ -2,52 +2,56 @@
 
 ## Current Work Focus
 
-### Current Phase: Complete Dev Branch Merge & Documentation Consolidation (In Progress)
-**Status**: 🔄 **IN PROGRESS** - Merging complete dev branch with comprehensive documentation and dual-channel build system
+### Current Phase: Alpha-Based Multi-Add-on Architecture Documentation Update (In Progress)
+**Status**: 🔄 **IN PROGRESS** - Updating documentation to reflect implemented alpha-based dual-channel deployment
 
 **What is being accomplished**:
 
-**Complete Dev Branch Integration**:
-- Merging sophisticated tag-only, branch-based dual-channel build system from dev
-- Integrating comprehensive GitHub issue templates and contributor workflows
-- Consolidating development documentation with GitHub CLI management workflows
-- Bringing in enhanced release automation and container build processes
+**Memory Bank Documentation Updates**:
+- Updated `systemPatterns.md` with complete multi-add-on architecture documentation
+- Rewrote `versionStrategy.md` to reflect alpha-based versioning strategy (v*-alpha.* approach)
+- Updating `activeContext.md` to document current implementation status
+- Next: Update `developmentWorkflow.md` with alpha workflow processes
 
-**Documentation Consolidation**:
-- **From Dev Branch**: Dual-channel release system, contributor workflows, issue templates
-- **From Main Branch**: GitHub CLI integration, development workflow documentation
-- **Result**: Comprehensive development ecosystem with professional build processes
+**Project Documentation Updates**:
+- Will update `README.md` with dual-channel installation instructions
+- Will update `docs/INSTALLATION_GUIDE.md` with alpha vs stable installation steps
+- Will update `docs/CONTRIBUTOR_WORKFLOW.md` with alpha development process
 
-**Release System Benefits**:
-- **Stable Channel** (main branch): Auto-update enabled, production-ready releases
-- **Dev Channel** (dev/feature branches): Auto-update disabled, manual updates for safety
-- **Version Processing**: v0.1.0 → stable, v0.1.0-dev.1 → dev with validation
-- **Container Strategy**: Separate tagging for ghcr.io/helgeerbe/ml_heating builds
+**Alpha Architecture Status**:
+- **Stable Channel** (`ml_heating`): Version tags `v*`, auto-updates enabled
+- **Alpha Channel** (`ml_heating_dev`): Version tags `v*-alpha.*`, auto-updates disabled
+- **Current Implementation**: v0.1.0-alpha.8 successfully building and operational
 
-### Previous Phase: Branch-Based Dual-Channel Release System (Complete)
-**Status**: ✅ **COMPLETED** - Implemented sophisticated tag-only, branch-based dual-channel build system
+### Previous Phase: Multi-Add-on Architecture Implementation (Complete)
+**Status**: ✅ **COMPLETED** - Successfully implemented t0bst4r-inspired alpha-based dual-channel system
 
 **What was accomplished**:
 
-**Dual-Channel Release Architecture**:
-- Created branch-based build type detection system (main = stable, others = dev)
-- Modified GitHub Actions to trigger only on tags, not commits
-- Implemented automatic version and auto_update configuration based on build type
-- Built comprehensive container tagging strategy for stable vs dev releases
-- Added dev branch for development channel testing
+**Multi-Add-on Architecture**:
+- Created dual add-on structure: `ml_heating_addons/ml_heating` (stable) and `ml_heating_addons/ml_heating_dev` (alpha)
+- Implemented t0bst4r-inspired dynamic version management during workflow execution
+- Established alpha tagging strategy with `v*-alpha.*` format for development releases
+- Built separate workflow triggers: stable (`v*` tags), alpha (`v*-alpha.*` tags)
 
-**Release Automation Features**:
-- **Stable Channel** (main branch): Auto-update enabled, production-ready releases
-- **Dev Channel** (dev/feature branches): Auto-update disabled, manual updates for safety
-- **Version Processing**: v0.1.0 → stable, v0.1.0-dev.1 → dev with validation
-- **Container Strategy**: Separate tagging for ghcr.io/helgeerbe/ml_heating:v0.1.0 vs :v0.1.0-dev.1
-- **Release Notes**: Dynamic release descriptions based on build type with prerelease flags
+**Technical Issues Resolved**:
+- Fixed Home Assistant linter issues and container build context problems
+- Resolved HA Builder platform argument issues with correct version (2025.09.0)
+- Fixed Docker image tag conflicts by removing tags from add-on config image fields
+- Added missing build files (`config_adapter.py`, `dashboard_requirements.txt`) to workflow copying
+- Simplified workflows to use only HA Builder for all container building
 
-**Documentation & Workflow**:
-- Created comprehensive CONTRIBUTOR_WORKFLOW.md with practical examples
-- Documented branch workflows, version naming rules, and troubleshooting
-- Established clear contributor guidelines for feature development and hotfixes
-- Implemented safety validations preventing incorrect dev tag formats
+**Workflow Architecture**:
+- **Development Workflow** (`build-dev.yml`): Alpha validation, dynamic versioning, multi-platform builds
+- **Stable Workflow** (`build-stable.yml`): Release type detection, stable builds only for non-alpha tags
+- **Dynamic Version Updates**: `yq` for alpha configs, `sed` for stable configs during build
+- **Multi-Platform Support**: linux/amd64, linux/aarch64, linux/arm/v7 via HA Builder
+
+**Release System Features**:
+- **Alpha Releases**: Development warnings, experimental feature highlights, manual updates
+- **Stable Releases**: Production documentation, auto-updates enabled, comprehensive features
+- **Container Strategy**: Separate tagging for `ghcr.io/helgeerbe/ml_heating:{version}` vs `:{alpha-version}`
+- **Professional CI/CD**: Automated multi-platform builds with comprehensive release notes
 
 ### Previous Phase: GitHub Issues Transition & Project Management Setup (Complete)
 **Status**: ✅ **COMPLETED** - Transitioned from progress.md tracking to professional GitHub Issues management
