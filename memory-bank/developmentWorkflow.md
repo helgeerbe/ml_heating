@@ -1,514 +1,480 @@
-# Development Workflow - ML Heating Project
+# Development Workflow - Alpha-Based Multi-Add-on Architecture
 
 ## Overview
 
-This document captures the comprehensive development workflows, tools, and processes used in the ML Heating project. It serves as a reference for maintaining consistent development practices, efficient project management, and professional build processes.
+This document captures the comprehensive alpha-based dual-channel development workflow implemented for the ML Heating project. The system uses a t0bst4r-inspired approach with separate stable and alpha channels, each with distinct add-ons and deployment strategies.
 
-## Git Workflow
+## Alpha-Based Multi-Add-on Architecture
+
+### Dual Channel Strategy
+
+**Stable Channel** (`ml_heating`):
+- **Git Tags**: `v*` (e.g., `v0.1.0`, `v0.2.0`) - excludes alpha releases
+- **Add-on Config**: `ml_heating_addons/ml_heating/config.yaml`
+- **Container**: `ghcr.io/helgeerbe/ml_heating:{version}`
+- **Auto-Updates**: ✅ Enabled for production reliability
+- **Target Users**: Production deployments, general public
+
+**Alpha Channel** (`ml_heating_dev`):
+- **Git Tags**: `v*-alpha.*` (e.g., `v0.1.0-alpha.1`, `v0.1.0-alpha.8`)
+- **Add-on Config**: `ml_heating_addons/ml_heating_dev/config.yaml`
+- **Container**: `ghcr.io/helgeerbe/ml_heating:{alpha-version}`
+- **Auto-Updates**: ❌ Disabled (manual testing)
+- **Target Users**: Beta testers, developers, early adopters
 
 ### Branch Strategy
-- **`main`** - Production-ready code, Home Assistant add-on discovery source
-- **`dev`** - Development branch for new features and testing
-- **`ha-addon`** - Home Assistant add-on specific development
-- **`refactor`** - Large-scale refactoring work
+- **`main`** - Primary development branch, source for both channels
+- **Feature branches** - Temporary branches for specific development work
+- **All releases built from `main`** - Single source of truth for releases
 
-### Semantic Versioning Strategy
-- **Development versions**: `0.x.x-dev.x` (e.g., `0.1.0-dev.3`)
-- **Stable versions**: `x.x.x` (e.g., `1.0.0`) 
-- **Container tags**: Match version exactly (e.g., `v0.1.0-dev.3`)
+## Alpha Development Workflow
 
-### Key Git Commands
+### Alpha Release Cycle
+
+#### Alpha Development Process
+```bash
+# 1. Make changes and commit to main
+git add .
+git commit -m "feat(physics): improve seasonal learning algorithm"
+git push origin main
+
+# 2. Create alpha release for community testing
+git tag v0.1.0-alpha.9
+git push origin v0.1.0-alpha.9
+
+# 3. GitHub Actions automatically:
+#    - Validates alpha add-on configuration with HA linter
+#    - Updates version dynamically: "dev" → "0.1.0-alpha.9"
+#    - Updates add-on name: "ML Heating Control (Alpha 0.1.0-alpha.9)"
+#    - Builds multi-platform containers (amd64, aarch64, armhf)
+#    - Creates alpha release with development warnings
+
+# 4. Community tests alpha release
+# 5. Iterate with more alpha builds as needed
+```
+
+#### Alpha Tag Examples
+- `v0.1.0-alpha.1` - First alpha build of v0.1.0
+- `v0.1.0-alpha.8` - Latest testing iteration
+- `v0.2.0-alpha.1` - New feature development cycle
+
+### Stable Release Cycle
+
+#### When to Create Stable Releases
+- Alpha releases tested extensively by community
+- No critical bugs reported for 1+ weeks
+- All planned features for version complete
+- Documentation updated and comprehensive
+- Automated workflows tested and validated
+
+#### Stable Release Process
+```bash
+# When alpha testing is complete
+git tag v0.1.0
+git push origin v0.1.0
+
+# GitHub Actions automatically:
+# - Detects stable release (not alpha)
+# - Updates stable add-on version: "0.1.0" → "0.1.0"
+# - Builds production containers
+# - Creates production release with comprehensive documentation
+# - Enables auto-updates for stable users
+```
+
+### Dynamic Version Management (t0bst4r-inspired)
+
+#### Alpha Build Version Updates
+The development workflow automatically updates add-on configuration during build:
+
+```bash
+# Extract version from git tag
+TAG_NAME=${GITHUB_REF#refs/tags/}
+VERSION=${TAG_NAME#v}  # v0.1.0-alpha.8 → 0.1.0-alpha.8
+
+# Update alpha add-on configuration dynamically
+yq eval ".version = \"$VERSION\"" -i ml_heating_addons/ml_heating_dev/config.yaml
+yq eval ".name = \"ML Heating Control (Alpha $VERSION)\"" -i ml_heating_addons/ml_heating_dev/config.yaml
+```
+
+#### Stable Build Version Updates
+```bash
+# Update stable add-on configuration
+sed -i "s/^version: .*/version: \"$VERSION\"/" ml_heating_addons/ml_heating/config.yaml
+```
+
+This ensures:
+- **Alpha add-ons** show specific version (e.g., "0.1.0-alpha.8") and include version in name
+- **Stable add-ons** show clean semantic version (e.g., "0.1.0") with standard name
+- **No manual configuration updates** needed - all handled by workflow automation
+
+## Workflow Trigger Architecture
+
+### Alpha Development Workflow (`.github/workflows/build-dev.yml`)
+
+```yaml
+name: Build Development Release
+
+on:
+  push:
+    tags: ['v*-alpha.*']  # Only alpha tags trigger this workflow
+  workflow_dispatch:
+
+jobs:
+  validate:     # HA linter validation for alpha add-on
+  build-addon:  # Dynamic version update + multi-platform build  
+  release:      # Alpha release with development warnings
+```
+
+**Key Features**:
+- **Alpha-only triggering**: Only `v*-alpha.*` tags activate this workflow
+- **Dynamic configuration**: Version and name updated automatically during build
+- **Development warnings**: Release notes emphasize experimental nature
+- **Disabled auto-updates**: Manual updates required for safety
+
+### Stable Release Workflow (`.github/workflows/build-stable.yml`)
+
+```yaml
+name: Build Stable Release
+
+on:
+  push:
+    tags: ['v*']         # All version tags
+    branches-ignore: ['**']
+
+jobs:
+  check-release-type:    # Skip if alpha/dev tags detected
+  validate:             # HA linter validation (if stable)
+  build-addon:          # Version update + production build
+  release:              # Production release
+```
+
+**Key Features**:
+- **Smart filtering**: Automatically skips alpha releases using condition checks
+- **Production configuration**: Enables auto-updates and optimized settings
+- **Comprehensive releases**: Full feature documentation and upgrade guides
+- **Multi-platform builds**: Same architecture support as alpha channel
+
+## Development Best Practices
+
+### Alpha Development Guidelines
+
+#### When to Create Alpha Releases
+- **New feature development**: Initial implementation ready for testing
+- **Bug fixes**: Community-reported issues requiring validation
+- **Performance improvements**: Optimizations needing real-world measurement
+- **Configuration changes**: Add-on setting modifications requiring testing
+- **Integration enhancements**: InfluxDB, Home Assistant, or external service improvements
+
+#### Alpha Release Frequency
+- **Active development**: Multiple alpha releases per week
+- **Feature completion**: Alpha series until feature is stable
+- **Community feedback**: Iterate based on tester reports
+- **No time pressure**: Release when ready, not on schedule
+
+#### Alpha Naming Convention
+```bash
+# Feature development progression
+v0.1.0-alpha.1  →  Initial feature implementation
+v0.1.0-alpha.2  →  Bug fixes from testing
+v0.1.0-alpha.3  →  Performance improvements
+v0.1.0-alpha.4  →  Final polish and documentation
+v0.1.0          →  Stable release
+
+# Next feature cycle
+v0.2.0-alpha.1  →  New major feature development
+# ... iterate through alpha testing
+v0.2.0          →  Next stable release
+```
+
+### Stable Release Guidelines
+
+#### Version Progression Rules
+- **Alpha Build (+alpha.N)**: Testing iterations, experimental features
+- **Patch (+0.0.1)**: Bug fixes, minor improvements, no breaking changes
+- **Minor (+0.1.0)**: New features, significant improvements, backward compatible
+- **Major (+1.0.0)**: Breaking changes, major architecture changes
+
+#### Quality Gates for Stable Release
+- [ ] **Community Testing**: Multiple alpha releases tested by users
+- [ ] **Documentation Complete**: Installation guides, configuration docs updated
+- [ ] **Issue Resolution**: No critical bugs reported in latest alphas
+- [ ] **Feature Completeness**: All planned features implemented and tested
+- [ ] **Workflow Validation**: CI/CD processes tested and working correctly
+
+## Git Workflow Commands
+
+### Standard Development Commands
 ```bash
 # Check current status and branch
 git status
 git branch -a
 
-# Switch between branches
-git checkout main
-git checkout dev
-
 # Standard commit workflow
 git add <files>
-git commit -m "type(scope): description"
-git push origin <branch>
+git commit -m "feat(scope): description following conventional commits"
+git push origin main
 
-# Version tagging for releases
-git tag v0.1.0-dev.3
-git push origin v0.1.0-dev.3
+# Alpha release tagging
+git tag v0.1.0-alpha.9
+git push origin v0.1.0-alpha.9
+
+# Stable release tagging  
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+### Branch Management
+```bash
+# Create feature branch for complex development
+git checkout -b feature/new-heating-algorithm
+git push -u origin feature/new-heating-algorithm
+
+# Merge back to main when complete
+git checkout main
+git merge feature/new-heating-algorithm
+git push origin main
+git branch -d feature/new-heating-algorithm
+```
+
+### Tag Management
+```bash
+# List existing tags
+git tag -l
+
+# Delete incorrect tag (local and remote)
+git tag -d v0.1.0-alpha.9
+git push origin :refs/tags/v0.1.0-alpha.9
+
+# Check tag details
+git show v0.1.0-alpha.8
 ```
 
 ## GitHub Issue Management
 
 ### GitHub CLI Setup
-The project uses GitHub CLI (`gh`) for efficient issue management. Ensure `gh` is installed and authenticated.
+Ensure GitHub CLI is installed and authenticated for efficient issue management:
 
-### Issue Creation Workflow
-
-#### Method 1: Direct CLI Issue Creation
 ```bash
-# Create issue from markdown file
-gh issue create --title "Feature Request: Title Here" --body-file <filename.md> --label "enhancement"
+# Check authentication
+gh auth status
 
-# Create simple issue with inline content
-gh issue create --title "Bug: Issue Title" --body "Issue description" --label "bug"
-
-# List available labels first (to avoid label errors)
-gh label list
-```
-
-#### Method 2: Issue Template Approach
-```bash
-# Create issue using repository template
-gh issue create --template feature_request.md
-gh issue create --template bug_report.md
-```
-
-### Issue Management Commands
-```bash
-# List issues
-gh issue list
-gh issue list --label "enhancement"
-gh issue list --state "open"
-
-# View specific issue
-gh issue view 10
-
-# Update issue
-gh issue edit 10 --title "New Title"
-gh issue edit 10 --add-label "priority:high"
-
-# Close issue
-gh issue close 10 --comment "Resolved in commit abc123"
-```
-
-### Local Documentation → GitHub Issue Process
-1. **Draft locally** - Create detailed markdown file for complex issues
-2. **Review content** - Ensure completeness and clarity
-3. **Create issue** - Use `gh issue create --body-file` command
-4. **Clean up** - Remove local draft file after successful creation
-5. **Reference** - Link to issue in commits: `Closes #10` or `Refs #10`
-
-## Development Build Process
-
-### Current Status
-**Latest Development Build**: `v0.1.0-dev.6`
-- **Purpose**: Implement proper "dev" version for Home Assistant add-on discovery
-- **Container**: `ghcr.io/helgeerbe/ml_heating:v0.1.0-dev.6`
-- **Status**: Successfully resolves HA add-on linter requirements
-
-### When to Create Development Builds
-- Bug fixes that need immediate testing
-- Experimental features requiring feedback
-- Configuration changes needing validation
-- Performance improvements requiring measurement
-- Any changes affecting add-on functionality
-
-### Development Build Workflow
-```bash
-# 1. Make changes to code/configuration
-# 2. Update version in ml_heating_addon/config.yaml
-version: "0.1.0-dev.4"  # Increment dev build number
-
-# 3. Update CHANGELOG.md [Unreleased] section
-### Added
-- New feature or fix description
-
-# 4. Commit with conventional message
-git add .
-git commit -m "feat(addon): add new feature description
-
-### Added
-- Detailed description of changes
-- Impact on functionality
-
-Addresses testing requirement for XYZ."
-
-# 5. Create and push development tag
-git tag v0.1.0-dev.4
-git push origin main && git push origin v0.1.0-dev.4
-
-# 6. Monitor GitHub Actions for build success
-# 7. Test deployment in Home Assistant
-```
-
-### Development Build Naming Convention
-- **Format**: `0.x.x-dev.N`
-- **Examples**: 
-  - `0.1.0-dev.3` - Current development build
-  - `0.1.0-dev.4` - Next iteration with fixes
-  - `0.2.0-dev.1` - New minor version development
-- **Git Tags**: `v0.1.0-dev.3`, `v0.1.0-dev.4`
-
-## Release Build Process
-
-### When to Create Release Builds
-- Multiple dev builds tested and stable
-- Feature milestones completed
-- Community feedback incorporated
-- Documentation updated
-- Ready for broader user testing
-
-### Release Build Workflow
-```bash
-# 1. Ensure all dev builds are tested and stable
-# 2. Update version to remove -dev suffix
-version: "0.1.0"  # Clean version number
-
-# 3. Move CHANGELOG.md [Unreleased] entries to versioned section
-## [0.1.0] - 2025-XX-XX
-### Added
-- Consolidated features from dev builds
-- Tested and validated functionality
-
-# 4. Commit release
-git commit -m "release: v0.1.0 development release
-
-Stable development release incorporating tested changes from:
-- v0.1.0-dev.3: Home Assistant discovery fix
-- v0.1.0-dev.4: Additional improvements
-
-Ready for broader beta testing community."
-
-# 5. Create release tag
-git tag v0.1.0
-git push origin main && git push origin v0.1.0
-
-# 6. Monitor build and container publication
-# 7. Announce to community for testing
-```
-
-### Release Build Naming Convention
-- **Development Releases**: `0.x.0` (e.g., 0.1.0, 0.2.0)
-- **Beta Releases**: `0.x.0` with broader testing (e.g., 0.5.0, 0.8.0)  
-- **Production Releases**: `x.0.0` (e.g., 1.0.0, 2.0.0)
-- **Git Tags**: `v0.1.0`, `v0.5.0`, `v1.0.0`
-
-## GitHub Actions Integration
-
-### Workflow Triggers
-- **Dev Builds**: Tags matching `v*-dev.*` pattern
-- **Releases**: Tags matching `v*` pattern (without -dev)
-
-### Build Process
-1. **Multi-architecture container build**
-2. **Publishing to GitHub Container Registry (GHCR)**
-3. **Container tagging**:
-   - Dev: `ghcr.io/helgeerbe/ml_heating:v0.1.0-dev.3`
-   - Release: `ghcr.io/helgeerbe/ml_heating:v0.1.0`, `:latest`
-
-### Monitoring Builds
-- Check GitHub Actions tab after pushing tags
-- Verify container publication in repository packages
-- Test Home Assistant add-on discovery and installation
-
-## Home Assistant Add-on Development
-
-### Critical Discovery Requirements - IMPORTANT LESSONS LEARNED
-
-**⚠️ CRITICAL**: Home Assistant add-on discovery has strict linter requirements that override normal semantic versioning practices.
-
-#### The "dev" Version Requirement
-**For Community Add-ons** (using `frenck/action-addon-linter` with `community: true`):
-- **Development builds MUST use version "dev"** - not semantic versions like "0.1.0-dev.5"
-- **The linter enforces this**: `"Add-on version identifier must be 'dev'"` error if not followed
-- **This is a Home Assistant ecosystem requirement**, not a bug in our workflow
-
-**Reference**: [Home Assistant Community Discussion](https://community.home-assistant.io/t/add-on-developer-question-if-version-is-set-to-dev-how-will-my-users-get-updates/447270)
-
-#### Version Strategy for Development Add-ons
-**Best Practice Implementation**:
-```yaml
-# ml_heating_addon/config.yaml
-version: "dev"  # Required for HA linter validation
-```
-
-**Trade-offs**:
-- ✅ Add-on appears in Home Assistant successfully  
-- ✅ Passes community add-on linter validation
-- ❌ No automatic updates (users must manually reinstall)
-- ❌ Version always shows as "dev" regardless of actual release
-
-**Git Tagging Strategy**:
-- Use semantic tags for release tracking: `v0.1.0-dev.6`, `v0.1.0-dev.7`
-- Container images tagged with full version: `ghcr.io/helgeerbe/ml_heating:v0.1.0-dev.6`
-- Add-on config.yaml always shows version "dev"
-
-#### Dual-Channel Architecture (Future Stable Releases)
-**Development Channel** (current implementation):
-- Version: `"dev"`
-- Auto-update: `false`
-- Target: Developers, testers, early adopters
-- Update method: Manual reinstall
-
-**Stable Channel** (future implementation):
-- Version: `"0.1.0"`, `"0.2.0"` (semantic versioning)
-- Auto-update: `true`
-- Target: Production users
-- Update method: Automatic via Home Assistant
-
-### Repository Configuration
-- **Repository URL**: `https://github.com/helgeerbe/ml_heating`
-- **Add-on Path**: `ml_heating_addon/`
-- **Discovery Requirements**:
-  - Valid `config.yaml` with version "dev" for development builds
-  - Proper `build.json` for container builds
-  - `repository.json` at root level
-  - Add-on files must be on `main` branch (HA only reads default branch)
-  - Container image must exist and be accessible
-
-### Add-on Version Management Workflow
-```bash
-# Development builds - ALWAYS use "dev" version
-# Edit ml_heating_addon/config.yaml
-version: "dev"  # Required for HA community linter
-
-# Git tags track actual development progress
-git tag v0.1.0-dev.6  # Semantic versioning for development tracking
-git push origin v0.1.0-dev.6
-
-# Future stable releases
-version: "0.1.0"  # Semantic version for stable releases
-git tag v0.1.0   # Clean version tag
-```
-
-### GitHub Actions Workflow Logic
-**Smart Version Detection**:
-```bash
-# Tags with -dev suffix → version = "dev" 
-v0.1.0-dev.6 → config version "dev", container tag "v0.1.0-dev.6"
-
-# Tags without -dev suffix → version = semantic
-v0.1.0 → config version "0.1.0", container tag "v0.1.0"
-```
-
-**Workflow automatically**:
-- Detects dev vs stable releases based on tag format
-- Sets appropriate version in config.yaml during build
-- Configures auto_update setting (false for dev, true for stable)
-
-### Testing Add-on Discovery
-1. **Remove repository** from HA (Settings → Add-ons → Add-on Store → ⋮ → Repositories)
-2. **Wait 2-3 minutes** for cache clearance
-3. **Re-add repository**: `https://github.com/helgeerbe/ml_heating`
-4. **Verify add-on appears** with correct version
-
-### Expected Add-on Appearance
-- **Name**: "ML Heating Control"
-- **Current Version**: "0.1.0-dev.3" 
-- **Description**: "Physics-based machine learning heating control system with online learning"
-
-## Documentation Standards
-
-### Memory Bank Updates
-**When to Update**:
-- After implementing significant features
-- When user requests with **"update memory bank"**
-- After architectural changes
-- During troubleshooting sessions that reveal new insights
-
-**Update Process**:
-1. **Review ALL memory bank files** (required when triggered)
-2. **Focus on `activeContext.md`** - current state and decisions
-3. **Update `progress.md`** - development status
-4. **Document patterns** in relevant files
-5. **Preserve technical accuracy** and implementation details
-
-### Commit Message Standards
-```bash
-# Format: type(scope): description
-git commit -m "feat(addon): add dual channel architecture"
-git commit -m "fix(discovery): update version for HA compatibility" 
-git commit -m "docs(memory): add GitHub workflow documentation"
-git commit -m "refactor(physics): improve error handling"
-```
-
-**Types**: feat, fix, docs, refactor, test, chore, style, perf
-
-## Development Tools
-
-### Required CLI Tools
-```bash
-# Essential tools
-git --version          # Version control
-gh --version          # GitHub CLI for issue management
-docker --version      # Container builds
-code --version        # VS Code editor
-python --version      # Python development
-
-# Optional but useful
-make --version        # Build automation
-curl --version        # API testing
-wget --version        # File downloads
-```
-
-### Development Environment Setup
-```bash
-# Clone repository
-git clone https://github.com/helgeerbe/ml_heating.git
-cd ml_heating
-
-# Set up Python environment
-python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-pip install -r requirements.txt
-
-# Set up GitHub CLI
-gh auth login
+# Set default repository
 gh repo set-default helgeerbe/ml_heating
 ```
 
-## Quality Assurance
+### Alpha Release Issue Workflow
 
-### Pre-commit Checklist
-- [ ] **Version consistency** - `config.yaml` matches expected container tag
-- [ ] **Branch alignment** - Add-on changes committed to `main` branch
-- [ ] **Issue references** - Commits reference relevant GitHub issues
-- [ ] **Documentation updates** - Memory bank updated for significant changes
-- [ ] **Testing** - Changes tested in appropriate environment
-
-### Before Every Development Build
-- [ ] Code changes tested locally
-- [ ] Configuration syntax validated
-- [ ] Version number incremented properly
-- [ ] CHANGELOG.md updated in [Unreleased]
-- [ ] Commit message follows conventional format
-
-### Before Every Release
-- [ ] All related dev builds tested successfully
-- [ ] Community feedback reviewed and incorporated
-- [ ] Documentation updated and accurate
-- [ ] CHANGELOG.md entries moved to versioned section
-- [ ] Version number updated to clean format (no -dev)
-
-### After Every Tag Push
-- [ ] Monitor GitHub Actions for build success
-- [ ] Verify container publication to GHCR
-- [ ] Test Home Assistant add-on discovery
-- [ ] Validate installation and basic functionality
-
-## Project-Specific Workflows
-
-### Physics Model Calibration
+#### Creating Alpha Testing Issues
 ```bash
-# Calibrate physics model with historical data
-python src/main.py --calibrate-physics
+# Create alpha testing issue
+gh issue create \
+  --title "Alpha Testing: v0.1.0-alpha.8 - New Seasonal Learning" \
+  --body "## Testing Request
 
-# Monitor calibration results
-tail -f logs/ml_heating.log
+**Alpha Version**: v0.1.0-alpha.8
+**Focus Areas**: Seasonal learning improvements, PV lag optimization
+
+### What's New
+- Enhanced seasonal adaptation algorithm
+- Improved PV lag coefficient learning
+- Better error handling for edge cases
+
+### Testing Instructions
+1. Install alpha add-on from repository
+2. Monitor learning progress for 24-48 hours
+3. Report any unusual behavior or errors
+4. Check dashboard metrics for improvements
+
+### Feedback Requested
+- Learning convergence speed
+- Prediction accuracy changes
+- Any error messages or issues
+- Performance vs previous version
+
+**⚠️ Alpha Warning**: This is experimental software for testing only." \
+  --label "alpha-testing,community" \
+  --assignee helgeerbe
+
+# Link to alpha release
+gh issue comment <issue-number> --body "Released as [v0.1.0-alpha.8](https://github.com/helgeerbe/ml_heating/releases/tag/v0.1.0-alpha.8)"
 ```
 
-### Container Development
+#### Community Feedback Management
 ```bash
-# Local container build and test
-cd ml_heating_addon
-docker build -t ml_heating_test .
-docker run -it ml_heating_test
+# List alpha testing issues
+gh issue list --label "alpha-testing"
 
-# Push to registry (automated via GitHub Actions)
-git tag v0.1.0-dev.4
-git push origin v0.1.0-dev.4
+# Update issue with feedback
+gh issue comment <issue-number> --body "**Update**: Fixed reported issue with PV coefficient learning"
+
+# Close resolved alpha issues
+gh issue close <issue-number> --comment "Resolved in v0.1.0-alpha.9. Thank you for testing!"
 ```
 
-### Notebook Development
+### Issue Labels for Multi-Add-on Project
 ```bash
-# Start Jupyter server
-cd notebooks
-jupyter lab
+# Alpha channel labels
+alpha-testing     # Community testing of alpha releases
+alpha-feedback    # User feedback on alpha features
+alpha-bug        # Bugs found in alpha releases
 
-# Import helper modules
-from notebook_imports import *  # Loads all required modules
+# Stable channel labels  
+stable-release   # Stable release planning
+production-bug   # Issues in stable releases
+enhancement      # Feature requests for stable
+
+# Component labels
+workflow         # CI/CD and build process issues
+documentation    # Docs updates for dual-channel setup
+multi-addon      # Issues related to dual add-on architecture
+```
+
+## Container and Deployment Workflow
+
+### Multi-Platform Building
+Both alpha and stable channels support all Home Assistant platforms:
+- **linux/amd64** - Standard x86_64 systems (Intel/AMD)
+- **linux/aarch64** - Raspberry Pi 4, Apple Silicon, newer ARM64
+- **linux/arm/v7** - Raspberry Pi 3, older ARM systems
+
+Home Assistant Builder automatically handles cross-compilation.
+
+### Container Tagging Strategy
+
+#### Alpha Containers
+```bash
+# Each alpha gets specific container tag
+v0.1.0-alpha.1  →  ghcr.io/helgeerbe/ml_heating:0.1.0-alpha.1
+v0.1.0-alpha.8  →  ghcr.io/helgeerbe/ml_heating:0.1.0-alpha.8
+v0.2.0-alpha.1  →  ghcr.io/helgeerbe/ml_heating:0.2.0-alpha.1
+```
+
+#### Stable Containers
+```bash
+# Stable versions get semantic tags plus latest
+v0.1.0  →  ghcr.io/helgeerbe/ml_heating:0.1.0
+v0.2.0  →  ghcr.io/helgeerbe/ml_heating:0.2.0, :latest
+```
+
+### Deployment Validation
+
+#### Alpha Testing Workflow
+```bash
+# 1. Monitor GitHub Actions build
+gh run list --workflow="Build Development Release"
+
+# 2. Verify container publication
+# Check packages at: https://github.com/helgeerbe/ml_heating/pkgs/container/ml_heating
+
+# 3. Test Home Assistant discovery
+# Add repository in HA: https://github.com/helgeerbe/ml_heating
+# Verify "ML Heating Control (Development)" appears
+
+# 4. Installation testing
+# Install alpha add-on and verify functionality
+# Check logs for errors or warnings
+
+# 5. Community notification
+gh issue create --title "Alpha Testing Available: v0.1.0-alpha.X" --body "..."
+```
+
+#### Stable Release Validation
+```bash
+# 1. Final alpha testing complete
+# Ensure latest alpha has been thoroughly tested
+
+# 2. Pre-release checklist
+# [ ] Documentation updated
+# [ ] CHANGELOG.md entries complete  
+# [ ] No critical alpha issues reported
+# [ ] Community feedback incorporated
+
+# 3. Create stable release
+git tag v0.1.0
+git push origin v0.1.0
+
+# 4. Post-release validation
+# [ ] Both add-ons available in HA
+# [ ] Auto-updates working for stable channel
+# [ ] Release notes complete and accurate
+# [ ] Community announcement posted
+```
+
+## Documentation Maintenance
+
+### Memory Bank Updates
+
+#### When to Update Memory Bank
+- **After major alpha releases**: Document new features and architecture changes
+- **Before stable releases**: Ensure all documentation reflects current state
+- **When user requests**: **"update memory bank"** trigger comprehensive review
+- **After workflow changes**: Update development processes and CI/CD changes
+
+#### Memory Bank Update Process
+```bash
+# 1. Review all memory bank files (required for triggered updates)
+git status memory-bank/
+
+# 2. Update key files based on recent changes
+# - activeContext.md: Current development phase and recent accomplishments
+# - systemPatterns.md: Architecture changes and new patterns
+# - versionStrategy.md: Release strategy updates
+# - developmentWorkflow.md: Process improvements
+
+# 3. Commit memory bank updates
+git add memory-bank/
+git commit -m "docs(memory-bank): update for alpha architecture v0.1.0-alpha.8
+
+- Document successful multi-add-on implementation
+- Update workflow processes for alpha/stable channels  
+- Capture lessons learned from t0bst4r-inspired approach"
+```
+
+### Project Documentation Updates
+
+#### Documentation Files Requiring Updates
+- **README.md**: Dual-channel installation instructions
+- **docs/INSTALLATION_GUIDE.md**: Separate alpha vs stable installation
+- **docs/CONTRIBUTOR_WORKFLOW.md**: Alpha development process
+- **CHANGELOG.md**: Track both alpha and stable releases
+
+#### Documentation Standards
+```markdown
+# Example installation section structure
+
+## Installation
+
+### Stable Channel (Recommended for Production)
+Use this for production heating control with automatic updates.
+
+### Alpha Channel (Testing and Development)  
+Use this to test latest features and provide feedback to development.
 ```
 
 ## Troubleshooting Common Issues
 
-### Add-on Discovery Problems
-1. **Check version format** - Must be valid semantic versioning
-2. **Verify main branch** - HA only reads default branch
-3. **Container availability** - Ensure image exists at registry
-4. **Clear HA cache** - Remove and re-add repository
+### Workflow Build Failures
 
-### Build Failures
-1. Review GitHub Actions logs
-2. Validate YAML syntax in configuration files
-3. Check container build process
-4. Verify multi-architecture compatibility
-
-### Version Conflicts
-1. Ensure version increments are logical
-2. Check for duplicate tags
-3. Validate changelog consistency
-4. Review commit message format
-
-### GitHub CLI Issues
+#### Alpha Workflow Issues
 ```bash
-# Authentication problems
-gh auth status
-gh auth refresh
+# Check workflow status
+gh run list --workflow="Build Development Release"
 
-# Label not found errors
-gh label list  # Check available labels first
+# View specific run details
+gh run view <run-id>
 
-# Repository context issues
-gh repo set-default owner/repo
+# Common issues:
+# - Missing files in build context
+# - HA linter validation failures  
+# - Docker tag format problems
+# - Platform build failures
 ```
 
-### Git Branch Confusion
+#### Stable Workflow Issues
 ```bash
-# Check current status
-git status
-git branch -a
+# Verify stable workflow triggers correctly
+gh run list --workflow="Build Stable Release"
 
-# Sync with remote
-git fetch origin
-git pull origin main
-```
-
-## Best Practices
-
-### Issue Management
-- **Draft complex issues locally** first for review
-- **Use descriptive titles** that explain the request
-- **Include implementation details** for feature requests
-- **Reference issues in commits** for traceability
-- **Close with commit references** when resolving
-
-### Development Workflow
-- **Small, focused commits** with clear messages
-- **Test on main branch** before major releases
-- **Document architectural decisions** in memory bank
-- **Maintain version consistency** across files
-- **Use semantic versioning** throughout project
-
-### Documentation
-- **Update memory bank** for significant changes
-- **Include code examples** in documentation
-- **Maintain accuracy** of technical details
-- **Structure hierarchically** across files
-- **Focus on practical operations** and deployment
-
-## Benefits of This Workflow
-
-### Development Efficiency
-- **Rapid iteration** with frequent dev builds
-- **Clear progression** from experimental to stable
-- **Community feedback** integration at multiple stages
-- **Risk mitigation** through staged releases
-
-### Project Quality
-- **Structured versioning** prevents confusion
-- **Professional appearance** builds community trust
-- **Documentation standards** ensure maintainability
-- **Automated processes** reduce human error
-
-### User Experience
-- **Version transparency** sets clear expectations
-- **Choice of stability** (dev vs release builds)
-- **Predictable updates** following semantic versioning
-- **Quality assurance** through testing phases
-
----
-
-**Last Updated**: November 27, 2025  
-**Next Review**: When implementing new development tools or major workflow changes
-
-This workflow documentation ensures consistent development practices and efficient project management for the sophisticated ML Heating control system, combining comprehensive GitHub CLI integration with professional build and release processes.
+# Common issues:
+# - Alpha release accidentally triggering stable
+# - Version format problems
