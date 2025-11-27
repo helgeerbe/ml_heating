@@ -86,10 +86,8 @@ def build_physics_features(
     
     # External heat sources
     # Sum all PV power sources
-    pv1 = ha_client.get_state(config.PV1_POWER_ENTITY_ID, all_states) or 0.0
-    pv2 = ha_client.get_state(config.PV2_POWER_ENTITY_ID, all_states) or 0.0
-    pv3 = ha_client.get_state(config.PV3_POWER_ENTITY_ID, all_states) or 0.0
-    pv_now = float(pv1) + float(pv2) + float(pv3)
+    pv_now = ha_client.get_state(config.PV_POWER_ENTITY_ID, all_states) or 0.0
+    pv_now = float(pv_now)
     
     fireplace_on = ha_client.get_state(
         config.FIREPLACE_STATUS_ENTITY_ID, all_states, is_binary=True

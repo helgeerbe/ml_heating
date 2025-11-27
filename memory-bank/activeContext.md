@@ -2,7 +2,35 @@
 
 ## Current Work Focus
 
-### Current Phase: Live Performance Tracking Enhancement (Complete)
+### Current Phase: Complete PV Entity Migration & Configuration Optimization (Complete)
+**Status**: ✅ **COMPLETED** - Successfully migrated from multiple PV entities to single entity across entire project
+
+**What was accomplished**:
+
+**Core Project PV Entity Migration**:
+- Migrated from 3 separate PV entities (`PV1_POWER_ENTITY_ID`, `PV2_POWER_ENTITY_ID`, `PV3_POWER_ENTITY_ID`) to single `PV_POWER_ENTITY_ID`
+- Updated all core files: `config.py`, `physics_features.py`, `influx_service.py`, `physics_calibration.py`
+- Updated configuration files: `.env_sample` and `.env` to use `sensor.power_pv`
+- Simplified PV power calculation from summing 3 entities to reading 1 aggregated entity
+- Maintained backward compatibility for existing trained models (no recalibration needed)
+
+**Add-on Configuration Optimization**:
+- Added missing core entity parameters with Home Assistant entity autocomplete
+- Removed unnecessary parameters (influxdb username/password, simplified ML params)
+- Implemented comprehensive entity selector schemas for all Home Assistant entities
+- Updated examples to match actual user configuration
+- Aligned add-on config with core project's .env_sample parameters
+- Enhanced user experience with autocomplete dropdowns for entity selection
+- Confirmed `training_lookback_hours` parameter is properly exposed for new user calibration
+
+**Technical Benefits**:
+- **Simplified Configuration**: Single PV parameter instead of three separate entities
+- **Consistent Architecture**: Core project and add-on now use identical single-entity approach
+- **Cleaner Code**: Eliminated redundant summing logic across multiple files
+- **Better User Experience**: Entity autocomplete and reduced configuration complexity
+- **Future-Proof**: Easier to maintain and extend with additional features
+
+### Previous Phase: Live Performance Tracking Enhancement (Complete)
 **Status**: ✅ **COMPLETED** - Major enhancement to real-time performance monitoring system
 
 **What was accomplished**:

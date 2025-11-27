@@ -60,12 +60,17 @@ def convert_addon_to_env(config):
         'HASS_URL': 'http://supervisor/core',
         'HASS_TOKEN': os.environ.get('SUPERVISOR_TOKEN', ''),
         
-        # Core entity mappings
+        # Core entity mappings - Complete coverage
         'TARGET_INDOOR_TEMP_ENTITY_ID': config.get('target_indoor_temp_entity', ''),
         'INDOOR_TEMP_ENTITY_ID': config.get('indoor_temp_entity', ''),
         'OUTDOOR_TEMP_ENTITY_ID': config.get('outdoor_temp_entity', ''),
-        'HEATING_CONTROL_ENTITY_ID': config.get('heating_control_entity', ''),
-        'OUTLET_TEMP_ENTITY_ID': config.get('outlet_temp_entity', ''),
+        'HEATING_STATUS_ENTITY_ID': config.get('heating_control_entity', ''),
+        'ACTUAL_OUTLET_TEMP_ENTITY_ID': config.get('outlet_temp_entity', ''),
+        'TARGET_OUTLET_TEMP_ENTITY_ID': config.get('target_outlet_temp_entity', ''),
+        'ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID': config.get('actual_target_outlet_temp_entity', ''),
+        'OPENWEATHERMAP_TEMP_ENTITY_ID': config.get('openweathermap_temp_entity', ''),
+        'AVG_OTHER_ROOMS_TEMP_ENTITY_ID': config.get('avg_other_rooms_temp_entity', ''),
+        'PV_FORECAST_ENTITY_ID': config.get('pv_forecast_entity', ''),
         
         # ML learning parameters
         'LEARNING_RATE': str(config.get('learning_rate', 0.01)),
@@ -125,6 +130,33 @@ def convert_addon_to_env(config):
         # Model management
         'AUTO_BACKUP_ENABLED': str(config.get('auto_backup_enabled', True)),
         'BACKUP_RETENTION_DAYS': str(config.get('backup_retention_days', 30)),
+        
+        # Core ML parameters mapping to existing core variables
+        'HISTORY_STEPS': str(config.get('history_steps', 6)),
+        'HISTORY_STEP_MINUTES': str(config.get('history_step_minutes', 10)),
+        'TRAINING_LOOKBACK_HOURS': str(config.get('training_lookback_hours', 168)),
+        'PREDICTION_HORIZON_STEPS': str(config.get('prediction_horizon_steps', 24)),
+        
+        # Advanced Learning Features - Multi-lag learning
+        'ENABLE_MULTI_LAG_LEARNING': str(config.get('enable_multi_lag_learning', True)),
+        'PV_LAG_STEPS': str(config.get('pv_lag_steps', 4)),
+        'FIREPLACE_LAG_STEPS': str(config.get('fireplace_lag_steps', 4)),
+        'TV_LAG_STEPS': str(config.get('tv_lag_steps', 2)),
+        
+        # Seasonal Adaptation
+        'ENABLE_SEASONAL_ADAPTATION': str(config.get('seasonal_learning_enabled', True)),
+        'SEASONAL_LEARNING_RATE': str(config.get('seasonal_learning_rate', 0.01)),
+        'MIN_SEASONAL_SAMPLES': str(config.get('min_seasonal_samples', 100)),
+        
+        # Summer Learning
+        'ENABLE_SUMMER_LEARNING': str(config.get('enable_summer_learning', True)),
+        
+        # Advanced InfluxDB
+        'INFLUX_FEATURES_BUCKET': config.get('influx_features_bucket', 'ml_heating_features'),
+        
+        # System Behavior
+        'GRACE_PERIOD_MAX_MINUTES': str(config.get('grace_period_max_minutes', 30)),
+        'BLOCKING_POLL_INTERVAL_SECONDS': str(config.get('blocking_poll_interval_seconds', 60)),
     }
     
     # Set environment variables for the ML system

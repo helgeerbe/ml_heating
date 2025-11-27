@@ -218,9 +218,7 @@ class InfluxService:
             config.DHW_BOOST_HEATER_STATUS_ENTITY_ID.split(".", 1)[-1]
         )
         outdoor_temp_id = config.OUTDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
-        pv1_power_id = config.PV1_POWER_ENTITY_ID.split(".", 1)[-1]
-        pv2_power_id = config.PV2_POWER_ENTITY_ID.split(".", 1)[-1]
-        pv3_power_id = config.PV3_POWER_ENTITY_ID.split(".", 1)[-1]
+        pv_power_id = config.PV_POWER_ENTITY_ID.split(".", 1)[-1]
         
         flux_query = f"""
             from(bucket: "{config.INFLUX_BUCKET}")
@@ -230,9 +228,7 @@ class InfluxService:
                 r["entity_id"] == "{hp_outlet_temp_id}" or
                 r["entity_id"] == "{kuche_temperatur_id}" or
                 r["entity_id"] == "{outdoor_temp_id}" or
-                r["entity_id"] == "{pv1_power_id}" or
-                r["entity_id"] == "{pv2_power_id}" or
-                r["entity_id"] == "{pv3_power_id}" or
+                r["entity_id"] == "{pv_power_id}" or
                 r["entity_id"] == "{dhw_status_id}" or
                 r["entity_id"] == "{defrost_status_id}" or
                 r["entity_id"] == "{disinfection_status_id}"

@@ -54,9 +54,7 @@ def train_realistic_physics_model():
     disinfect_col = config.DISINFECTION_STATUS_ENTITY_ID.split(".", 1)[-1]
     boost_col = config.DHW_BOOST_HEATER_STATUS_ENTITY_ID.split(".", 1)[-1]
     defrost_col = config.DEFROST_STATUS_ENTITY_ID.split(".", 1)[-1]
-    pv1_col = config.PV1_POWER_ENTITY_ID.split(".", 1)[-1]
-    pv2_col = config.PV2_POWER_ENTITY_ID.split(".", 1)[-1]
-    pv3_col = config.PV3_POWER_ENTITY_ID.split(".", 1)[-1]
+    pv_power_col = config.PV_POWER_ENTITY_ID.split(".", 1)[-1]
     fireplace_col = config.FIREPLACE_STATUS_ENTITY_ID.split(".", 1)[-1]
     tv_col = config.TV_STATUS_ENTITY_ID.split(".", 1)[-1]
     
@@ -101,9 +99,7 @@ def train_realistic_physics_model():
             'dhw_disinfection': float(row.get(disinfect_col, 0.0)),
             'dhw_boost_heater': float(row.get(boost_col, 0.0)),
             'defrosting': float(row.get(defrost_col, 0.0)),
-            'pv_now': (float(row.get(pv1_col, 0.0)) +
-                       float(row.get(pv2_col, 0.0)) +
-                       float(row.get(pv3_col, 0.0))),
+            'pv_now': float(row.get(pv_power_col, 0.0)),
             'fireplace_on': float(row.get(fireplace_col, 0.0)),
             'tv_on': float(row.get(tv_col, 0.0)),
             'temp_forecast_1h': float(outdoor_temp),

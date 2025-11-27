@@ -122,14 +122,8 @@ TV_STATUS_ENTITY_ID: str = os.getenv(
 OUTDOOR_TEMP_ENTITY_ID: str = os.getenv(
     "OUTDOOR_TEMP_ENTITY_ID", "sensor.thermometer_waermepume_kompensiert"
 )
-PV1_POWER_ENTITY_ID: str = os.getenv(
-    "PV1_POWER_ENTITY_ID", "sensor.amperestorage_pv1_power"
-)
-PV2_POWER_ENTITY_ID: str = os.getenv(
-    "PV2_POWER_ENTITY_ID", "sensor.amperestorage_pv2_power"
-)
-PV3_POWER_ENTITY_ID: str = os.getenv(
-    "PV3_POWER_ENTITY_ID", "sensor.solarmax_pv_power"
+PV_POWER_ENTITY_ID: str = os.getenv(
+    "PV_POWER_ENTITY_ID", "sensor.power_pv"
 )
 
 # PV forecast sensor (HA attributes 'watts' available in 15-min steps)

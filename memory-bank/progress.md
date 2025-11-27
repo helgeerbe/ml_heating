@@ -165,6 +165,112 @@ Build Status: 🔄 Multi-arch containers building (amd64, arm64, armv7)
 - **Phase 7**: ✅ Testing & Validation
 - **Phase 8**: ✅ **PRODUCTION DEPLOYMENT** 🚀
 
+## 🔄 PHASE 9: AUTOMATIC BACKUP SCHEDULING - PLANNED
+
+**Status: Planned Enhancement 📅**
+**Priority: Medium**
+**Target: Future Release**
+
+### Phase 9 Objectives - BACKUP AUTOMATION
+
+#### 🎯 **Core Requirements**
+- **Time-based Scheduling**: Daily/weekly automatic backup creation
+- **Event-triggered Backups**: Before model updates and training milestones
+- **Retention Policy Enforcement**: Automatic cleanup based on `backup_retention_days`
+- **Backup Health Monitoring**: Status tracking and failure alerts
+- **Configuration Integration**: Utilize existing `auto_backup_enabled` setting
+
+#### 🔧 **Technical Implementation Plan**
+
+##### **1. Scheduler Integration**
+```python
+# Add to backup.py or new scheduler module
+import schedule
+import threading
+from datetime import datetime, timedelta
+
+class BackupScheduler:
+    def __init__(self, config):
+        self.enabled = config.get('auto_backup_enabled', True)
+        self.retention_days = config.get('backup_retention_days', 30)
+        self.frequency = config.get('backup_frequency', 'daily')  # NEW CONFIG
+        
+    def start_scheduler(self):
+        # Daily backup at 2 AM
+        schedule.every().day.at("02:00").do(self.create_scheduled_backup)
+        
+    def create_scheduled_backup(self):
+        # Create backup with auto-generated name
+        backup_name = f"auto_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        self.create_backup(backup_name, auto=True)
+        self.cleanup_old_backups()
+```
+
+##### **2. Event-Triggered Backups**
+- **Model Update Hook**: Backup before model file changes
+- **Training Milestone**: Backup after significant learning improvements
+- **Configuration Changes**: Backup before parameter updates
+- **Manual Override**: Safety backup before user-initiated changes
+
+##### **3. Retention Policy Enforcement**
+```python
+def cleanup_old_backups(self):
+    cutoff_date = datetime.now() - timedelta(days=self.retention_days)
+    old_backups = [b for b in self.list_backups() 
+                   if b['created'] < cutoff_date and b['type'] == 'auto']
+    for backup in old_backups:
+        self.delete_backup(backup['name'])
+```
+
+##### **4. Dashboard Enhancement**
+- **Backup Schedule Status**: Show next scheduled backup time
+- **Automatic Backup History**: List of auto-created backups
+- **Schedule Configuration**: UI for backup frequency settings
+- **Health Monitoring**: Display backup success/failure status
+
+##### **5. Configuration Extensions**
+```yaml
+# Add to config.yaml options
+auto_backup_enabled: true
+backup_retention_days: 30
+backup_frequency: "daily"  # daily, weekly, custom
+backup_time: "02:00"       # HH:MM format
+backup_on_events: true     # trigger on model updates
+max_auto_backups: 10       # limit automatic backups
+```
+
+#### 📋 **Implementation Checklist**
+- [ ] Design scheduler architecture and integration points
+- [ ] Add backup frequency configuration options
+- [ ] Implement time-based backup scheduling
+- [ ] Add event hooks for model updates and changes
+- [ ] Create retention policy enforcement mechanism
+- [ ] Enhance dashboard with schedule status and controls
+- [ ] Add backup health monitoring and alerts
+- [ ] Test automatic backup creation and cleanup
+- [ ] Update documentation with new features
+- [ ] Validate integration with existing backup system
+
+#### 🎯 **Success Criteria**
+- **Reliable Scheduling**: Automatic backups created on schedule
+- **Event Integration**: Backups triggered by system events
+- **Retention Compliance**: Old backups automatically cleaned up
+- **Dashboard Integration**: Schedule status visible to users
+- **Configuration Flexibility**: User-configurable backup settings
+- **Health Monitoring**: Backup failures detected and reported
+
+#### 🔗 **Dependencies**
+- **Existing Backup System**: Built on current manual backup infrastructure
+- **Configuration Framework**: Uses add-on configuration system
+- **Dashboard Integration**: Extends current backup interface
+- **Event System**: Hooks into model update and change events
+
+### Notes
+- **Current State**: Manual backups and safety backups work perfectly
+- **Enhancement Goal**: Add time-based and event-triggered automation
+- **Backward Compatibility**: All existing backup functionality preserved
+- **User Control**: Automatic scheduling can be disabled via configuration
+
 ## Summary
 
 The ML Heating System has successfully completed all development phases and is now **production ready**! The system provides:
@@ -176,3 +282,6 @@ The ML Heating System has successfully completed all development phases and is n
 - **📚 Complete Documentation**: Installation guides and user manuals
 
 **Ready for real-world deployment and community use!** 🎉
+
+### Future Enhancements
+- **Phase 9**: Automatic backup scheduling and retention management
