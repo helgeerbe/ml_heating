@@ -961,6 +961,68 @@ Key feature categories:
 
 ## Installation and Setup
 
+### Installation Options
+
+This project offers two installation channels:
+
+#### **Stable Channel (Recommended for Production)**
+- **Add-on Name**: "ML Heating Control"
+- **Auto-updates**: ✅ Enabled
+- **Target Users**: Production heating control, general users
+- **Configuration**: Optimized for reliability (INFO logging)
+- **Container**: `ghcr.io/helgeerbe/ml_heating:{version}` (semantic versioning)
+
+#### **Alpha Channel (Testing and Development)**
+- **Add-on Name**: "ML Heating Control (Alpha {version})"
+- **Auto-updates**: ❌ Disabled (manual updates for safety)
+- **Target Users**: Beta testers, early adopters, developers
+- **Configuration**: Enhanced debugging (DEBUG logging, development API enabled)
+- **Container**: `ghcr.io/helgeerbe/ml_heating:{alpha-version}` (alpha versioning)
+
+**⚠️ Alpha Channel Notice**: Alpha releases contain experimental features and may have bugs. Use only for testing and provide feedback to help improve the project.
+
+### Home Assistant Add-on Installation
+
+#### 1. Add Repository to Home Assistant
+1. Navigate to **Settings** → **Add-ons** → **Add-on Store**
+2. Click the **⋮** menu → **Repositories**
+3. Add this repository URL:
+   ```
+   https://github.com/helgeerbe/ml_heating
+   ```
+4. Click **Add** and wait for repository to load
+
+#### 2. Choose Your Channel
+
+**For Stable/Production Use:**
+- Install **"ML Heating Control"**
+- Automatic updates enabled
+- Production-ready configuration
+
+**For Testing/Development:**
+- Install **"ML Heating Control (Alpha {version})"**
+- Manual updates required
+- Latest features and improvements
+- Enhanced debugging capabilities
+
+#### 3. Configure the Add-on
+1. Click on your chosen add-on
+2. Go to **Configuration** tab
+3. Configure your Home Assistant entity IDs (autocomplete available)
+4. Set up InfluxDB connection details
+5. Configure external heat sources if available
+6. Click **Save**
+
+#### 4. Start the Add-on
+1. Go to **Info** tab
+2. Click **Start**
+3. Enable **Start on boot** for automatic startup
+4. Monitor logs for successful initialization
+
+### Manual/Development Installation
+
+For advanced users, developers, or non-Home Assistant deployments:
+
 ### Prerequisites
 
 - Python 3.8 or higher
