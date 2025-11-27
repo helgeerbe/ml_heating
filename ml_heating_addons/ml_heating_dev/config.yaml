@@ -1,5 +1,5 @@
 name: "ML Heating Control (Development)"
-version: "0.1.0-dev.8"
+version: "dev"
 slug: "ml_heating_dev"
 description: "Physics-based machine learning heating control system with online learning (Development Channel)"
 url: "https://github.com/helgeerbe/ml_heating"
@@ -11,7 +11,6 @@ arch:
   - i386
 startup: services
 init: false
-auto_update: false
 map:
   - addon_config:rw
 ports:
