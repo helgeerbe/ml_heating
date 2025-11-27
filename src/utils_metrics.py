@@ -12,7 +12,29 @@ same definitions as sklearn's mean_absolute_error and
 sqrt(mean_squared_error), and the physics model's confidence
 formula.
 """
+from typing import Sequence
+import numpy as np
 
+def _to_np(x) -> np.ndarray:
+    if isinstance(x, np.ndarray):
+        return x
+    return np.array(x, dtype=float)
+
+def mae(y_true: Sequence, y_pred: Sequence) -> float:
+    """Mean Absolute Error (batch). Returns 0.0 for empty inputs."""
+    y_t = _to_np(y_true)
+    y_p = _to_np(y_pred)
+    if y_t.size == 0:
+        return 0.0
+    return float(np.mean(np.abs(y_t - y_p)))
+
+def rmse(y_true: Sequence, y_pred: Sequence) -> float:
+    """Root Mean Squared Error (batch). Returns 0.0 for empty inputs."""
+    y_t = _to_np(y_true)
+    y_p = _to_np(y_pred)
+    if y_t.size == 0:
+        return 0.0
+    return float(np.sqrt(np.mean((y_t - y_p) ** 2)))
 
 def rolling_sigma(errors: Sequence, window: int = 50, min_sigma: float = 0.02) -> float:
     """
@@ -96,3 +118,4 @@ class RMSE:
         if self._n == 0:
             return 0.0
         import math as _math
+        return _math.sqrt(self._sum_squared_errors / self._n)
