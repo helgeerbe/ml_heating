@@ -25,88 +25,11 @@ jobs:
           community: true
           path: "./ml_heating_addons/ml_heating_dev"
 
-  # Stage 2: Build and Push Container with :dev Tag
-  build-container:
-    runs-on: ubuntu-latest
-    name: Build Development Container
-    needs: [validate]
-    permissions:
-      contents: read
-      packages: write
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - linux/amd64
-          - linux/arm64
-          - linux/arm/v7
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_PAT }}
-          
-      - name: Extract development version
-        id: version
-        run: |
-          TAG_NAME=${GITHUB_REF#refs/tags/}
-          VERSION=${TAG_NAME#v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
-          echo "Development version: $VERSION"
-          
-      - name: Prepare build context
-        run: |
-          mkdir -p container_build
-          cp -R src container_build/
-          cp -R notebooks container_build/ || true
-          cp requirements.txt container_build/
-          cp ml_heating_addon/Dockerfile container_build/
-          cp ml_heating_addon/run.sh container_build/
-          cp ml_heating_addon/supervisord.conf container_build/
-          cp ml_heating_addon/config_adapter.py container_build/
-          cp ml_heating_addon/dashboard_requirements.txt container_build/
-          cp -R ml_heating_addon/dashboard container_build/
-
-      - name: Build and push development container
-        uses: docker/build-push-action@v5
-        with:
-          context: container_build
-          file: container_build/Dockerfile
-          platforms: ${{ matrix.platform }}
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
-          build-args: |
-            BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.11-alpine3.18
-            BUILD_ARCH=${{ matrix.platform == 'linux/amd64' && 'amd64' || matrix.platform == 'linux/arm64' && 'aarch64' || matrix.platform == 'linux/arm/v7' && 'armv7' }}
-            BUILD_DATE=${{ github.event.repository.pushed_at }}
-            BUILD_DESCRIPTION=ML Heating Control Add-on (Development)
-            BUILD_NAME=ML Heating Control (Development)
-            BUILD_REF=${{ github.sha }}
-            BUILD_REPOSITORY=${{ github.server_url }}/${{ github.repository }}
-            BUILD_VERSION=${{ steps.version.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  # Stage 3: Build Development Add-on
+  # Stage 2: Build Development Add-on
   build-addon:
     runs-on: ubuntu-latest
     name: Build Development Add-on
-    needs: [build-container]
+    needs: [validate]
     permissions:
       contents: read
       packages: write
@@ -172,10 +95,10 @@ jobs:
             --target ml_heating_addons/ml_heating_dev \
             --docker-hub ghcr.io/${{ github.repository_owner }}
 
-  # Stage 4: Create Development Release
+  # Stage 3: Create Development Release
   release:
     runs-on: ubuntu-latest
-    needs: [validate, build-container, build-addon]
+    needs: [validate, build-addon]
     permissions:
       contents: write
       packages: write
