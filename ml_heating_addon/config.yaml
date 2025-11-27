@@ -1,5 +1,5 @@
 name: "ML Heating Control"
-version: "1.0.0"
+version: "0.0.1-dev.1"
 slug: "ml_heating"
 description: "Physics-based machine learning heating control system with online learning"
 url: "https://github.com/helgeerbe/ml_heating"
