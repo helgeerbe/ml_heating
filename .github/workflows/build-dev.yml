@@ -125,17 +125,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_PAT }}
           
-      - name: Update development add-on version
+      - name: Update development add-on version dynamically
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           CONFIG_FILE="ml_heating_addons/ml_heating_dev/config.yaml"
-          echo "Updating $CONFIG_FILE version to: $VERSION"
+          echo "Dynamically updating $CONFIG_FILE version from 'dev' to: $VERSION"
           
-          # Update version in development add-on config
-          sed -i "s/^version: .*/version: \"$VERSION\"/" "$CONFIG_FILE"
+          # Install yq for YAML processing (like t0bst4r approach)
+          sudo snap install yq
+          
+          # Update version using yq (more reliable than sed)
+          yq eval ".version = \"$VERSION\"" -i "$CONFIG_FILE"
+          
+          # Also update the add-on name to include version (like t0bst4r)
+          yq eval ".name = \"ML Heating Control (Alpha $VERSION)\"" -i "$CONFIG_FILE"
           
           echo "Updated development config:"
-          grep -E "^(version|auto_update):" "$CONFIG_FILE"
+          grep -E "^(name|version):" "$CONFIG_FILE"
           
       - name: Prepare development add-on build context
         run: |
