@@ -185,7 +185,7 @@ jobs:
           args: |
             --amd64 \
             --aarch64 \
-            --armv7 \
+            --armhf \
             --target ml_heating_addons/ml_heating \
             --docker-hub ghcr.io/${{ github.repository_owner }}
 
