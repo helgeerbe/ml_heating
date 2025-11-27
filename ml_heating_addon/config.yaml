@@ -25,7 +25,6 @@ privileged:
 apparmor: false
 hassio_api: true
 homeassistant_api: true
-image: "ghcr.io/helgeerbe/ml_heating:dev"
 options:
   # Core Entity Configuration
   # An input_number or sensor that holds the desired target indoor temperature.
