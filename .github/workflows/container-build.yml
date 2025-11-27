@@ -55,8 +55,8 @@ jobs:
               echo "❌ Dev builds must have -dev.N suffix in tag"
               exit 1
             fi
-            echo "version=dev" >> $GITHUB_OUTPUT
-            echo "🚧 DEV BUILD detected from feature/dev branch - Version: dev"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "🚧 DEV BUILD detected from feature/dev branch - Version: $VERSION"
           fi
 
   # Stage 1: Quick Validation - Fail Fast
