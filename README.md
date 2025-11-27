@@ -77,7 +77,7 @@ The primary goal is to improve upon traditional heat curves by creating a **self
 -   **Performance Metrics:** Real-time MAE (Mean Absolute Error) and RMSE (Root Mean Square Error) tracking **🆕 Now updates every cycle**
 -   **Shadow Mode Metrics:** When in shadow mode, tracks separate metrics for ML vs heat curve performance comparison
 -   **Feature Importance Export:** Exports feature importance to InfluxDB for visualization and analysis
--   **Learning Metrics Export:** Exports 43 learning parameters (core, multi-lag, seasonal, sample counts) to InfluxDB every cycle
+-   **Learning Metrics Export:** Exports 43 learning parameters (core, multi-lag, seasonal, sample counts) to InfluxDB every cycle, **including historical timestamps during calibration for detailed analysis**
 -   **Learning Dashboard:** Interactive Jupyter notebook (`00_learning_dashboard.ipynb`) for at-a-glance learning status
 -   **Detailed Logging:** Comprehensive logging of decisions, predictions, and learning progress
 

@@ -33,6 +33,12 @@
 
 ## Recent Discoveries & Key Insights
 
+### November 27, 2025 - Learning Parameters Export with Historical Timestamps
+
+**Refinement Implemented**: Physics calibration now exports learning parameters with historical timestamps to InfluxDB.
+- **Impact**: Improves traceability and analysis of model learning over time.
+- **Details**: `src/influx_service.py` was modified to accept an optional timestamp, and `src/physics_calibration.py` was updated to utilize this for historical exports during calibration.
+
 ### November 26, 2025 - Major Live Performance Tracking Enhancement
 
 **Critical Issue Resolved**: Fixed AttributeError that was preventing physics model calibration:

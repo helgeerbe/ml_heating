@@ -10,7 +10,7 @@ import pandas as pd
 
 from . import config
 from .physics_model import RealisticPhysicsModel
-from .model_wrapper import save_model, MAE, RMSE
+from .model_wrapper import save_model, MAE, RMSE, MockMetric
 from .influx_service import InfluxService
 
 
@@ -70,17 +70,17 @@ def train_realistic_physics_model():
         target_temp = row.get(target_col, 21.0)
         
         # Get indoor lag (30 min = 3 steps back at 10 min intervals)
-        if idx >= 3:
-            indoor_lag_30m = df.iloc[idx - 3].get(indoor_col)
-        else:
-            indoor_lag_30m = indoor_temp
+        indoor_lag_30m = (df.iloc[idx - 3].get(indoor_col) 
+                          if idx >= 3 else indoor_temp)
         
         # Skip if missing critical data
-        if pd.isna(outlet_temp) or pd.isna(indoor_temp) or pd.isna(outdoor_temp):
+        if (pd.isna(outlet_temp) or pd.isna(indoor_temp) 
+                or pd.isna(outdoor_temp)):
             continue
         
         # Calculate actual temperature change
-        future_indoor = df.iloc[idx + config.PREDICTION_HORIZON_STEPS].get(indoor_col)
+        future_indoor = df.iloc[idx + config.PREDICTION_HORIZON_STEPS].get(
+            indoor_col)
         if pd.isna(future_indoor) or pd.isna(target_temp):
             continue
         
@@ -101,7 +101,9 @@ def train_realistic_physics_model():
             'dhw_disinfection': float(row.get(disinfect_col, 0.0)),
             'dhw_boost_heater': float(row.get(boost_col, 0.0)),
             'defrosting': float(row.get(defrost_col, 0.0)),
-            'pv_now': float(row.get(pv1_col, 0.0)) + float(row.get(pv2_col, 0.0)) + float(row.get(pv3_col, 0.0)),
+            'pv_now': (float(row.get(pv1_col, 0.0)) +
+                       float(row.get(pv2_col, 0.0)) +
+                       float(row.get(pv3_col, 0.0))),
             'fireplace_on': float(row.get(fireplace_col, 0.0)),
             'tv_on': float(row.get(tv_col, 0.0)),
             'temp_forecast_1h': float(outdoor_temp),
@@ -121,11 +123,18 @@ def train_realistic_physics_model():
         logging.error("ERROR: No valid training samples after filtering")
         return None
         
-    logging.info(f"Training on {len(features_list)} realistic heating scenarios")
+    logging.info(
+        f"Training on {len(features_list)} realistic heating scenarios"
+    )
     
     # Training loop
     logging.info("\n=== TRAINING WITH TARGET AWARENESS ===")
     for i, (features, target) in enumerate(zip(features_list, labels_list)):
+        # Get the original timestamp of the data point being learned from
+        # We use the original DataFrame df and the current index idx to get
+        # the correct historical timestamp.
+        historical_timestamp = df.iloc[idx]['_time']
+
         pred = model.predict_one(features)
         model.learn_one(features, target)
         
@@ -135,22 +144,35 @@ def train_realistic_physics_model():
             rmse.update(target, pred)
         
         if (i + 1) % 200 == 0:
-            logging.info(f"Processed {i+1}/{len(features_list)} - MAE: {mae.get():.4f}°C")
+            logging.info(
+                f"Processed {i+1}/{len(features_list)} - MAE: {mae.get():.4f}°C"
+            )
+        
+        # Export learning metrics to InfluxDB with the historical timestamp
+        learning_metrics = model.export_learning_metrics()
+        influx.write_feature_importances(
+            learning_metrics, 
+            bucket=config.INFLUX_FEATURES_BUCKET,
+            measurement="learning_parameters_calibration", # Use a distinct measurement name
+            timestamp=historical_timestamp
+        )
     
     # Results
-    logging.info(f"\n=== TRAINING COMPLETED ===")
+    logging.info("\n=== TRAINING COMPLETED ===")
     logging.info(f"Final MAE: {mae.get():.4f}°C")
     logging.info(f"Final RMSE: {rmse.get():.4f}°C")
     
-    logging.info(f"\n=== LEARNED REALISTIC PHYSICS ===")
+    logging.info("\n=== LEARNED REALISTIC PHYSICS ===")
     logging.info(f"Base heating rate: {model.base_heating_rate:.6f}")
     logging.info(f"Target influence: {model.target_influence:.6f}")
-    logging.info(f"PV warming coeff: {model.pv_warming_coefficient:.6f} per 100W")
+    logging.info(
+        f"PV warming coeff: {model.pv_warming_coefficient:.6f} per 100W"
+    )
     logging.info(f"Fireplace heating: {model.fireplace_heating_rate:.6f}")
     logging.info(f"TV heat contrib: {model.tv_heat_contribution:.6f}")
     
     # Test realistic physics
-    logging.info(f"\n=== PHYSICS VALIDATION ===")
+    logging.info("\n=== PHYSICS VALIDATION ===")
     test_features = {
         'outlet_temp': 45.0,
         'indoor_temp_lag_30m': 21.0,
@@ -187,7 +209,7 @@ def train_realistic_physics_model():
         logging.info(f"  Outlet {temp}°C → {pred:+.4f}°C change")
     
     # Save the trained model
-    logging.info(f"\n=== SAVING REALISTIC PHYSICS MODEL ===")
+    logging.info("\n=== SAVING REALISTIC PHYSICS MODEL ===")
     try:
         save_model(model, mae, rmse)
         logging.info(f"✅ Realistic Physics Model saved to {config.MODEL_FILE}")
@@ -244,7 +266,10 @@ def validate_physics_model():
         is_monotonic = all(monotonic_check[i] <= monotonic_check[i+1] 
                          for i in range(len(monotonic_check)-1))
         
-        print(f"\n{'✅' if is_monotonic else '❌'} Physics compliance: {'PASSED' if is_monotonic else 'FAILED'}")
+        print(
+            f"\n{'✅' if is_monotonic else '❌'} Physics compliance: "
+            f"{'PASSED' if is_monotonic else 'FAILED'}"
+        )
         print(f"Range: {min(monotonic_check):.6f} to {max(monotonic_check):.6f}")
         
         return is_monotonic
@@ -261,7 +286,7 @@ def deploy_physics_only_model():
     logging.info("Using only realistic physics model (no ML training)")
     
     # Create physics model directly
-    from .model_wrapper import MockMetric
+    # from .model_wrapper import MockMetric # This import is now at the top
     model = RealisticPhysicsModel()
     mae = MockMetric(0.15)  # Preset reasonable performance
     rmse = MockMetric(0.20)

@@ -269,6 +269,7 @@ class InfluxService:
         bucket: str = None,
         org: str = None,
         measurement: str = "feature_importance",
+        timestamp: datetime = None,
     ) -> None:
         """
         Write feature importances as a single InfluxDB point.
@@ -281,6 +282,8 @@ class InfluxService:
             bucket: Target bucket name. If None, uses config.INFLUX_FEATURES_BUCKET.
             org: Influx organization. If None, uses config.INFLUX_ORG.
             measurement: Measurement name to write into.
+            timestamp: Optional datetime object to use as the point's timestamp.
+                       Defaults to the current UTC time if not provided.
         """
         if not importances:
             logging.debug("No importances to write to InfluxDB.")
@@ -294,11 +297,13 @@ class InfluxService:
         write_org = org or getattr(config, "INFLUX_ORG", None)
 
         try:
-            p = Point(measurement).tag("source", "ml_heating")
-            # Add model timestamp
-            p = p.field(
-                "exported", int(datetime.now(timezone.utc).timestamp())
-            )
+            # Use provided timestamp or current UTC time
+            point_time = timestamp if timestamp else datetime.now(timezone.utc)
+            p = Point(measurement).tag("source", "ml_heating").time(point_time)
+            
+            # Add model exported field as string representation of timestamp if we use an actual timestamp for the point.
+            p = p.field("exported", point_time.isoformat())
+
             # Add each feature as a field (field keys must be strings)
             for feature, val in importances.items():
                 # Influx field names may contain dots; replace with
@@ -316,9 +321,8 @@ class InfluxService:
             self.write_api.write(bucket=write_bucket, org=write_org, record=p)
             logging.debug(
                 "Wrote feature importances to Influx bucket '%s' "
-                "(measurement=%s)",
-                write_bucket,
-                measurement,
+                "(measurement=%s) with timestamp %s",
+                write_bucket, measurement, point_time.isoformat()
             )
         except Exception as e:
             logging.exception(
