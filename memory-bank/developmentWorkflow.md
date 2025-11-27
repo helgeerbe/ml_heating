@@ -91,9 +91,10 @@ gh issue close 10 --comment "Resolved in commit abc123"
 ## Development Build Process
 
 ### Current Status
-**Latest Development Build**: `v0.1.0-dev.3`
-- **Purpose**: Fix Home Assistant add-on discovery with proper semantic versioning
-- **Container**: `ghcr.io/helgeerbe/ml_heating:v0.1.0-dev.3`
+**Latest Development Build**: `v0.1.0-dev.6`
+- **Purpose**: Implement proper "dev" version for Home Assistant add-on discovery
+- **Container**: `ghcr.io/helgeerbe/ml_heating:v0.1.0-dev.6`
+- **Status**: Successfully resolves HA add-on linter requirements
 
 ### When to Create Development Builds
 - Bug fixes that need immediate testing
@@ -202,32 +203,88 @@ git push origin main && git push origin v0.1.0
 
 ## Home Assistant Add-on Development
 
-### Add-on Discovery Requirements
-**Critical Configuration**:
-- Version must use valid semantic versioning (not `"dev"`)
-- Add-on files must be on `main` branch (Home Assistant only reads default branch)
-- Container image must exist and be accessible
-- `config.yaml` structure must be valid
+### Critical Discovery Requirements - IMPORTANT LESSONS LEARNED
+
+**⚠️ CRITICAL**: Home Assistant add-on discovery has strict linter requirements that override normal semantic versioning practices.
+
+#### The "dev" Version Requirement
+**For Community Add-ons** (using `frenck/action-addon-linter` with `community: true`):
+- **Development builds MUST use version "dev"** - not semantic versions like "0.1.0-dev.5"
+- **The linter enforces this**: `"Add-on version identifier must be 'dev'"` error if not followed
+- **This is a Home Assistant ecosystem requirement**, not a bug in our workflow
+
+**Reference**: [Home Assistant Community Discussion](https://community.home-assistant.io/t/add-on-developer-question-if-version-is-set-to-dev-how-will-my-users-get-updates/447270)
+
+#### Version Strategy for Development Add-ons
+**Best Practice Implementation**:
+```yaml
+# ml_heating_addon/config.yaml
+version: "dev"  # Required for HA linter validation
+```
+
+**Trade-offs**:
+- ✅ Add-on appears in Home Assistant successfully  
+- ✅ Passes community add-on linter validation
+- ❌ No automatic updates (users must manually reinstall)
+- ❌ Version always shows as "dev" regardless of actual release
+
+**Git Tagging Strategy**:
+- Use semantic tags for release tracking: `v0.1.0-dev.6`, `v0.1.0-dev.7`
+- Container images tagged with full version: `ghcr.io/helgeerbe/ml_heating:v0.1.0-dev.6`
+- Add-on config.yaml always shows version "dev"
+
+#### Dual-Channel Architecture (Future Stable Releases)
+**Development Channel** (current implementation):
+- Version: `"dev"`
+- Auto-update: `false`
+- Target: Developers, testers, early adopters
+- Update method: Manual reinstall
+
+**Stable Channel** (future implementation):
+- Version: `"0.1.0"`, `"0.2.0"` (semantic versioning)
+- Auto-update: `true`
+- Target: Production users
+- Update method: Automatic via Home Assistant
 
 ### Repository Configuration
 - **Repository URL**: `https://github.com/helgeerbe/ml_heating`
 - **Add-on Path**: `ml_heating_addon/`
 - **Discovery Requirements**:
-  - Valid `config.yaml` with proper semantic versioning
+  - Valid `config.yaml` with version "dev" for development builds
   - Proper `build.json` for container builds
   - `repository.json` at root level
+  - Add-on files must be on `main` branch (HA only reads default branch)
+  - Container image must exist and be accessible
 
-### Add-on Version Management
+### Add-on Version Management Workflow
 ```bash
-# Fix version for HA discovery
+# Development builds - ALWAYS use "dev" version
 # Edit ml_heating_addon/config.yaml
-version: "0.1.0-dev.3"  # Valid semantic version
+version: "dev"  # Required for HA community linter
 
-# Commit and push to main
-git add ml_heating_addon/config.yaml
-git commit -m "fix(addon): update version to 0.1.0-dev.3 for HA discovery"
-git push origin main
+# Git tags track actual development progress
+git tag v0.1.0-dev.6  # Semantic versioning for development tracking
+git push origin v0.1.0-dev.6
+
+# Future stable releases
+version: "0.1.0"  # Semantic version for stable releases
+git tag v0.1.0   # Clean version tag
 ```
+
+### GitHub Actions Workflow Logic
+**Smart Version Detection**:
+```bash
+# Tags with -dev suffix → version = "dev" 
+v0.1.0-dev.6 → config version "dev", container tag "v0.1.0-dev.6"
+
+# Tags without -dev suffix → version = semantic
+v0.1.0 → config version "0.1.0", container tag "v0.1.0"
+```
+
+**Workflow automatically**:
+- Detects dev vs stable releases based on tag format
+- Sets appropriate version in config.yaml during build
+- Configures auto_update setting (false for dev, true for stable)
 
 ### Testing Add-on Discovery
 1. **Remove repository** from HA (Settings → Add-ons → Add-on Store → ⋮ → Repositories)
