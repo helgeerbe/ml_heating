@@ -1,0 +1,255 @@
+name: Build Stable Release
+
+on:
+  push:
+    tags: ['v*']  # Trigger on all version tags
+    branches-ignore: ['**']  # Don't trigger on branches
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Check if this is a stable release (not dev)
+  check-release-type:
+    runs-on: ubuntu-latest
+    name: Check Release Type
+    outputs:
+      is-stable: ${{ steps.check.outputs.is-stable }}
+      version: ${{ steps.check.outputs.version }}
+    
+    steps:
+      - name: Check if stable release
+        id: check
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG_NAME#v}
+          
+          if [[ "$VERSION" =~ -dev\. ]]; then
+            echo "is-stable=false" >> $GITHUB_OUTPUT
+            echo "This is a development release, skipping stable build"
+          else
+            echo "is-stable=true" >> $GITHUB_OUTPUT
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "Stable release detected: $VERSION"
+          fi
+
+  # Stage 1: Validate Stable Add-on
+  validate:
+    runs-on: ubuntu-latest
+    name: Validate Stable Add-on
+    needs: [check-release-type]
+    if: needs.check-release-type.outputs.is-stable == 'true'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Validate Stable Add-on Configuration
+        uses: frenck/action-addon-linter@v2.15
+        with:
+          community: true
+          path: "./ml_heating_addons/ml_heating"
+
+  # Stage 2: Build and Push Container with :latest Tag
+  build-container:
+    runs-on: ubuntu-latest
+    name: Build Stable Container
+    needs: [check-release-type, validate]
+    if: needs.check-release-type.outputs.is-stable == 'true'
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux/amd64
+          - linux/arm64
+          - linux/arm/v7
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PAT }}
+          
+      - name: Extract semantic version tags
+        id: version
+        run: |
+          VERSION="${{ needs.check-release-type.outputs.version }}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+          # Extract semantic version parts
+          MAJOR=$(echo $VERSION | cut -d. -f1)
+          MINOR=$(echo $VERSION | cut -d. -f1,2)
+          
+          echo "major=$MAJOR" >> $GITHUB_OUTPUT
+          echo "minor=$MINOR" >> $GITHUB_OUTPUT
+          echo "Stable version: $VERSION (Major: $MAJOR, Minor: $MINOR)"
+          
+      - name: Prepare build context
+        run: |
+          mkdir -p container_build
+          cp -R src container_build/
+          cp -R notebooks container_build/ || true
+          cp requirements.txt container_build/
+          cp ml_heating_addon/Dockerfile container_build/
+
+      - name: Build and push stable container
+        uses: docker/build-push-action@v5
+        with:
+          context: container_build
+          file: container_build/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.minor }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.major }}
+          build-args: |
+            BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.11-alpine3.18
+            BUILD_ARCH=${{ matrix.platform == 'linux/amd64' && 'amd64' || matrix.platform == 'linux/arm64' && 'aarch64' || matrix.platform == 'linux/arm/v7' && 'armv7' }}
+            BUILD_DATE=${{ github.event.repository.pushed_at }}
+            BUILD_DESCRIPTION=ML Heating Control Add-on
+            BUILD_NAME=ML Heating Control
+            BUILD_REF=${{ github.sha }}
+            BUILD_REPOSITORY=${{ github.server_url }}/${{ github.repository }}
+            BUILD_VERSION=${{ steps.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Stage 3: Build Stable Add-on
+  build-addon:
+    runs-on: ubuntu-latest
+    name: Build Stable Add-on
+    needs: [check-release-type, build-container]
+    if: needs.check-release-type.outputs.is-stable == 'true'
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PAT }}
+          
+      - name: Update stable add-on version
+        run: |
+          VERSION="${{ needs.check-release-type.outputs.version }}"
+          CONFIG_FILE="ml_heating_addons/ml_heating/config.yaml"
+          echo "Updating $CONFIG_FILE version to: $VERSION"
+          
+          # Update version in stable add-on config
+          sed -i "s/^version: .*/version: \"$VERSION\"/" "$CONFIG_FILE"
+          
+          echo "Updated stable config:"
+          grep -E "^(version|auto_update):" "$CONFIG_FILE"
+          
+      - name: Prepare stable add-on build context
+        run: |
+          ADDON_PATH="ml_heating_addons/ml_heating"
+          
+          # Copy source files to add-on directory (HA Builder expects them there)
+          cp -R src "$ADDON_PATH/"
+          cp -R notebooks "$ADDON_PATH/" || true
+          cp requirements.txt "$ADDON_PATH/" || true
+          cp ml_heating_addon/Dockerfile "$ADDON_PATH/"
+          cp ml_heating_addon/build.json "$ADDON_PATH/"
+          cp ml_heating_addon/run.sh "$ADDON_PATH/"
+          cp ml_heating_addon/supervisord.conf "$ADDON_PATH/"
+          cp -R ml_heating_addon/dashboard "$ADDON_PATH/"
+
+      - name: Build Stable Add-on
+        uses: home-assistant/builder@master
+        with:
+          args: |
+            --amd64 \
+            --aarch64 \
+            --armv7 \
+            --target ml_heating_addons/ml_heating \
+            --docker-hub ghcr.io/${{ github.repository_owner }}
+
+  # Stage 4: Create Stable Release
+  release:
+    runs-on: ubuntu-latest
+    needs: [check-release-type, validate, build-container, build-addon]
+    if: needs.check-release-type.outputs.is-stable == 'true'
+    permissions:
+      contents: write
+      packages: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Create Stable Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref }}
+          name: ML Heating v${{ needs.check-release-type.outputs.version }}
+          body: |
+            ## 🎯 ML Heating Control - Stable Release
+            
+            **Version:** `${{ needs.check-release-type.outputs.version }}`  
+            **Add-on Name:** "ML Heating Control"  
+            **Container:** `ghcr.io/${{ github.repository }}:latest`  
+            **Auto-Updates:** ✅ Enabled  
+            
+            ### Installation
+            1. Add this repository to Home Assistant:
+               ```
+               https://github.com/${{ github.repository }}
+               ```
+            2. Install **"ML Heating Control"**
+            3. Configure with your Home Assistant entities
+            
+            ### Production Features
+            - 🎯 Production-ready configuration
+            - 📊 Optimized logging (`log_level: INFO`)
+            - 🔄 Automatic updates enabled
+            - 🛡️ Thoroughly tested and validated
+            - 📈 Advanced physics-based ML optimization
+            
+            ### Container Images
+            - `ghcr.io/${{ github.repository }}:latest` (latest stable)
+            - `ghcr.io/${{ github.repository }}:${{ needs.check-release-type.outputs.version }}` (specific version)
+            
+            ### Key Features
+            - **Physics-based ML optimization** - Intelligent heating control using real-world physics models
+            - **Real-time dashboard** - Advanced analytics and performance monitoring
+            - **Multi-model comparison** - Compare different heating strategies
+            - **Automated backup system** - Protect your ML models and configurations
+            - **Seasonal learning** - Automatically adapts to seasonal patterns
+            - **External heat source detection** - Accounts for PV, fireplace, and other heat sources
+            
+            ### Multi-Add-on Support
+            This project now supports both stable and development channels:
+            - **Stable Channel** (this release): Production-ready with auto-updates
+            - **Development Channel**: Latest features for testing (install separately)
+            
+            ### Upgrade Path
+            If upgrading from a previous version, your existing configuration and ML models will be automatically preserved.
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
