@@ -97,6 +97,8 @@ jobs:
           cp ml_heating_addon/build.json "$ADDON_PATH/"
           cp ml_heating_addon/run.sh "$ADDON_PATH/"
           cp ml_heating_addon/supervisord.conf "$ADDON_PATH/"
+          cp ml_heating_addon/config_adapter.py "$ADDON_PATH/"
+          cp ml_heating_addon/dashboard_requirements.txt "$ADDON_PATH/"
           cp -R ml_heating_addon/dashboard "$ADDON_PATH/"
 
       - name: Build Stable Add-on
