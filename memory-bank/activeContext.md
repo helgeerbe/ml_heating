@@ -52,6 +52,31 @@
 - Implemented `nan_to_num` handling for edge cases
 - Improved stability of multi-lag learning functions (`_learn_pv_lags`, `_learn_fireplace_lags`, `_learn_tv_lags`, `_learn_seasonal_variations`)
 
+### November 27, 2025 - Alpine/Scikit-learn Deployment Resolution
+
+**Critical Deployment Issue Resolved**: Fixed Alpine Linux scikit-learn compilation problems in GitHub Actions:
+- **Root Cause**: Home Assistant uses Alpine Linux base images where scikit-learn compilation fails due to missing build dependencies
+- **Impact**: GitHub Actions container builds were failing, preventing deployment
+- **Resolution**: Implemented `src/utils_metrics.py` with pure NumPy implementations replacing scikit-learn
+
+**Complete Utils Metrics Implementation**: Created comprehensive metrics module:
+- **Batch Functions**: `mae(y_true, y_pred)` and `rmse(y_true, y_pred)` for direct calculations
+- **Incremental Classes**: `MAE` and `RMSE` classes with `.update()` and `.get()` methods for streaming data
+- **Helper Functions**: `rolling_sigma()` and `confidence_from_sigma()` for confidence calculations
+- **Pure NumPy**: No external ML library dependencies, compatible with Alpine Linux
+
+**Notebook Compatibility Fixed**: Resolved notebook import issues:
+- **Updated Imports**: `notebook_imports.py` now uses `src.utils_metrics as metrics`
+- **Backward Compatibility**: Maintained identical API to previous River/scikit-learn metrics
+- **Complete RMSE Fix**: Fixed incomplete `RMSE.get()` method that was missing return statement
+- **Full Testing**: All notebook imports verified working correctly
+
+**Production Impact**:
+- **GitHub Actions**: Container builds now succeed on Alpine Linux
+- **Notebooks**: All analysis notebooks work correctly with new metrics module
+- **Deployment**: Home Assistant add-on can build successfully across all architectures
+- **Performance**: Equivalent functionality to scikit-learn with lighter dependencies
+
 ### November 26, 2025 (Later Session) - Physics Compliance Fix
 
 **Critical Physics Issue Resolved**: Fixed negative heating predictions that violated physical laws:
