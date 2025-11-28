@@ -4,11 +4,8 @@ slug: "ml_heating_dev"
 description: "Physics-based machine learning heating control system with online learning (Development Channel)"
 url: "https://github.com/helgeerbe/ml_heating"
 arch:
-  - armhf
-  - armv7
   - aarch64
   - amd64
-  - i386
 startup: services
 init: false
 map:
