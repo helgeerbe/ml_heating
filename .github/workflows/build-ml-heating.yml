@@ -132,7 +132,6 @@ jobs:
           args: |
             --amd64 \
             --aarch64 \
-            --armhf \
             --target ${{ needs.detect-addon-type.outputs.addon-path }} \
             --docker-hub ghcr.io
 
