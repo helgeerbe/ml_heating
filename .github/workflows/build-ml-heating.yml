@@ -69,8 +69,7 @@ jobs:
             --target shared \
             --docker-hub ${{ env.REGISTRY }}/${{ github.repository_owner }} \
             --image ${{ env.IMAGE_NAME }} \
-            --version ${{ needs.detect-release.outputs.version }} \
-            --tag-latest ${{ needs.detect-release.outputs.channel == 'latest' }}
+            --version ${{ needs.detect-release.outputs.version }}
 
       - name: Build multiarch image for arm64  
         uses: home-assistant/builder@2025.11.0
