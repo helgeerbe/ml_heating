@@ -57,9 +57,9 @@ COPY requirements.txt /app/
 RUN pip3 install --no-cache-dir --upgrade pip \
     && pip3 install --no-cache-dir -r requirements.txt
 
-# Copy the ML heating system source code
-COPY src/ /app/src/
-COPY notebooks/ /app/notebooks/
+# Copy the ML heating system source code (from repository root)
+COPY ../src/ /app/src/
+COPY ../notebooks/ /app/notebooks/
 
 # Copy add-on specific files
 COPY run.sh /app/
