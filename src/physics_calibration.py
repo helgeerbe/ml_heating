@@ -10,7 +10,7 @@ import pandas as pd
 
 from . import config
 from .physics_model import RealisticPhysicsModel
-from .model_wrapper import save_model, MAE, RMSE, MockMetric
+from .model_wrapper import save_model, MAE, RMSE
 from .influx_service import InfluxService
 
 
@@ -273,23 +273,3 @@ def validate_physics_model():
     except Exception as e:
         logging.error("Physics validation error: %s", e, exc_info=True)
         return False
-
-
-def deploy_physics_only_model():
-    """Deploy pure physics model without ML training"""
-    
-    logging.info("=== PHYSICS-ONLY MODE ===")
-    logging.info("Using only realistic physics model (no ML training)")
-    
-    # Create physics model directly
-    # from .model_wrapper import MockMetric # This import is now at the top
-    model = RealisticPhysicsModel()
-    mae = MockMetric(0.15)  # Preset reasonable performance
-    rmse = MockMetric(0.20)
-    
-    try:
-        save_model(model, mae, rmse)
-        logging.info("✅ Physics-only model deployed!")
-        return True
-    except Exception as e:
-        logging.error(f"❌ Failed to deploy physics model: {e}")
