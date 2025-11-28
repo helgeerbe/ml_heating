@@ -30,7 +30,7 @@
 
 #### 🏗️ **Technical Achievements**
 ```
-✅ Container Build: Fixed scikit-learn compilation issues with proper dependencies
+✅ Container Build: Optimized to minimal dependencies with custom NumPy-based metrics
 ✅ GitHub Actions: Optimized fail-fast CI/CD pipeline with staged execution
 ✅ Home Assistant Compliance: All add-on linter validations passing
 ✅ Multi-Architecture: amd64, arm64, armv7 builds with GHCR publishing  
@@ -48,7 +48,7 @@
 
 #### 🎯 **Core ML System**
 - **Physics-Aware Models**: Temperature prediction with building physics
-- **Multi-Algorithm Support**: LightGBM, River, scikit-learn integration
+- **Minimal Dependencies**: LightGBM with custom NumPy-based metrics implementation
 - **Real-time Processing**: InfluxDB integration for live data streams
 - **Model Validation**: Automated performance monitoring and drift detection
 
@@ -152,7 +152,7 @@ Build Status: 🔄 Multi-arch containers building (amd64, arm64, armv7)
 
 #### 🔧 **Build Infrastructure**
 - **Base Images**: Home Assistant compatible Python 3.11 Alpine
-- **Dependencies**: Scientific computing stack (NumPy, SciPy, scikit-learn)
+- **Dependencies**: Lightweight stack (NumPy, pandas, LightGBM, InfluxDB client)
 - **Compilation**: C/C++/Fortran compilers for native libraries
 - **Optimization**: BLAS/LAPACK for mathematical operations
 

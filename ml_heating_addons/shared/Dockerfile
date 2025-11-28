@@ -54,10 +54,8 @@ WORKDIR /app
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt /app/
-COPY dashboard_requirements.txt /app/
 RUN pip3 install --no-cache-dir --upgrade pip \
-    && pip3 install --no-cache-dir -r requirements.txt \
-    && pip3 install --no-cache-dir -r dashboard_requirements.txt
+    && pip3 install --no-cache-dir -r requirements.txt
 
 # Copy the ML heating system source code
 COPY src/ /app/src/

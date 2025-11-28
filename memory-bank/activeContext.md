@@ -1,9 +1,43 @@
 # Active Context - Current Work & Decision State
 
-## Current Work Focus
+## Current Work Focus - November 28, 2025
 
-### Current Phase: Alpha-Based Multi-Add-on Architecture Documentation Update (In Progress)
-**Status**: 🔄 **IN PROGRESS** - Updating documentation to reflect implemented alpha-based dual-channel deployment
+### Current Phase: Project Structure Optimization
+**Status**: ✅ **COMPLETED** - Successfully restructured project for better organization and maintainability
+
+**Project Structure Restructuring (November 28, 2025)**:
+- **Issue**: User feedback indicated `shared/` directory should be under `ml_heating_addons/` for better organization
+- **Implementation**: Moved `shared/` to `ml_heating_addons/shared/` creating logical grouping of all addon-related files
+- **Updates Made**: 
+  - Updated GitHub workflow paths from `shared/*` to `ml_heating_addons/shared/*`
+  - Updated validation script to use new structure paths
+  - All validations pass with new structure
+- **Final Structure**:
+  ```
+  ml_heating_addons/
+  ├── ml_heating/     # Stable addon (config only)
+  ├── ml_heating_dev/ # Dev addon (config only)  
+  └── shared/         # All shared components & dashboard
+  ```
+- **Benefits**: 
+  - Cleaner root directory organization
+  - Logical grouping of addon-related files
+  - Professional project structure following best practices
+  - Maintained all functionality while improving maintainability
+- **Status**: ✅ Structure optimized, all systems operational
+
+### Previous Phase: Memory Bank Cleanup & Documentation Accuracy
+**Status**: ✅ **COMPLETED** - Successfully updated memory bank to reflect current minimal dependency reality
+
+**Memory Bank Cleanup (November 28, 2025)**:
+- **Issue Identified**: Outdated references to river and scikit-learn across memory bank files
+- **Reality Check**: System now uses minimal dependencies with custom NumPy-based metrics
+- **Files Updated**: progress.md ✅, techContext.md ✅, activeContext.md ✅
+- **Impact**: Accurate documentation prevents confusion about current architecture
+- **Status**: ✅ All legacy references removed, documentation now reflects production-ready lightweight system
+
+### Previous Phase: Alpha-Based Multi-Add-on Architecture Documentation Update (Complete)
+**Status**: ✅ **COMPLETED** - Successfully updated all documentation and resolved critical build issues
 
 **What is being accomplished**:
 
@@ -23,7 +57,18 @@
 - **Alpha Channel** (`ml_heating_dev`): Version tags `v*-alpha.*`, auto-updates disabled
 - **Current Implementation**: v0.1.0-alpha.8 successfully building and operational
 
-### Previous Phase: Multi-Add-on Architecture Implementation (Complete)
+### Previous Phase: Build Process Optimization & Smart Workflow Implementation (Complete)
+**Status**: ✅ **COMPLETED** - Successfully implemented unified smart workflow with shared component architecture
+
+**Build System Optimization**:
+- **Eliminated Duplication**: Removed redundant files between `ml_heating_addon/` and `ml_heating_addons/`
+- **Unified Workflow**: Replaced 2 separate workflows with single smart workflow using git tag detection
+- **Shared Components**: Created `shared/` directory (now `ml_heating_addons/shared/`) for DRY principle
+- **Smart Detection**: `v*-alpha.*` → dev addon, `v*` → stable addon
+- **Dynamic Configuration**: Runtime config updates during CI/CD build process
+- **File Copying**: Intelligent shared component distribution during build
+
+### Previous Phase: Multi-Add-on Architecture Implementation (Complete) 
 **Status**: ✅ **COMPLETED** - Successfully implemented t0bst4r-inspired alpha-based dual-channel system
 
 **What was accomplished**:
@@ -38,7 +83,7 @@
 - Fixed Home Assistant linter issues and container build context problems
 - Resolved HA Builder platform argument issues with correct version (2025.09.0)
 - Fixed Docker image tag conflicts by removing tags from add-on config image fields
-- Added missing build files (`config_adapter.py`, `dashboard_requirements.txt`) to workflow copying
+- Added missing build files (`config_adapter.py`, dashboard components) to workflow copying
 - Simplified workflows to use only HA Builder for all container building
 
 **Workflow Architecture**:
@@ -209,11 +254,37 @@ This is a **production-grade, highly sophisticated** heating control system with
 - Feature importance analysis and learning metrics export to InfluxDB
 - **Enhanced error handling** with robust numpy correlation calculations (NEW: Nov 2025)
 
+## Historical Issues - RESOLVED ✅
+
+### Dependency Optimization Journey (Completed November 2025)
+
+**River Dependency Removal** ✅ (November 28, 2025):
+- **Previous Issue**: ARM container builds failing due to river package requiring Rust compiler
+- **Root Cause**: `river` dependency in requirements.txt needed Rust compilation on ARM platforms
+- **Solution**: Replaced `river.metrics.MAE()` and `river.metrics.RMSE()` with custom `utils_metrics.py` classes
+- **Impact**: ARM builds now succeed, maintains exact same shadow mode functionality
+- **Files Modified**: `src/main.py` (updated imports), `requirements.txt` (removed river)
+- **Status**: ✅ Build issue resolved, containers build successfully on all platforms
+
+**Scikit-learn Compilation Issues** ✅ (November 27, 2025):
+- **Previous Issue**: Home Assistant uses Alpine Linux base images where scikit-learn compilation fails
+- **Impact**: GitHub Actions container builds were failing, preventing deployment
+- **Solution**: Implemented `src/utils_metrics.py` with pure NumPy implementations replacing scikit-learn
+- **Results**: Container builds now succeed on Alpine Linux, notebooks work with new metrics module
+- **Performance**: Equivalent functionality to scikit-learn with lighter dependencies
+- **Status**: ✅ All builds successful across architectures (amd64, arm64, armv7)
+
+**Current Reality**:
+- **Minimal Dependencies**: 6 core packages (influxdb-client, pandas, numpy, requests, python-dotenv, lightgbm)
+- **Custom Metrics**: Pure NumPy implementations in `utils_metrics.py`
+- **Container Optimization**: No external ML framework compilation requirements
+- **Memory Bank Cleanup**: Documentation now reflects current lightweight architecture
+
 ### Technical Architecture Excellence
 **Key Patterns Identified**:
 - **Physics-based ML**: Domain knowledge + data-driven learning
 - **Multi-modal operation**: Active control vs passive observation (shadow mode)
-- **Online learning**: River framework for continuous adaptation
+- **Lightweight Implementation**: Custom NumPy-based metrics with incremental learning patterns
 - **Multi-lag learning**: Ring buffers + correlation-based coefficient learning
 - **Seasonal adaptation**: Cos/sin modulation learned from summer HVAC-off data
 

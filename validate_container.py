@@ -16,7 +16,7 @@ from typing import List, Dict, Tuple
 def validate_dashboard_components():
     """Validate all dashboard components exist and are properly structured"""
     try:
-        component_dir = Path('ml_heating_addon/dashboard/components')
+        component_dir = Path('ml_heating_addons/shared/dashboard/components')
         if not component_dir.exists():
             print("❌ Dashboard components directory not found")
             return False
@@ -47,9 +47,13 @@ def validate_dashboard_components():
                 tree = ast.parse(content)
                 function_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
                 
-                missing_functions = [func for func in expected_functions if func not in function_names]
+                missing_functions = [
+                    func for func in expected_functions 
+                    if func not in function_names
+                ]
                 if missing_functions:
-                    invalid_components.append(f"{component_file} missing: {missing_functions}")
+                    invalid_components.append(
+                        f"{component_file} missing: {missing_functions}")
                 
             except Exception as e:
                 invalid_components.append(f"{component_file} parse error: {e}")
@@ -72,7 +76,8 @@ def validate_dashboard_components():
 def validate_advanced_analytics():
     """Validate performance analytics and visualization components"""
     try:
-        performance_file = Path('ml_heating_addon/dashboard/components/performance.py')
+        performance_file = Path(
+            'ml_heating_addons/shared/dashboard/components/performance.py')
         if not performance_file.exists():
             print("❌ Performance analytics component not found")
             return False
@@ -119,7 +124,7 @@ def validate_advanced_analytics():
 def validate_backup_system():
     """Validate backup/restore functionality components"""
     try:
-        backup_file = Path('ml_heating_addon/dashboard/components/backup.py')
+        backup_file = Path('ml_heating_addons/shared/dashboard/components/backup.py')
         if not backup_file.exists():
             print("❌ Backup system component not found")
             return False
@@ -162,25 +167,17 @@ def validate_dependency_compatibility():
     """Check for version conflicts and requirement compatibility"""
     try:
         # Load main requirements
-        main_reqs_file = Path('requirements.txt')
-        dashboard_reqs_file = Path('ml_heating_addon/dashboard_requirements.txt')
+        main_reqs_file = Path('ml_heating_addons/shared/requirements.txt')
         
         if not main_reqs_file.exists():
             print("❌ Main requirements.txt not found")
-            return False
-        
-        if not dashboard_reqs_file.exists():
-            print("❌ Dashboard requirements.txt not found")
             return False
         
         # Parse requirements
         with open(main_reqs_file, 'r') as f:
             main_reqs = f.read().strip().split('\n')
         
-        with open(dashboard_reqs_file, 'r') as f:
-            dashboard_reqs = f.read().strip().split('\n')
-        
-        # Check for required dashboard dependencies
+        # Check for required dashboard dependencies in main requirements
         required_dashboard_deps = [
             'streamlit',
             'plotly', 
@@ -188,24 +185,16 @@ def validate_dependency_compatibility():
             'numpy'
         ]
         
-        dashboard_deps_lower = [dep.lower() for dep in dashboard_reqs]
+        main_deps_lower = [dep.lower() for dep in main_reqs]
         missing_deps = []
         
         for dep in required_dashboard_deps:
-            if not any(dep in dashboard_dep.lower() for dashboard_dep in dashboard_deps_lower):
+            if not any(dep in main_dep.lower() for main_dep in main_deps_lower):
                 missing_deps.append(dep)
         
         if missing_deps:
             print(f"❌ Missing required dashboard dependencies: {missing_deps}")
             return False
-        
-        # Check for potential conflicts (basic check)
-        main_packages = [req.split('==')[0].split('>=')[0].split('<=')[0] for req in main_reqs if req.strip()]
-        dashboard_packages = [req.split('==')[0].split('>=')[0].split('<=')[0] for req in dashboard_reqs if req.strip()]
-        
-        conflicts = set(main_packages) & set(dashboard_packages)
-        if conflicts:
-            print(f"⚠️  Potential dependency conflicts: {conflicts} (verify versions manually)")
         
         print("✅ Dependency compatibility validation passed")
         return True
@@ -218,7 +207,7 @@ def validate_api_structure():
     """Validate development API structure and components"""
     try:
         # Check for main app.py structure
-        app_file = Path('ml_heating_addon/dashboard/app.py')
+        app_file = Path('ml_heating_addons/shared/dashboard/app.py')
         if not app_file.exists():
             print("❌ Main dashboard app.py not found")
             return False
@@ -246,7 +235,7 @@ def validate_api_structure():
             return False
         
         # Check for health check component
-        health_file = Path('ml_heating_addon/dashboard/health.py')
+        health_file = Path('ml_heating_addons/shared/dashboard/health.py')
         if not health_file.exists():
             print("❌ Health check component not found")
             return False
@@ -261,7 +250,7 @@ def validate_api_structure():
 def validate_config_yaml():
     """Validate config.yaml structure"""
     try:
-        with open('ml_heating_addon/config.yaml', 'r') as f:
+        with open('ml_heating_addons/shared/config.yaml', 'r') as f:
             config = yaml.safe_load(f)
         
         required_fields = ['name', 'version', 'slug', 'description', 'arch', 'options', 'schema']
@@ -287,7 +276,7 @@ def validate_config_yaml():
 def validate_build_json():
     """Validate build.json structure"""
     try:
-        with open('ml_heating_addon/build.json', 'r') as f:
+        with open('ml_heating_addons/shared/build.json', 'r') as f:
             build = json.load(f)
         
         required_fields = ['build_from', 'args', 'labels']
@@ -313,7 +302,7 @@ def validate_build_json():
 def validate_dockerfile():
     """Validate Dockerfile structure"""
     try:
-        dockerfile_path = Path('ml_heating_addon/Dockerfile')
+        dockerfile_path = Path('ml_heating_addons/shared/Dockerfile')
         if not dockerfile_path.exists():
             print("❌ Dockerfile not found")
             return False
@@ -324,11 +313,10 @@ def validate_dockerfile():
         required_instructions = [
             'FROM $BUILD_FROM',
             'COPY requirements.txt',
-            'COPY ml_heating_addon/dashboard_requirements.txt',
             'pip3 install',
             'COPY src/',
-            'COPY ml_heating_addon/run.sh',
-            'COPY ml_heating_addon/config_adapter.py',
+            'COPY run.sh',
+            'COPY config_adapter.py',
             'HEALTHCHECK',
             'EXPOSE 3001 3002',
             'CMD ["/app/run.sh"]'
@@ -354,12 +342,11 @@ def validate_dependencies():
     """Validate dependency files exist"""
     required_files = [
         'requirements.txt',
-        'ml_heating_addon/dashboard_requirements.txt',
-        'ml_heating_addon/config_adapter.py',
-        'ml_heating_addon/run.sh',
-        'ml_heating_addon/supervisord.conf',
-        'ml_heating_addon/dashboard/app.py',
-        'ml_heating_addon/dashboard/health.py'
+        'ml_heating_addons/shared/config_adapter.py',
+        'ml_heating_addons/shared/run.sh',
+        'ml_heating_addons/shared/supervisord.conf',
+        'ml_heating_addons/shared/dashboard/app.py',
+        'ml_heating_addons/shared/dashboard/health.py'
     ]
     
     missing_files = []

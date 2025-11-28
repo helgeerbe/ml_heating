@@ -32,7 +32,7 @@ The `validate_container.py` script performs 10 comprehensive validation checks:
 
 #### **Dependency Management Validation**
 - Ensures all required files exist
-- Validates requirements.txt and dashboard_requirements.txt
+- Validates requirements.txt for all dependencies
 - Confirms supervisord, config adapter, and run script presence
 
 #### **Dashboard Components Validation** ✨
@@ -248,7 +248,7 @@ The enhanced validation framework covers all implemented phases:
 ```
 ⚠️ Potential dependency conflicts: {'pandas', 'numpy'} (verify versions manually)
 ```
-**Solution:** Check version compatibility between `requirements.txt` and `dashboard_requirements.txt`
+**Solution:** All dashboard dependencies are consolidated in main `requirements.txt`
 
 #### **Container Build Failure**
 ```

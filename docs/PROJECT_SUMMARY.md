@@ -45,19 +45,29 @@ This document summarizes the successful completion of the ML Heating Control Hom
 
 ### Container Structure
 ```
-ml_heating_addon/
-├── config.yaml              # Home Assistant add-on configuration
-├── build.json              # Multi-arch container build config
-├── Dockerfile              # Container definition
-├── config_adapter.py       # HA config → ML system adapter
-├── run.sh                   # Container startup script
-├── supervisord.conf         # Process management
-├── dashboard/               # Professional web interface
-│   ├── app.py              # Main dashboard application
-│   ├── health.py           # Health monitoring
-│   └── components/         # Dashboard page components
-├── dashboard_requirements.txt # Dashboard dependencies
-└── README.md               # Add-on documentation
+ml_heating_addons/
+├── ml_heating/              # Stable add-on (config only)
+│   └── config.yaml         # Production configuration
+├── ml_heating_dev/          # Development add-on (config only)  
+│   └── config.yaml         # Alpha configuration
+└── shared/                  # Shared add-on components
+    ├── build.json          # Multi-arch container build config
+    ├── config_adapter.py   # HA config → ML system adapter
+    ├── config.yaml         # Base configuration template
+    ├── Dockerfile          # Container definition
+    ├── README.md           # Add-on documentation
+    ├── requirements.txt    # Python dependencies (addon)
+    ├── run.sh             # Container startup script
+    ├── supervisord.conf    # Process management
+    └── dashboard/          # Professional web interface
+        ├── app.py          # Main dashboard application
+        ├── health.py       # Health monitoring
+        └── components/     # Dashboard page components
+            ├── __init__.py
+            ├── backup.py   # Backup/restore system
+            ├── control.py  # ML control interface
+            ├── overview.py # System overview
+            └── performance.py # Analytics & metrics
 ```
 
 ### System Integration Flow

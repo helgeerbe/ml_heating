@@ -1,0 +1,211 @@
+name: Smart ML Heating Build
+
+on:
+  push:
+    tags: ['v*']  # Trigger on ANY version tag
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Stage 1: Detect addon type from git tag
+  detect-addon-type:
+    runs-on: ubuntu-latest
+    name: Detect Addon Type
+    outputs:
+      addon-type: ${{ steps.detect.outputs.addon-type }}
+      addon-path: ${{ steps.detect.outputs.addon-path }}
+      version: ${{ steps.detect.outputs.version }}
+      is-alpha: ${{ steps.detect.outputs.is-alpha }}
+      addon-name: ${{ steps.detect.outputs.addon-name }}
+      auto-update: ${{ steps.detect.outputs.auto-update }}
+    
+    steps:
+      - name: Detect addon type from git tag
+        id: detect
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG_NAME#v}
+          
+          if [[ "$VERSION" =~ -alpha\. ]]; then
+            echo "addon-type=development" >> $GITHUB_OUTPUT
+            echo "addon-path=ml_heating_addons/ml_heating_dev" >> $GITHUB_OUTPUT
+            echo "is-alpha=true" >> $GITHUB_OUTPUT
+            echo "addon-name=ML Heating Control (Alpha $VERSION)" >> $GITHUB_OUTPUT
+            echo "auto-update=false" >> $GITHUB_OUTPUT
+            echo "🧪 Development release detected: $VERSION"
+          else
+            echo "addon-type=stable" >> $GITHUB_OUTPUT  
+            echo "addon-path=ml_heating_addons/ml_heating" >> $GITHUB_OUTPUT
+            echo "is-alpha=false" >> $GITHUB_OUTPUT
+            echo "addon-name=ML Heating Control" >> $GITHUB_OUTPUT
+            echo "auto-update=true" >> $GITHUB_OUTPUT
+            echo "🎯 Stable release detected: $VERSION"
+          fi
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+  # Stage 2: Validate Add-on Configuration
+  validate:
+    runs-on: ubuntu-latest
+    name: Validate Add-on Configuration
+    needs: [detect-addon-type]
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Validate Add-on Configuration
+        uses: frenck/action-addon-linter@v2.15
+        with:
+          community: true
+          path: "${{ needs.detect-addon-type.outputs.addon-path }}"
+
+  # Stage 3: Build Add-on
+  build-addon:
+    runs-on: ubuntu-latest
+    name: Build ${{ needs.detect-addon-type.outputs.addon-type }} Add-on
+    needs: [detect-addon-type, validate]
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PAT }}
+          
+      - name: Prepare smart add-on build context
+        run: |
+          ADDON_PATH="${{ needs.detect-addon-type.outputs.addon-path }}"
+          VERSION="${{ needs.detect-addon-type.outputs.version }}"
+          ADDON_NAME="${{ needs.detect-addon-type.outputs.addon-name }}"
+          AUTO_UPDATE="${{ needs.detect-addon-type.outputs.auto-update }}"
+          
+          echo "📦 Preparing ${{ needs.detect-addon-type.outputs.addon-type }} addon build"
+          echo "   Path: $ADDON_PATH"
+          echo "   Version: $VERSION"
+          echo "   Name: $ADDON_NAME"
+          echo "   Auto-update: $AUTO_UPDATE"
+          
+          # Copy all shared components to addon directory
+          echo "📁 Copying shared components..."
+          cp -R ml_heating_addons/shared/* "$ADDON_PATH/"
+          
+          # Copy source files and dependencies
+          echo "📄 Copying source files..."
+          cp -R src "$ADDON_PATH/"
+          cp -R notebooks "$ADDON_PATH/" || true
+          cp requirements.txt "$ADDON_PATH/" || true
+          
+          # Install yq for YAML processing
+          if [[ "${{ needs.detect-addon-type.outputs.is-alpha }}" == "true" ]]; then
+            sudo snap install yq
+            
+            # Update config.yaml dynamically for alpha releases
+            yq eval ".version = \"$VERSION\"" -i "$ADDON_PATH/config.yaml"
+            yq eval ".name = \"$ADDON_NAME\"" -i "$ADDON_PATH/config.yaml"
+            
+            echo "🔧 Updated alpha config:"
+            grep -E "^(name|version):" "$ADDON_PATH/config.yaml"
+          else
+            # Update config.yaml for stable releases  
+            sed -i "s/^version: .*/version: \"$VERSION\"/" "$ADDON_PATH/config.yaml"
+            
+            echo "🔧 Updated stable config:"
+            grep -E "^(version|auto_update):" "$ADDON_PATH/config.yaml"
+          fi
+          
+          echo "✅ Build context prepared successfully"
+
+      - name: Build Add-on Container
+        uses: home-assistant/builder@2025.09.0
+        with:
+          args: |
+            --amd64 \
+            --aarch64 \
+            --armhf \
+            --target ${{ needs.detect-addon-type.outputs.addon-path }} \
+            --docker-hub ghcr.io/${{ github.repository_owner }}
+
+  # Stage 4: Create Release
+  release:
+    runs-on: ubuntu-latest
+    name: Create ${{ needs.detect-addon-type.outputs.addon-type }} Release
+    needs: [detect-addon-type, validate, build-addon]
+    permissions:
+      contents: write
+      packages: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Create Smart Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref }}
+          name: ML Heating v${{ needs.detect-addon-type.outputs.version }} ${{ needs.detect-addon-type.outputs.is-alpha == 'true' && '(Development)' || '' }}
+          body: |
+            ## ${{ needs.detect-addon-type.outputs.is-alpha == 'true' && '🚧 ML Heating Control - Development Release' || '🎯 ML Heating Control - Stable Release' }}
+            
+            **Version:** `${{ needs.detect-addon-type.outputs.version }}`  
+            **Add-on Name:** "${{ needs.detect-addon-type.outputs.addon-name }}"  
+            **Container:** `ghcr.io/${{ github.repository }}:${{ needs.detect-addon-type.outputs.is-alpha == 'true' && 'dev' || 'latest' }}`  
+            **Auto-Updates:** ${{ needs.detect-addon-type.outputs.auto-update == 'true' && '✅ Enabled' || '❌ Disabled (manual updates for safety)' }}  
+            
+            ### Installation
+            1. Add this repository to Home Assistant:
+               ```
+               https://github.com/${{ github.repository }}
+               ```
+            2. Install **"${{ needs.detect-addon-type.outputs.addon-name }}"**
+            3. Configure with your Home Assistant entities
+            
+            ### ${{ needs.detect-addon-type.outputs.is-alpha == 'true' && 'Development' || 'Production' }} Features
+            ${{ needs.detect-addon-type.outputs.is-alpha == 'true' && '- 🔍 Debug logging enabled (`log_level: DEBUG`)
+            - 🛠️ Development API enabled for Jupyter notebooks
+            - ⚡ Latest features and improvements
+            - 🧪 Experimental functionality for testing' || '- 🎯 Production-ready configuration
+            - 📊 Optimized logging (`log_level: INFO`)
+            - 🔄 Automatic updates enabled
+            - 🛡️ Thoroughly tested and validated
+            - 📈 Advanced physics-based ML optimization' }}
+            
+            ### Container Images
+            - `ghcr.io/${{ github.repository }}:${{ needs.detect-addon-type.outputs.is-alpha == 'true' && 'dev' || 'latest' }}` (${{ needs.detect-addon-type.outputs.is-alpha == 'true' && 'rolling development' || 'latest stable' }})
+            - `ghcr.io/${{ github.repository }}:${{ needs.detect-addon-type.outputs.version }}` (specific version)
+            
+            ${{ needs.detect-addon-type.outputs.is-alpha == 'true' && '### ⚠️ Development Notice
+            This is a development release intended for testing. It may contain:
+            - Experimental features
+            - Potential bugs or instability  
+            - Breaking changes between versions
+            
+            For production use, please install the stable version: **"ML Heating Control"**' || '### Key Features
+            - **Physics-based ML optimization** - Intelligent heating control using real-world physics models
+            - **Real-time dashboard** - Advanced analytics and performance monitoring
+            - **Multi-model comparison** - Compare different heating strategies
+            - **Automated backup system** - Protect your ML models and configurations
+            - **Seasonal learning** - Automatically adapts to seasonal patterns
+            - **External heat source detection** - Accounts for PV, fireplace, and other heat sources
+            
+            ### Multi-Add-on Support
+            This project now supports both stable and development channels:
+            - **Stable Channel** (this release): Production-ready with auto-updates
+            - **Development Channel**: Latest features for testing (install separately)
+            
+            ### Upgrade Path
+            If upgrading from a previous version, your existing configuration and ML models will be automatically preserved.' }}
+          draft: false
+          prerelease: ${{ needs.detect-addon-type.outputs.is-alpha == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

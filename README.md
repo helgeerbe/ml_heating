@@ -122,7 +122,31 @@ ml_heating/
 │   ├── ha_client.py         # Home Assistant integration
 │   ├── influx_service.py    # InfluxDB queries
 │   ├── state_manager.py     # State persistence
+│   ├── utils_metrics.py     # Custom NumPy-based metrics
 │   └── config.py            # Configuration
+├── ml_heating_addons/       # Home Assistant Add-on files
+│   ├── ml_heating/          # Stable add-on (config only)
+│   │   └── config.yaml      # Production configuration
+│   ├── ml_heating_dev/      # Development add-on (config only)
+│   │   └── config.yaml      # Alpha configuration
+│   └── shared/              # Shared add-on components
+│       ├── build.json       # Build metadata
+│       ├── config_adapter.py # Configuration bridge
+│       ├── config.yaml      # Base configuration template
+│       ├── Dockerfile       # Container build instructions
+│       ├── README.md        # Add-on documentation
+│       ├── requirements.txt # Python dependencies (addon)
+│       ├── run.sh          # Container startup script
+│       ├── supervisord.conf # Process management
+│       └── dashboard/       # Advanced web interface
+│           ├── app.py       # Main Streamlit dashboard
+│           ├── health.py    # Health check endpoint
+│           └── components/  # Modular dashboard components
+│               ├── __init__.py
+│               ├── backup.py    # Backup/restore system
+│               ├── control.py   # ML control interface
+│               ├── overview.py  # System overview
+│               └── performance.py # Analytics & metrics
 ├── notebooks/               # Analysis notebooks
 │   ├── 00_learning_dashboard.ipynb
 │   ├── 01_physics_model_diagnosis.ipynb

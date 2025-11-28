@@ -389,33 +389,27 @@ except Exception as e:
 - Log level: DEBUG (detailed diagnostics)
 - Development API: ✅ Enabled for Jupyter notebooks
 
-### Workflow Architecture (t0bst4r-inspired)
+### Smart Unified Workflow Architecture
 
-**Development Workflow** (`.github/workflows/build-dev.yml`):
+**Single Smart Workflow** (`.github/workflows/build-ml-heating.yml`):
 ```yaml
 on:
   push:
-    tags: ['v*-alpha.*']  # Only alpha tags
+    tags: ['v*']  # Trigger on ANY version tag
+  workflow_dispatch:
 
 jobs:
-  validate:    # HA linter validation
-  build-addon: # Dynamic version update + multi-platform build
-  release:     # Alpha release with development warnings
+  detect-addon-type:    # Smart tag detection (alpha vs stable)
+  validate:            # HA linter validation for detected addon
+  build-addon:         # Copy shared components + build
+  release:             # Release with smart detection
 ```
 
-**Stable Workflow** (`.github/workflows/build-stable.yml`):
-```yaml
-on:
-  push:
-    tags: ['v*']         # All tags
-    branches-ignore: ['**']
-
-jobs:
-  check-release-type:  # Skip if alpha/dev tags
-  validate:           # HA linter validation (if stable)
-  build-addon:        # Version update + multi-platform build
-  release:            # Production release
-```
+**Smart Tag Detection**:
+- `v*-alpha.*` patterns → Development addon
+- `v*` patterns (excluding alpha) → Stable addon
+- Dynamic configuration updates during build
+- Shared component copying from `ml_heating_addons/shared/`
 
 ### Dynamic Version Management
 
@@ -447,11 +441,27 @@ Home Assistant Builder handles all platform compilation automatically.
 ```
 ml_heating_addons/
 ├── ml_heating/          # Stable channel
-│   ├── config.yaml      # Production config
-│   └── build.json       # Build metadata
-└── ml_heating_dev/      # Alpha channel
-    ├── config.yaml      # Development config
-    └── build.json       # Build metadata
+│   └── config.yaml      # Production config only
+├── ml_heating_dev/      # Alpha channel
+│   └── config.yaml      # Development config only
+└── shared/              # All shared components
+    ├── build.json       # Shared build metadata
+    ├── config_adapter.py
+    ├── config.yaml      # Base configuration template
+    ├── Dockerfile       # Container build instructions
+    ├── README.md
+    ├── requirements.txt # Python dependencies
+    ├── run.sh          # Container startup script
+    ├── supervisord.conf
+    └── dashboard/       # Advanced web interface
+        ├── app.py       # Main Streamlit app
+        ├── health.py    # Health check endpoint
+        └── components/  # Modular dashboard components
+            ├── __init__.py
+            ├── backup.py    # Backup/restore system
+            ├── control.py   # ML control interface
+            ├── overview.py  # System overview
+            └── performance.py # Analytics & metrics
 ```
 
 **Key Configuration Differences**:

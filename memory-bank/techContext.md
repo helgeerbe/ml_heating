@@ -9,13 +9,13 @@
 - **Version**: 3.8+ required for type hints and asyncio improvements
 - **Virtual Environment**: `.venv` for isolated dependency management
 
-**River Framework**
-- **Online Machine Learning**: Incremental learning algorithms
-- **Streaming ML**: Designed for continuous data streams
+**Custom Metrics Framework**
+- **Lightweight Implementation**: Custom NumPy-based metrics in `utils_metrics.py`
+- **Minimal Dependencies**: No external ML framework dependencies
 - **Key Components**: 
-  - `river.metrics.MAE/RMSE` for performance tracking
-  - Online regression models for continuous adaptation
-- **Why River**: Perfect fit for learning from every heating cycle without batch retraining
+  - Custom `MAE` and `RMSE` classes for performance tracking
+  - Physics-based models with incremental learning patterns
+- **Why Custom**: Eliminates compilation issues and reduces container build complexity
 
 **Home Assistant REST API**
 - **Integration Pattern**: RESTful API communication via HTTP/HTTPS
@@ -67,7 +67,7 @@ numpy>=1.21.0           # Numerical computing for physics calculations
 pandas>=1.3.0           # Data manipulation and feature engineering
 requests>=2.26.0        # HTTP client for Home Assistant API
 influxdb-client>=1.24.0 # InfluxDB 2.x integration
-river>=0.15.0           # Online machine learning
+lightgbm                # Machine learning models
 python-dotenv>=0.19.0   # Environment configuration
 matplotlib>=3.5.0       # Visualization in notebooks
 jupyter>=1.0.0          # Notebook environment
@@ -88,20 +88,22 @@ jupyter>=1.0.0          # Notebook environment
 
 ## Architecture Decisions
 
-### Why Online Learning (River) vs Traditional ML
+### Why Custom Lightweight Implementation vs Traditional ML
 
 **Traditional Approach Issues**:
 - **Batch Training**: Requires periodic model retraining
 - **Data Management**: Complex pipeline for collecting training data
 - **Concept Drift**: Poor adaptation to seasonal/house changes
 - **Deployment Complexity**: Separate training and inference infrastructure
+- **Build Complexity**: External ML frameworks require compilation on multiple architectures
 
-**River Online Learning Benefits**:
-- **Continuous Learning**: Adapts every 30-minute cycle
-- **No Retraining**: Model evolves automatically
-- **Concept Drift Handling**: Built-in adaptation to changing conditions
+**Custom Lightweight Benefits**:
+- **Continuous Learning**: Adapts every 30-minute cycle with physics-based models
+- **No External Dependencies**: Pure NumPy implementation eliminates build issues
+- **Container Optimization**: Builds successfully on ARM/x64 without Rust compilers
 - **Simple Deployment**: Single process handles learning and inference
 - **Memory Efficiency**: Incremental updates, no large datasets
+- **Maintainable**: Custom metrics implementation is transparent and modifiable
 
 ### Physics-Based Model Design
 
