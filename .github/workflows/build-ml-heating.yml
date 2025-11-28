@@ -31,14 +31,14 @@ jobs:
           
           if [[ "$VERSION" =~ -alpha\. ]]; then
             echo "addon-type=development" >> $GITHUB_OUTPUT
-            echo "addon-path=ml_heating_addons/ml_heating_dev" >> $GITHUB_OUTPUT
+            echo "addon-path=ml_heating_dev" >> $GITHUB_OUTPUT
             echo "is-alpha=true" >> $GITHUB_OUTPUT
             echo "addon-name=ML Heating Control (Alpha $VERSION)" >> $GITHUB_OUTPUT
             echo "auto-update=false" >> $GITHUB_OUTPUT
             echo "🧪 Development release detected: $VERSION"
           else
             echo "addon-type=stable" >> $GITHUB_OUTPUT  
-            echo "addon-path=ml_heating_addons/ml_heating" >> $GITHUB_OUTPUT
+            echo "addon-path=ml_heating" >> $GITHUB_OUTPUT
             echo "is-alpha=false" >> $GITHUB_OUTPUT
             echo "addon-name=ML Heating Control" >> $GITHUB_OUTPUT
             echo "auto-update=true" >> $GITHUB_OUTPUT
@@ -98,7 +98,7 @@ jobs:
           
           # Copy all shared components to addon directory
           echo "📁 Copying shared components..."
-          cp -R ml_heating_addons/shared/* "$ADDON_PATH/"
+          cp -R shared/* "$ADDON_PATH/"
           
           # Copy source files and dependencies
           echo "📄 Copying source files..."

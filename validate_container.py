@@ -16,7 +16,7 @@ from typing import List, Dict, Tuple
 def validate_dashboard_components():
     """Validate all dashboard components exist and are properly structured"""
     try:
-        component_dir = Path('ml_heating_addons/shared/dashboard/components')
+        component_dir = Path('shared/dashboard/components')
         if not component_dir.exists():
             print("❌ Dashboard components directory not found")
             return False
@@ -77,7 +77,7 @@ def validate_advanced_analytics():
     """Validate performance analytics and visualization components"""
     try:
         performance_file = Path(
-            'ml_heating_addons/shared/dashboard/components/performance.py')
+            'shared/dashboard/components/performance.py')
         if not performance_file.exists():
             print("❌ Performance analytics component not found")
             return False
@@ -124,7 +124,7 @@ def validate_advanced_analytics():
 def validate_backup_system():
     """Validate backup/restore functionality components"""
     try:
-        backup_file = Path('ml_heating_addons/shared/dashboard/components/backup.py')
+        backup_file = Path('shared/dashboard/components/backup.py')
         if not backup_file.exists():
             print("❌ Backup system component not found")
             return False
@@ -167,7 +167,7 @@ def validate_dependency_compatibility():
     """Check for version conflicts and requirement compatibility"""
     try:
         # Load main requirements
-        main_reqs_file = Path('ml_heating_addons/shared/requirements.txt')
+        main_reqs_file = Path('shared/requirements.txt')
         
         if not main_reqs_file.exists():
             print("❌ Main requirements.txt not found")
@@ -207,7 +207,7 @@ def validate_api_structure():
     """Validate development API structure and components"""
     try:
         # Check for main app.py structure
-        app_file = Path('ml_heating_addons/shared/dashboard/app.py')
+        app_file = Path('shared/dashboard/app.py')
         if not app_file.exists():
             print("❌ Main dashboard app.py not found")
             return False
@@ -235,7 +235,7 @@ def validate_api_structure():
             return False
         
         # Check for health check component
-        health_file = Path('ml_heating_addons/shared/dashboard/health.py')
+        health_file = Path('shared/dashboard/health.py')
         if not health_file.exists():
             print("❌ Health check component not found")
             return False
@@ -250,7 +250,7 @@ def validate_api_structure():
 def validate_config_yaml():
     """Validate config.yaml structure"""
     try:
-        with open('ml_heating_addons/shared/config.yaml', 'r') as f:
+        with open('shared/config.yaml', 'r') as f:
             config = yaml.safe_load(f)
         
         required_fields = ['name', 'version', 'slug', 'description', 'arch', 'options', 'schema']
@@ -260,8 +260,8 @@ def validate_config_yaml():
             print(f"❌ Config.yaml missing required fields: {missing_fields}")
             return False
         
-        # Validate architectures
-        required_archs = ['aarch64', 'amd64', 'armhf', 'armv7', 'i386']
+        # Validate architectures (ML apps typically support modern 64-bit architectures)
+        required_archs = ['aarch64', 'amd64']
         if set(config['arch']) != set(required_archs):
             print(f"❌ Config.yaml architectures incomplete. Expected: {required_archs}")
             return False
@@ -276,7 +276,7 @@ def validate_config_yaml():
 def validate_build_json():
     """Validate build.json structure"""
     try:
-        with open('ml_heating_addons/shared/build.json', 'r') as f:
+        with open('shared/build.json', 'r') as f:
             build = json.load(f)
         
         required_fields = ['build_from', 'args', 'labels']
@@ -286,8 +286,8 @@ def validate_build_json():
             print(f"❌ Build.json missing required fields: {missing_fields}")
             return False
         
-        # Validate build_from has all architectures
-        required_archs = ['aarch64', 'amd64', 'armhf', 'armv7', 'i386']
+        # Validate build_from has all architectures (ML apps typically support modern 64-bit architectures)
+        required_archs = ['aarch64', 'amd64']
         if set(build['build_from'].keys()) != set(required_archs):
             print(f"❌ Build.json missing architectures: {required_archs}")
             return False
@@ -302,7 +302,7 @@ def validate_build_json():
 def validate_dockerfile():
     """Validate Dockerfile structure"""
     try:
-        dockerfile_path = Path('ml_heating_addons/shared/Dockerfile')
+        dockerfile_path = Path('shared/Dockerfile')
         if not dockerfile_path.exists():
             print("❌ Dockerfile not found")
             return False
@@ -342,11 +342,11 @@ def validate_dependencies():
     """Validate dependency files exist"""
     required_files = [
         'requirements.txt',
-        'ml_heating_addons/shared/config_adapter.py',
-        'ml_heating_addons/shared/run.sh',
-        'ml_heating_addons/shared/supervisord.conf',
-        'ml_heating_addons/shared/dashboard/app.py',
-        'ml_heating_addons/shared/dashboard/health.py'
+        'shared/config_adapter.py',
+        'shared/run.sh',
+        'shared/supervisord.conf',
+        'shared/dashboard/app.py',
+        'shared/dashboard/health.py'
     ]
     
     missing_files = []

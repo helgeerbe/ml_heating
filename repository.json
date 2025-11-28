@@ -1,5 +1,9 @@
 {
   "name": "ML Heating Control Repository",
   "url": "https://github.com/helgeerbe/ml_heating",
-  "maintainer": "ML Heating Contributors"
+  "maintainer": "ML Heating Contributors",
+  "addons": {
+    "ml_heating": "ml_heating",
+    "ml_heating_dev": "ml_heating_dev"
+  }
 }
