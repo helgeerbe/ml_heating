@@ -66,8 +66,7 @@ jobs:
         with:
           args: |
             --amd64 \
-            --target . \
-            --file shared/Dockerfile \
+            --target shared \
             --docker-hub ${{ env.REGISTRY }}/${{ github.repository_owner }} \
             --image ${{ env.IMAGE_NAME }} \
             --version ${{ needs.detect-release.outputs.version }}
@@ -77,8 +76,7 @@ jobs:
         with:
           args: |
             --aarch64 \
-            --target . \
-            --file shared/Dockerfile \
+            --target shared \
             --docker-hub ${{ env.REGISTRY }}/${{ github.repository_owner }} \
             --image ${{ env.IMAGE_NAME }} \
             --version ${{ needs.detect-release.outputs.version }}
@@ -88,8 +86,7 @@ jobs:
         with:
           args: |
             --armv7 \
-            --target . \
-            --file shared/Dockerfile \
+            --target shared \
             --docker-hub ${{ env.REGISTRY }}/${{ github.repository_owner }} \
             --image ${{ env.IMAGE_NAME }} \
             --version ${{ needs.detect-release.outputs.version }}

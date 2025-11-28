@@ -53,18 +53,18 @@ RUN apk add --no-cache \
 WORKDIR /app
 
 # Copy requirements and install Python dependencies
-COPY shared/requirements.txt /app/
+COPY requirements.txt /app/
 RUN pip3 install --no-cache-dir --upgrade pip \
     && pip3 install --no-cache-dir -r requirements.txt
 
 # Copy the ML heating system source code (from repository root)
-COPY src/ /app/src/
-COPY notebooks/ /app/notebooks/
+COPY ../src/ /app/src/
+COPY ../notebooks/ /app/notebooks/
 
 # Copy add-on specific files
-COPY shared/run.sh /app/
-COPY shared/config_adapter.py /app/
-COPY shared/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY run.sh /app/
+COPY config_adapter.py /app/
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # Create necessary directories
 RUN mkdir -p /data/models \
@@ -74,7 +74,7 @@ RUN mkdir -p /data/models \
 
 # Copy dashboard files
 RUN mkdir -p /app/dashboard
-COPY shared/dashboard/ /app/dashboard/
+COPY dashboard/ /app/dashboard/
 
 # Make run script executable
 RUN chmod a+x /app/run.sh
