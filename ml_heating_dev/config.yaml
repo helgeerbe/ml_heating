@@ -1,5 +1,5 @@
 name: "ML Heating Control (Development)"
-version: "0.1.0-alpha.24"
+version: "0.1.0-alpha.25"
 image: "ghcr.io/helgeerbe/ml_heating:alpha"
 slug: "ml_heating_dev"
 description: "Physics-based machine learning heating control system with online learning (Development Channel)"
