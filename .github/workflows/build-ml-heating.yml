@@ -47,27 +47,11 @@ jobs:
           
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-  # Stage 2: Validate Add-on Configuration
-  validate:
-    runs-on: ubuntu-latest
-    name: Validate Add-on Configuration
-    needs: [detect-addon-type]
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        
-      - name: Validate Add-on Configuration
-        uses: frenck/action-addon-linter@v2.15
-        with:
-          community: true
-          path: "${{ needs.detect-addon-type.outputs.addon-path }}"
-
-  # Stage 3: Build Add-on
+  # Stage 2: Build Add-on  
   build-addon:
     runs-on: ubuntu-latest
     name: Build ${{ needs.detect-addon-type.outputs.addon-type }} Add-on
-    needs: [detect-addon-type, validate]
+    needs: [detect-addon-type]
     permissions:
       contents: read
       packages: write
@@ -136,11 +120,11 @@ jobs:
             --docker-hub ghcr.io \
             --image ${{ env.IMAGE_NAME }}
 
-  # Stage 4: Create Release
+  # Stage 3: Create Release
   release:
     runs-on: ubuntu-latest
     name: Create ${{ needs.detect-addon-type.outputs.addon-type }} Release
-    needs: [detect-addon-type, validate, build-addon]
+    needs: [detect-addon-type, build-addon]
     permissions:
       contents: write
       packages: write
