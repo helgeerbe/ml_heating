@@ -125,11 +125,11 @@ def main(args):
     model, mae, rmse = load_model()
     
     # Shadow mode metrics to compare ML vs heat curve performance
-    from river import metrics as river_metrics
-    shadow_ml_mae = river_metrics.MAE()
-    shadow_ml_rmse = river_metrics.RMSE()
-    shadow_hc_mae = river_metrics.MAE()
-    shadow_hc_rmse = river_metrics.RMSE()
+    from .utils_metrics import MAE, RMSE
+    shadow_ml_mae = MAE()
+    shadow_ml_rmse = RMSE()
+    shadow_hc_mae = MAE()
+    shadow_hc_rmse = RMSE()
     
     influx_service = create_influx_service()
 
