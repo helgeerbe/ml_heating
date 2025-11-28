@@ -362,23 +362,31 @@ def validate_dependencies():
     return True
 
 def validate_repository_structure():
-    """Validate repository structure"""
+    """Validate repository structure (supports both yaml and json)"""
     try:
-        with open('repository.json', 'r') as f:
-            repo = json.load(f)
+        # Try repository.yaml first (our format)
+        try:
+            with open('repository.yaml', 'r') as f:
+                repo = yaml.safe_load(f)
+            file_type = "repository.yaml"
+        except FileNotFoundError:
+            # Fallback to repository.json
+            with open('repository.json', 'r') as f:
+                repo = json.load(f)
+            file_type = "repository.json"
         
         required_fields = ['name', 'url', 'maintainer']
         missing_fields = [field for field in required_fields if field not in repo]
         
         if missing_fields:
-            print(f"❌ repository.json missing fields: {missing_fields}")
+            print(f"❌ {file_type} missing fields: {missing_fields}")
             return False
         
-        print("✅ repository.json validation passed")
+        print(f"✅ {file_type} validation passed")
         return True
         
     except Exception as e:
-        print(f"❌ repository.json validation failed: {e}")
+        print(f"❌ repository file validation failed: {e}")
         return False
 
 def main():

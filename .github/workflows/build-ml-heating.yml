@@ -1,4 +1,4 @@
-name: Smart ML Heating Build
+name: Build ML Heating Multiarch
 
 on:
   push:
@@ -7,51 +7,42 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ml_heating
 
 jobs:
-  # Stage 1: Detect addon type from git tag
-  detect-addon-type:
+  # Stage 1: Detect release channel from git tag
+  detect-release:
     runs-on: ubuntu-latest
-    name: Detect Addon Type
+    name: Detect Release Channel
     outputs:
-      addon-type: ${{ steps.detect.outputs.addon-type }}
-      addon-path: ${{ steps.detect.outputs.addon-path }}
+      channel: ${{ steps.detect.outputs.channel }}
       version: ${{ steps.detect.outputs.version }}
       is-alpha: ${{ steps.detect.outputs.is-alpha }}
-      addon-name: ${{ steps.detect.outputs.addon-name }}
-      auto-update: ${{ steps.detect.outputs.auto-update }}
     
     steps:
-      - name: Detect addon type from git tag
+      - name: Detect channel from git tag
         id: detect
         run: |
           TAG_NAME=${GITHUB_REF#refs/tags/}
           VERSION=${TAG_NAME#v}
           
           if [[ "$VERSION" =~ -alpha\. ]]; then
-            echo "addon-type=development" >> $GITHUB_OUTPUT
-            echo "addon-path=ml_heating_dev" >> $GITHUB_OUTPUT
+            echo "channel=alpha" >> $GITHUB_OUTPUT
             echo "is-alpha=true" >> $GITHUB_OUTPUT
-            echo "addon-name=ML Heating Control (Alpha $VERSION)" >> $GITHUB_OUTPUT
-            echo "auto-update=false" >> $GITHUB_OUTPUT
-            echo "🧪 Development release detected: $VERSION"
+            echo "🧪 Alpha release detected: $VERSION"
           else
-            echo "addon-type=stable" >> $GITHUB_OUTPUT  
-            echo "addon-path=ml_heating" >> $GITHUB_OUTPUT
+            echo "channel=latest" >> $GITHUB_OUTPUT
             echo "is-alpha=false" >> $GITHUB_OUTPUT
-            echo "addon-name=ML Heating Control" >> $GITHUB_OUTPUT
-            echo "auto-update=true" >> $GITHUB_OUTPUT
-            echo "🎯 Stable release detected: $VERSION"
+            echo "🎯 Latest release detected: $VERSION"
           fi
           
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-  # Stage 2: Build Add-on  
-  build-addon:
+  # Stage 2: Build Multiarch Container
+  build-multiarch:
     runs-on: ubuntu-latest
-    name: Build ${{ needs.detect-addon-type.outputs.addon-type }} Add-on
-    needs: [detect-addon-type]
+    name: Build Multiarch Container
+    needs: [detect-release]
     permissions:
       contents: read
       packages: write
@@ -60,137 +51,182 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_PAT }}
+          password: ${{ secrets.GITHUB_TOKEN }}
           
-      - name: Prepare smart add-on build context
-        run: |
-          ADDON_PATH="${{ needs.detect-addon-type.outputs.addon-path }}"
-          VERSION="${{ needs.detect-addon-type.outputs.version }}"
-          ADDON_NAME="${{ needs.detect-addon-type.outputs.addon-name }}"
-          AUTO_UPDATE="${{ needs.detect-addon-type.outputs.auto-update }}"
-          
-          echo "📦 Preparing ${{ needs.detect-addon-type.outputs.addon-type }} addon build"
-          echo "   Path: $ADDON_PATH"
-          echo "   Version: $VERSION"
-          echo "   Name: $ADDON_NAME"
-          echo "   Auto-update: $AUTO_UPDATE"
-          
-          # Copy all shared components to addon directory
-          echo "📁 Copying shared components..."
-          cp -R shared/* "$ADDON_PATH/"
-          
-          # Copy source files and dependencies
-          echo "📄 Copying source files..."
-          cp -R src "$ADDON_PATH/"
-          cp -R notebooks "$ADDON_PATH/" || true
-          cp requirements.txt "$ADDON_PATH/" || true
-          
-          # Install yq for YAML processing
-          if [[ "${{ needs.detect-addon-type.outputs.is-alpha }}" == "true" ]]; then
-            sudo snap install yq
-            
-            # Update config.yaml dynamically for alpha releases
-            yq eval ".version = \"$VERSION\"" -i "$ADDON_PATH/config.yaml"
-            yq eval ".name = \"$ADDON_NAME\"" -i "$ADDON_PATH/config.yaml"
-            
-            echo "🔧 Updated alpha config:"
-            grep -E "^(name|version):" "$ADDON_PATH/config.yaml"
-          else
-            # Update config.yaml for stable releases  
-            sed -i "s/^version: .*/version: \"$VERSION\"/" "$ADDON_PATH/config.yaml"
-            
-            echo "🔧 Updated stable config:"
-            grep -E "^(version|auto_update):" "$ADDON_PATH/config.yaml"
-          fi
-          
-          echo "✅ Build context prepared successfully"
-
-      - name: Build Add-on Container
+      - name: Build multiarch image for amd64
         uses: home-assistant/builder@2025.11.0
         with:
           args: |
             --amd64 \
-            --aarch64 \
-            --target ${{ needs.detect-addon-type.outputs.addon-path }} \
-            --docker-hub ghcr.io/helgeerbe \
-            --image ml_heating-{arch} \
-            --version ${{ needs.detect-addon-type.outputs.version }}
+            --target shared \
+            --docker-hub ${{ env.REGISTRY }}/${{ github.repository_owner }} \
+            --image ${{ env.IMAGE_NAME }} \
+            --version ${{ needs.detect-release.outputs.version }} \
+            --tag-latest ${{ needs.detect-release.outputs.channel == 'latest' }}
 
-  # Stage 3: Create Release
+      - name: Build multiarch image for arm64  
+        uses: home-assistant/builder@2025.11.0
+        with:
+          args: |
+            --aarch64 \
+            --target shared \
+            --docker-hub ${{ env.REGISTRY }}/${{ github.repository_owner }} \
+            --image ${{ env.IMAGE_NAME }} \
+            --version ${{ needs.detect-release.outputs.version }}
+
+      - name: Build multiarch image for armv7
+        uses: home-assistant/builder@2025.11.0  
+        with:
+          args: |
+            --armv7 \
+            --target shared \
+            --docker-hub ${{ env.REGISTRY }}/${{ github.repository_owner }} \
+            --image ${{ env.IMAGE_NAME }} \
+            --version ${{ needs.detect-release.outputs.version }}
+
+      - name: Create multiarch manifest
+        run: |
+          # Create and push multiarch manifest
+          IMAGE_BASE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}"
+          VERSION="${{ needs.detect-release.outputs.version }}"
+          CHANNEL="${{ needs.detect-release.outputs.channel }}"
+          
+          # Create manifest for specific version
+          docker manifest create \
+            "$IMAGE_BASE:$VERSION" \
+            "$IMAGE_BASE:amd64-$VERSION" \
+            "$IMAGE_BASE:aarch64-$VERSION" \
+            "$IMAGE_BASE:armv7-$VERSION"
+          
+          docker manifest push "$IMAGE_BASE:$VERSION"
+          
+          # Create manifest for channel (latest/alpha)
+          docker manifest create \
+            "$IMAGE_BASE:$CHANNEL" \
+            "$IMAGE_BASE:amd64-$VERSION" \
+            "$IMAGE_BASE:aarch64-$VERSION" \
+            "$IMAGE_BASE:armv7-$VERSION"
+          
+          docker manifest push "$IMAGE_BASE:$CHANNEL"
+
+  # Stage 3: Update Add-on Configurations
+  update-configs:
+    runs-on: ubuntu-latest
+    name: Update Add-on Configurations
+    needs: [detect-release, build-multiarch]
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Update configurations
+        run: |
+          VERSION="${{ needs.detect-release.outputs.version }}"
+          IS_ALPHA="${{ needs.detect-release.outputs.is-alpha }}"
+          
+          # Install yq for YAML processing
+          sudo snap install yq
+          
+          if [[ "$IS_ALPHA" == "true" ]]; then
+            echo "🔧 Updating development addon config to version $VERSION"
+            yq eval ".version = \"$VERSION\"" -i ml_heating_dev/config.yaml
+            
+            echo "Updated ml_heating_dev/config.yaml:"
+            grep -E "^(name|version):" ml_heating_dev/config.yaml
+          else
+            echo "🔧 Updating stable addon config to version $VERSION"
+            yq eval ".version = \"$VERSION\"" -i ml_heating/config.yaml
+            
+            echo "Updated ml_heating/config.yaml:"
+            grep -E "^(name|version):" ml_heating/config.yaml
+          fi
+          
+      - name: Commit configuration updates
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          VERSION="${{ needs.detect-release.outputs.version }}"
+          IS_ALPHA="${{ needs.detect-release.outputs.is-alpha }}"
+          
+          if [[ "$IS_ALPHA" == "true" ]]; then
+            git add ml_heating_dev/config.yaml
+            git commit -m "chore: Update development addon to version $VERSION" || exit 0
+          else
+            git add ml_heating/config.yaml  
+            git commit -m "chore: Update stable addon to version $VERSION" || exit 0
+          fi
+          
+          git push
+
+  # Stage 4: Create Release
   release:
     runs-on: ubuntu-latest
-    name: Create ${{ needs.detect-addon-type.outputs.addon-type }} Release
-    needs: [detect-addon-type, build-addon]
+    name: Create Release
+    needs: [detect-release, build-multiarch, update-configs]
     permissions:
       contents: write
-      packages: write
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         
-      - name: Create Smart Release
+      - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref }}
-          name: ML Heating v${{ needs.detect-addon-type.outputs.version }} ${{ needs.detect-addon-type.outputs.is-alpha == 'true' && '(Development)' || '' }}
+          name: ML Heating v${{ needs.detect-release.outputs.version }} ${{ needs.detect-release.outputs.is-alpha == 'true' && '(Alpha)' || '' }}
           body: |
-            ## ${{ needs.detect-addon-type.outputs.is-alpha == 'true' && '🚧 ML Heating Control - Development Release' || '🎯 ML Heating Control - Stable Release' }}
+            ## ${{ needs.detect-release.outputs.is-alpha == 'true' && '🧪 ML Heating Control - Alpha Release' || '🎯 ML Heating Control - Stable Release' }}
             
-            **Version:** `${{ needs.detect-addon-type.outputs.version }}`  
-            **Add-on Name:** "${{ needs.detect-addon-type.outputs.addon-name }}"  
-            **Container:** `ghcr.io/${{ github.repository }}:${{ needs.detect-addon-type.outputs.is-alpha == 'true' && 'dev' || 'latest' }}`  
-            **Auto-Updates:** ${{ needs.detect-addon-type.outputs.auto-update == 'true' && '✅ Enabled' || '❌ Disabled (manual updates for safety)' }}  
+            **Version:** `${{ needs.detect-release.outputs.version }}`  
+            **Channel:** `${{ needs.detect-release.outputs.channel }}`  
+            **Container:** `${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.detect-release.outputs.channel }}`  
             
             ### Installation
             1. Add this repository to Home Assistant:
                ```
                https://github.com/${{ github.repository }}
                ```
-            2. Install **"${{ needs.detect-addon-type.outputs.addon-name }}"**
+            2. Install **"${{ needs.detect-release.outputs.is-alpha == 'true' && 'ML Heating Control (Development)' || 'ML Heating Control' }}"**
             3. Configure with your Home Assistant entities
             
-            ### ${{ needs.detect-addon-type.outputs.is-alpha == 'true' && 'Development' || 'Production' }} Features
-            ${{ needs.detect-addon-type.outputs.is-alpha == 'true' && '- 🔍 Debug logging enabled (`log_level: DEBUG`)
-            - 🛠️ Development API enabled for Jupyter notebooks
+            ### Container Images (Multiarch: amd64, arm64, armv7)
+            - `${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.detect-release.outputs.channel }}` (${{ needs.detect-release.outputs.is-alpha == 'true' && 'rolling alpha' || 'latest stable' }})
+            - `${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.detect-release.outputs.version }}` (specific version)
+            
+            ${{ needs.detect-release.outputs.is-alpha == 'true' && '### ⚠️ Alpha Release
+            This is an alpha release intended for testing new features. Use with caution in production environments.
+            
+            **Features:**
+            - 🔍 Debug logging enabled
+            - 🛠️ Development API enabled  
             - ⚡ Latest features and improvements
-            - 🧪 Experimental functionality for testing' || '- 🎯 Production-ready configuration
-            - 📊 Optimized logging (`log_level: INFO`)
+            - 🧪 Experimental functionality' || '### 🎯 Stable Release
+            This is a production-ready stable release.
+            
+            **Features:**
+            - 🎯 Production-tested configuration
+            - 📊 Optimized logging
             - 🔄 Automatic updates enabled
-            - 🛡️ Thoroughly tested and validated
+            - 🛡️ Thoroughly validated
             - 📈 Advanced physics-based ML optimization' }}
             
-            ### Container Images
-            - `ghcr.io/${{ github.repository }}:${{ needs.detect-addon-type.outputs.is-alpha == 'true' && 'dev' || 'latest' }}` (${{ needs.detect-addon-type.outputs.is-alpha == 'true' && 'rolling development' || 'latest stable' }})
-            - `ghcr.io/${{ github.repository }}:${{ needs.detect-addon-type.outputs.version }}` (specific version)
-            
-            ${{ needs.detect-addon-type.outputs.is-alpha == 'true' && '### ⚠️ Development Notice
-            This is a development release intended for testing. It may contain:
-            - Experimental features
-            - Potential bugs or instability  
-            - Breaking changes between versions
-            
-            For production use, please install the stable version: **"ML Heating Control"**' || '### Key Features
-            - **Physics-based ML optimization** - Intelligent heating control using real-world physics models
-            - **Real-time dashboard** - Advanced analytics and performance monitoring
-            - **Multi-model comparison** - Compare different heating strategies
-            - **Automated backup system** - Protect your ML models and configurations
-            - **Seasonal learning** - Automatically adapts to seasonal patterns
-            - **External heat source detection** - Accounts for PV, fireplace, and other heat sources
-            
-            ### Multi-Add-on Support
-            This project now supports both stable and development channels:
-            - **Stable Channel** (this release): Production-ready with auto-updates
-            - **Development Channel**: Latest features for testing (install separately)
-            
-            ### Upgrade Path
-            If upgrading from a previous version, your existing configuration and ML models will be automatically preserved.' }}
+            ### Architecture
+            - **Single Multiarch Container**: One image supports all architectures
+            - **Tag-based Channels**: `:latest` for stable, `:alpha` for development
+            - **Matter Hub Inspired**: Following proven Home Assistant addon patterns
           draft: false
-          prerelease: ${{ needs.detect-addon-type.outputs.is-alpha == 'true' }}
+          prerelease: ${{ needs.detect-release.outputs.is-alpha == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
