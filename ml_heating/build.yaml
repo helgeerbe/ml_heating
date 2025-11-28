@@ -1,0 +1,4 @@
+# Minimal build configuration for Home Assistant validation
+# Actual building occurs via GitHub Actions workflow
+args: {}
+labels: {}

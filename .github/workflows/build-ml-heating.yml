@@ -111,14 +111,15 @@ jobs:
           echo "✅ Build context prepared successfully"
 
       - name: Build Add-on Container
-        uses: home-assistant/builder@2025.09.0
+        uses: home-assistant/builder@2025.11.0
         with:
           args: |
             --amd64 \
             --aarch64 \
             --target ${{ needs.detect-addon-type.outputs.addon-path }} \
-            --docker-hub ghcr.io \
-            --image ${{ env.IMAGE_NAME }}
+            --docker-hub ghcr.io/helgeerbe \
+            --image ml_heating-{arch} \
+            --version ${{ needs.detect-addon-type.outputs.version }}
 
   # Stage 3: Create Release
   release:
