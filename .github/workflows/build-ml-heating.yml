@@ -134,7 +134,7 @@ jobs:
             --aarch64 \
             --armhf \
             --target ${{ needs.detect-addon-type.outputs.addon-path }} \
-            --docker-hub ghcr.io/${{ github.repository }}
+            --docker-hub ghcr.io
 
   # Stage 4: Create Release
   release:
