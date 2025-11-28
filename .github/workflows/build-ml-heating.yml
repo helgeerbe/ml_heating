@@ -133,7 +133,8 @@ jobs:
             --amd64 \
             --aarch64 \
             --target ${{ needs.detect-addon-type.outputs.addon-path }} \
-            --docker-hub ghcr.io
+            --docker-hub ghcr.io \
+            --image ${{ env.IMAGE_NAME }}
 
   # Stage 4: Create Release
   release:
