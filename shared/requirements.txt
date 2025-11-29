@@ -1,9 +1,0 @@
-influxdb-client
-pandas
-numpy
-requests
-python-dotenv
-lightgbm
-streamlit
-streamlit-option-menu
-plotly
