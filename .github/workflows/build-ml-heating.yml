@@ -65,7 +65,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.detect-release.outputs.version }}
@@ -161,7 +161,7 @@ jobs:
             2. Install **"${{ needs.detect-release.outputs.is-alpha == 'true' && 'ML Heating Control (Development)' || 'ML Heating Control' }}"**
             3. Configure with your Home Assistant entities
             
-            ### Container Images (Multiarch: amd64, arm64, armv7)
+            ### Container Images (Multiarch: amd64, arm64)
             - `${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.detect-release.outputs.channel }}` (${{ needs.detect-release.outputs.is-alpha == 'true' && 'rolling alpha' || 'latest stable' }})
             - `${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.detect-release.outputs.version }}` (specific version)
             
