@@ -1,8 +1,29 @@
 # Active Context - Current Work & Decision State
 
-## Current Work Focus - November 28, 2025
+## Current Work Focus - November 29, 2025
 
-### Current Phase: Project Structure Optimization
+### Current Phase: Home Assistant Add-on Configuration Enhancement  
+**Status**: ✅ **COMPLETED** - Successfully resolved entity selector UI issues and improved configuration experience
+
+**Entity Configuration Fix Implementation (November 29, 2025)**:
+- **Issue**: Home Assistant entity selector UI bug where entities could be found but not selected/saved
+- **Root Cause**: Known HA add-on entity selector malfunction - dropdowns appear, search works, but selection fails
+- **Solution**: Replaced problematic entity selectors with simple string input fields
+- **Implementation**: 
+  - Applied user's actual .env entity IDs as default values across all entity fields
+  - Converted all entity fields to `"str"` schema type for reliable text input
+  - Removed empty string defaults to make all fields mandatory
+  - Added proper data types for numeric fields (`int(min,max)`, `float(min,max)`, `bool`)
+  - Removed unsupported `schema_description` sections
+- **Files Updated**: `ml_heating/config.yaml` ✅, `ml_heating_dev/config.yaml` ✅
+- **Results**: 
+  - Text-based entity configuration that works reliably
+  - Pre-populated with user's working entity IDs from .env
+  - Copy-paste friendly for entity IDs from Developer Tools
+  - Proper UI controls (sliders, toggles) for numeric/boolean fields
+- **Status**: ✅ Configuration UI issues resolved, ready for HA deployment
+
+### Previous Phase: Project Structure Optimization
 **Status**: ✅ **COMPLETED** - Successfully restructured project for better organization and maintainability
 
 **Project Structure Restructuring (November 28, 2025)**:
