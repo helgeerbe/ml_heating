@@ -16,7 +16,7 @@ from typing import List, Dict, Tuple
 def validate_dashboard_components():
     """Validate all dashboard components exist and are properly structured"""
     try:
-        component_dir = Path('shared/dashboard/components')
+        component_dir = Path('dashboard/components')
         if not component_dir.exists():
             print("❌ Dashboard components directory not found")
             return False
@@ -77,7 +77,7 @@ def validate_advanced_analytics():
     """Validate performance analytics and visualization components"""
     try:
         performance_file = Path(
-            'shared/dashboard/components/performance.py')
+            'dashboard/components/performance.py')
         if not performance_file.exists():
             print("❌ Performance analytics component not found")
             return False
@@ -124,7 +124,7 @@ def validate_advanced_analytics():
 def validate_backup_system():
     """Validate backup/restore functionality components"""
     try:
-        backup_file = Path('shared/dashboard/components/backup.py')
+        backup_file = Path('dashboard/components/backup.py')
         if not backup_file.exists():
             print("❌ Backup system component not found")
             return False
@@ -167,7 +167,7 @@ def validate_dependency_compatibility():
     """Check for version conflicts and requirement compatibility"""
     try:
         # Load main requirements
-        main_reqs_file = Path('shared/requirements.txt')
+        main_reqs_file = Path('requirements.txt')
         
         if not main_reqs_file.exists():
             print("❌ Main requirements.txt not found")
@@ -207,7 +207,7 @@ def validate_api_structure():
     """Validate development API structure and components"""
     try:
         # Check for main app.py structure
-        app_file = Path('shared/dashboard/app.py')
+        app_file = Path('dashboard/app.py')
         if not app_file.exists():
             print("❌ Main dashboard app.py not found")
             return False
@@ -235,7 +235,7 @@ def validate_api_structure():
             return False
         
         # Check for health check component
-        health_file = Path('shared/dashboard/health.py')
+        health_file = Path('dashboard/health.py')
         if not health_file.exists():
             print("❌ Health check component not found")
             return False
@@ -250,8 +250,11 @@ def validate_api_structure():
 def validate_config_yaml():
     """Validate config.yaml structure"""
     try:
-        with open('shared/config.yaml', 'r') as f:
-            config = yaml.safe_load(f)
+        # Check both addon configurations
+        configs_to_check = ['ml_heating/config.yaml', 'ml_heating_dev/config.yaml']
+        for config_path in configs_to_check:
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
         
         required_fields = ['name', 'version', 'slug', 'description', 'arch', 'options', 'schema']
         missing_fields = [field for field in required_fields if field not in config]
@@ -276,8 +279,8 @@ def validate_config_yaml():
 def validate_build_json():
     """Validate build.json structure"""
     try:
-        with open('shared/build.json', 'r') as f:
-            build = json.load(f)
+        with open('build.yaml', 'r') as f:
+            build = yaml.safe_load(f)
         
         required_fields = ['build_from', 'args', 'labels']
         missing_fields = [field for field in required_fields if field not in build]
@@ -302,7 +305,7 @@ def validate_build_json():
 def validate_dockerfile():
     """Validate Dockerfile structure"""
     try:
-        dockerfile_path = Path('shared/Dockerfile')
+        dockerfile_path = Path('Dockerfile')
         if not dockerfile_path.exists():
             print("❌ Dockerfile not found")
             return False
@@ -311,7 +314,7 @@ def validate_dockerfile():
         
         # Check for required instructions
         required_instructions = [
-            'FROM $BUILD_FROM',
+            'FROM',
             'COPY requirements.txt',
             'pip3 install',
             'COPY src/',
@@ -342,11 +345,11 @@ def validate_dependencies():
     """Validate dependency files exist"""
     required_files = [
         'requirements.txt',
-        'shared/config_adapter.py',
-        'shared/run.sh',
-        'shared/supervisord.conf',
-        'shared/dashboard/app.py',
-        'shared/dashboard/health.py'
+        'config_adapter.py',
+        'run.sh',
+        'supervisord.conf',
+        'dashboard/app.py',
+        'dashboard/health.py'
     ]
     
     missing_files = []
