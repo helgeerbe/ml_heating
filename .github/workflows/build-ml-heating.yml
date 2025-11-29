@@ -61,60 +61,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
           
-      - name: Build multiarch image for amd64
-        uses: home-assistant/builder@2025.11.0
+      - name: Build and push multiarch image
+        uses: docker/build-push-action@v5
         with:
-          args: |
-            --amd64 \
-            --target . \
-            --docker-hub ${{ env.REGISTRY }}/${{ github.repository_owner }} \
-            --image ${{ env.IMAGE_NAME }} \
-            --version ${{ needs.detect-release.outputs.version }}
+          context: .
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.detect-release.outputs.version }}
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.detect-release.outputs.channel }}
+          build-args: |
+            BUILD_VERSION=${{ needs.detect-release.outputs.version }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            BUILD_REF=${{ github.sha }}
+            BUILD_REPOSITORY=${{ github.repository }}
 
-      - name: Build multiarch image for arm64  
-        uses: home-assistant/builder@2025.11.0
-        with:
-          args: |
-            --aarch64 \
-            --target . \
-            --docker-hub ${{ env.REGISTRY }}/${{ github.repository_owner }} \
-            --image ${{ env.IMAGE_NAME }} \
-            --version ${{ needs.detect-release.outputs.version }}
-
-      - name: Build multiarch image for armv7
-        uses: home-assistant/builder@2025.11.0  
-        with:
-          args: |
-            --armv7 \
-            --target . \
-            --docker-hub ${{ env.REGISTRY }}/${{ github.repository_owner }} \
-            --image ${{ env.IMAGE_NAME }} \
-            --version ${{ needs.detect-release.outputs.version }}
-
-      - name: Create multiarch manifest
-        run: |
-          # Create and push multiarch manifest
-          IMAGE_BASE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}"
-          VERSION="${{ needs.detect-release.outputs.version }}"
-          CHANNEL="${{ needs.detect-release.outputs.channel }}"
-          
-          # Create manifest for specific version
-          docker manifest create \
-            "$IMAGE_BASE:$VERSION" \
-            "$IMAGE_BASE:amd64-$VERSION" \
-            "$IMAGE_BASE:aarch64-$VERSION" \
-            "$IMAGE_BASE:armv7-$VERSION"
-          
-          docker manifest push "$IMAGE_BASE:$VERSION"
-          
-          # Create manifest for channel (latest/alpha)
-          docker manifest create \
-            "$IMAGE_BASE:$CHANNEL" \
-            "$IMAGE_BASE:amd64-$VERSION" \
-            "$IMAGE_BASE:aarch64-$VERSION" \
-            "$IMAGE_BASE:armv7-$VERSION"
-          
-          docker manifest push "$IMAGE_BASE:$CHANNEL"
 
   # Stage 3: Update Add-on Configurations
   update-configs:
