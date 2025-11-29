@@ -47,7 +47,6 @@ options:
   avg_other_rooms_temp_entity: "sensor.avg_other_rooms_temp"
   # The Home Assistant sensor that provides today's PV forecast with attributes
   pv_forecast_entity: "sensor.energy_production_today_4"
-  
   # External Heat Sources - Entity IDs for learning external heat contributions
   # A single aggregated sensor for total PV power generation
   pv_power_entity: "sensor.power_pv"
@@ -55,7 +54,6 @@ options:
   fireplace_status_entity: "binary_sensor.fireplace_active"
   # A sensor or input_boolean that indicates if a TV or other significant internal heat source is on
   tv_power_entity: "input_boolean.fernseher"
-  
   # Blocking Detection - Entity IDs for system status monitoring
   # A binary_sensor that is 'on' when Domestic Hot Water (DHW) is being heated
   dhw_status_entity: "binary_sensor.hp_dhw_heating_status"
@@ -65,7 +63,6 @@ options:
   disinfection_status_entity: "binary_sensor.hp_dhw_tank_disinfection_status"
   # A binary_sensor that is 'on' when the DHW boost heater is active
   dhw_boost_heater_entity: "binary_sensor.hp_dhw_boost_heater_status"
-  
   # ML Learning Parameters - Numeric configuration for model behavior
   # The time in minutes between each full cycle of learning and prediction
   cycle_interval_minutes: 30
@@ -77,7 +74,6 @@ options:
   history_step_minutes: 10
   # The number of hours of historical data to use for initial training
   training_lookback_hours: 576
-  
   # Safety Configuration - Temperature limits and safety bounds
   # The maximum safe indoor temperature allowed by the system
   safety_max_temp: 25.0
@@ -87,7 +83,6 @@ options:
   clamp_min_abs: 14.0
   # Absolute maximum allowed outlet temperature (in °C)
   clamp_max_abs: 65.0
-  
   # InfluxDB Configuration - Database connection settings
   # URL of your InfluxDB instance, including the protocol and port
   influxdb_host: "a0d7b954-influxdb"
@@ -103,13 +98,11 @@ options:
   influxdb_bucket: "home_assistant/autogen"
   # InfluxDB bucket for exporting feature importances and ML metrics
   influx_features_bucket: "ml_heating_features"
-  
   # Model Management - Backup and maintenance settings
   # Enable automatic model backups before updates
   auto_backup_enabled: true
   # Number of days to retain model backups
   backup_retention_days: 30
-  
   # Dashboard Configuration - Web interface settings
   # Interval in seconds for dashboard data updates
   dashboard_update_interval: 30
@@ -117,7 +110,6 @@ options:
   show_advanced_metrics: true
   # Theme for the dashboard (auto, light, or dark)
   dashboard_theme: "auto"
-  
   # Development Settings - Debug and development features (Enhanced for Alpha Channel)
   # Whether to enable the development API for external access (e.g., Jupyter notebooks)
   enable_dev_api: true
@@ -125,7 +117,6 @@ options:
   dev_api_key: ""
   # The minimum level of log messages to display
   log_level: "DEBUG"
-  
   # Performance Tuning - ML model optimization parameters
   # The smoothing factor for the exponential moving average applied to the model's temperature predictions
   smoothing_alpha: 1.0
@@ -135,7 +126,6 @@ options:
   physics_validation_enabled: true
   # Enable automatic seasonal learning using cosine/sine modulation
   seasonal_learning_enabled: true
-  
   # Advanced Learning Features - Multi-lag and seasonal learning
   # Enable time-delayed learning for external heat sources (PV, fireplace, TV)
   enable_multi_lag_learning: true
@@ -151,7 +141,6 @@ options:
   min_seasonal_samples: 100
   # Enable learning from HVAC-off periods (typically summer)
   enable_summer_learning: true
-  
   # System Behavior Configuration - Timing and polling settings
   # Maximum minutes to wait during grace period after blocking ends
   grace_period_max_minutes: 30
@@ -159,7 +148,6 @@ options:
   blocking_poll_interval_seconds: 60
   # Prediction horizon steps for calibration
   prediction_horizon_steps: 48
-  
   # Shadow Mode Configuration - Testing without affecting heating control
   # When enabled, ML runs in observation mode without affecting heating
   shadow_mode: false
