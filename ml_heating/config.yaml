@@ -163,16 +163,16 @@ options:
 
 schema:
   # Core Entity Configuration
-  target_indoor_temp_entity: "entity"
-  indoor_temp_entity: "entity"
-  outdoor_temp_entity: "entity"
-  heating_control_entity: "entity"
-  outlet_temp_entity: "entity"
-  target_outlet_temp_entity: "entity"
-  actual_target_outlet_temp_entity: "entity"
-  openweathermap_temp_entity: "entity"
-  avg_other_rooms_temp_entity: "entity"
-  pv_forecast_entity: "entity"
+  target_indoor_temp_entity: "str"
+  indoor_temp_entity: "str"
+  outdoor_temp_entity: "str"
+  heating_control_entity: "str"
+  outlet_temp_entity: "str"
+  target_outlet_temp_entity: "str"
+  actual_target_outlet_temp_entity: "str"
+  openweathermap_temp_entity: "str"
+  avg_other_rooms_temp_entity: "str"
+  pv_forecast_entity: "str"
   # ML Learning Parameters
   cycle_interval_minutes: "int(5,60)"
   max_temp_change_per_cycle: "float(0.5,5.0)"
@@ -185,9 +185,9 @@ schema:
   clamp_min_abs: "float(10.0,20.0)"
   clamp_max_abs: "float(50.0,80.0)"
   # External Heat Sources (Optional)
-  pv_power_entity: "entity?"
-  fireplace_status_entity: "entity?"
-  tv_power_entity: "entity?"
+  pv_power_entity: "str?"
+  fireplace_status_entity: "str?"
+  tv_power_entity: "str?"
   # InfluxDB Configuration
   influxdb_host: "str"
   influxdb_port: "port"
@@ -196,10 +196,10 @@ schema:
   influxdb_org: "str?"
   influxdb_bucket: "str?"
   # Blocking Detection
-  dhw_status_entity: "entity?"
-  defrost_status_entity: "entity?"
-  disinfection_status_entity: "entity?"
-  dhw_boost_heater_entity: "entity?"
+  dhw_status_entity: "str?"
+  defrost_status_entity: "str?"
+  disinfection_status_entity: "str?"
+  dhw_boost_heater_entity: "str?"
   # Model Management
   auto_backup_enabled: "bool"
   backup_retention_days: "int(1,365)"
