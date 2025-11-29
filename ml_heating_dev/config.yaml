@@ -150,16 +150,36 @@ options:
   prediction_horizon_steps: 24
 schema:
   # Core Entity Configuration
-  target_indoor_temp_entity: "str"
-  indoor_temp_entity: "str"
-  outdoor_temp_entity: "str"
-  heating_control_entity: "str"
-  outlet_temp_entity: "str"
-  target_outlet_temp_entity: "str"
-  actual_target_outlet_temp_entity: "str"
-  openweathermap_temp_entity: "str"
-  avg_other_rooms_temp_entity: "str"
-  pv_forecast_entity: "str"
+  target_indoor_temp_entity:
+    selector:
+      entity: {}
+  indoor_temp_entity:
+    selector:
+      entity: {}
+  outdoor_temp_entity:
+    selector:
+      entity: {}
+  heating_control_entity:
+    selector:
+      entity: {}
+  outlet_temp_entity:
+    selector:
+      entity: {}
+  target_outlet_temp_entity:
+    selector:
+      entity: {}
+  actual_target_outlet_temp_entity:
+    selector:
+      entity: {}
+  openweathermap_temp_entity:
+    selector:
+      entity: {}
+  avg_other_rooms_temp_entity:
+    selector:
+      entity: {}
+  pv_forecast_entity:
+    selector:
+      entity: {}
   # ML Learning Parameters
   cycle_interval_minutes: "int(5,60)"
   max_temp_change_per_cycle: "float(0.5,5.0)"
@@ -172,9 +192,18 @@ schema:
   clamp_min_abs: "float(10.0,20.0)"
   clamp_max_abs: "float(50.0,80.0)"
   # External Heat Sources (Optional)
-  pv_power_entity: "str?"
-  fireplace_status_entity: "str?"
-  tv_power_entity: "str?"
+  pv_power_entity:
+    selector:
+      entity: {}
+    required: false
+  fireplace_status_entity:
+    selector:
+      entity: {}
+    required: false
+  tv_power_entity:
+    selector:
+      entity: {}
+    required: false
   # InfluxDB Configuration
   influxdb_host: "str"
   influxdb_port: "port"
@@ -183,10 +212,22 @@ schema:
   influxdb_org: "str?"
   influxdb_bucket: "str?"
   # Blocking Detection
-  dhw_status_entity: "str?"
-  defrost_status_entity: "str?"
-  disinfection_status_entity: "str?"
-  dhw_boost_heater_entity: "str?"
+  dhw_status_entity:
+    selector:
+      entity: {}
+    required: false
+  defrost_status_entity:
+    selector:
+      entity: {}
+    required: false
+  disinfection_status_entity:
+    selector:
+      entity: {}
+    required: false
+  dhw_boost_heater_entity:
+    selector:
+      entity: {}
+    required: false
   # Model Management
   auto_backup_enabled: "bool"
   backup_retention_days: "int(1,365)"
