@@ -373,8 +373,8 @@ def find_best_outlet_temp(
 
     history_mean = np.mean(prediction_history)
     smoothed_outlet = float(
-        history_mean * config.SMOOTHING_ALPHA +
-        best_outlet_temp * (1 - config.SMOOTHING_ALPHA)
+        best_outlet_temp * config.SMOOTHING_ALPHA +
+        history_mean * (1 - config.SMOOTHING_ALPHA)
     )
     
     logging.info(
