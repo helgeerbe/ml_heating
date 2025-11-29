@@ -5,7 +5,7 @@ slug: "ml_heating"
 description: "Physics-based machine learning heating control system with online learning (Stable Channel)"
 url: "https://github.com/helgeerbe/ml_heating"
 arch:
-  - arm64
+  - aarch64
   - amd64
 startup: services
 init: false
@@ -18,6 +18,7 @@ ports_description:
 webui: "http://[HOST]:[PORT:3001]"
 panel_icon: mdi:heat-pump
 panel_title: "ML Heating"
+homeassistant: 2024.1.0
 privileged:
   - SYS_RAWIO
 apparmor: false
