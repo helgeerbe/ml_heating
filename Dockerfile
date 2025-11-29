@@ -1,4 +1,4 @@
-ARG BUILD_FROM=ghcr.io/hassio-addons/base-python:3.11-alpine3.18
+ARG BUILD_FROM
 FROM $BUILD_FROM
 
 # Build arguments
