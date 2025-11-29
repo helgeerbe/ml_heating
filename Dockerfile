@@ -1,8 +1,5 @@
-ARG TARGETPLATFORM
-ARG BUILDPLATFORM
-
-# Use architecture-specific base images
-FROM --platform=$TARGETPLATFORM python:3.11-alpine3.18
+ARG BUILD_FROM
+FROM $BUILD_FROM
 
 # Build arguments
 ARG BUILD_ARCH
@@ -36,13 +33,8 @@ LABEL \
 # Environment
 ENV LANG=C.UTF-8
 
-# Install system dependencies
+# Install additional system dependencies for ML workload (Python already included in base)
 RUN apk add --no-cache \
-    bash \
-    curl \
-    jq \
-    tzdata \
-    procps \
     supervisor \
     gcc \
     g++ \
