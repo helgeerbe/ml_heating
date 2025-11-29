@@ -1,5 +1,4 @@
-ARG BUILD_FROM
-FROM $BUILD_FROM
+FROM python:3.11-alpine3.18
 
 # Build arguments
 ARG BUILD_ARCH
@@ -31,17 +30,32 @@ LABEL \
     org.opencontainers.image.version=${BUILD_VERSION}
 
 # Environment
-ENV LANG=C.UTF-8
+ENV LANG=C.UTF-8 \
+    PYTHONUNBUFFERED=1
 
-# Install system dependencies for ML workload
+# Install system dependencies for ML workload and HA addon support
 RUN apk add --no-cache \
+    bash \
+    curl \
+    jq \
+    tzdata \
     gcc \
     g++ \
     musl-dev \
     linux-headers \
     gfortran \
     openblas-dev \
-    lapack-dev
+    lapack-dev \
+    && rm -rf /var/cache/apk/*
+
+# Install bashio for Home Assistant addon support
+RUN curl -L -s -o /tmp/bashio.tar.gz \
+    "https://github.com/hassio-addons/bashio/archive/v0.16.2.tar.gz" \
+    && mkdir /tmp/bashio \
+    && tar zxf /tmp/bashio.tar.gz -C /tmp/bashio --strip-components 1 \
+    && mv /tmp/bashio/lib /usr/lib/bashio \
+    && ln -s /usr/lib/bashio/bashio /usr/bin/bashio \
+    && rm -rf /tmp/bashio.tar.gz /tmp/bashio
 
 # Set working directory
 WORKDIR /app
@@ -49,20 +63,21 @@ WORKDIR /app
 # Copy requirements and install Python dependencies
 COPY requirements.txt /app/
 RUN pip3 install --no-cache-dir --upgrade pip \
-    && pip3 install --no-cache-dir -r requirements.txt
+    && pip3 install --no-cache-dir -r requirements.txt \
+    && rm -rf /root/.cache/pip
 
 # Copy the ML heating system source code
 COPY src/ /app/src/
 COPY notebooks/ /app/notebooks/
 COPY dashboard/ /app/dashboard/
 
-# Copy configuration adapter
+# Copy configuration adapter and utilities
 COPY config_adapter.py /app/
 COPY validate_container.py /app/
 
 # Copy and setup entrypoint
-COPY run.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
+COPY run.sh /app/run.sh
+RUN chmod +x /app/run.sh
 
 # Create necessary directories
 RUN mkdir -p /data/models \
@@ -74,5 +89,8 @@ RUN mkdir -p /data/models \
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:3002/health || exit 1
 
-# Use the standard HA addon entrypoint pattern
-CMD /docker-entrypoint.sh
+# Expose ports (health check and optional dev API)
+EXPOSE 3002 3003
+
+# Use simple entrypoint
+CMD ["/app/run.sh"]

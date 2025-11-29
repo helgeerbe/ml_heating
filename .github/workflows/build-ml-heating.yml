@@ -38,10 +38,10 @@ jobs:
           
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-  # Stage 2: Build Multiarch Container
-  build-multiarch:
+  # Stage 2: Build Container (Matter Hub Pattern)
+  build-container:
     runs-on: ubuntu-latest
-    name: Build Multiarch Container
+    name: Build Container
     needs: [detect-release]
     permissions:
       contents: read
@@ -61,7 +61,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
           
-      - name: Build and push multiarch image
+      - name: Build and push multiarch container
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -75,13 +75,14 @@ jobs:
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
             BUILD_REF=${{ github.sha }}
             BUILD_REPOSITORY=${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-
-  # Stage 3: Update Add-on Configurations
+  # Stage 3: Update Add-on Configurations (Simulating Matter Hub Dispatch)
   update-configs:
     runs-on: ubuntu-latest
     name: Update Add-on Configurations
-    needs: [detect-release, build-multiarch]
+    needs: [detect-release, build-container]
     permissions:
       contents: write
       pull-requests: write
@@ -140,7 +141,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     name: Create Release
-    needs: [detect-release, build-multiarch, update-configs]
+    needs: [detect-release, build-container, update-configs]
     permissions:
       contents: write
     
