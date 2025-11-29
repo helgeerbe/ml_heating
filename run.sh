@@ -14,7 +14,7 @@ bashio::log.info "Initializing configuration..."
 python3 /app/config_adapter.py
 
 # Check if required environment variables are set
-if [[ -z "${HASS_TOKEN}" ]]; then
+if [[ -z "${SUPERVISOR_TOKEN}" ]]; then
     bashio::log.fatal "Home Assistant Supervisor token not available"
     exit 1
 fi
@@ -38,6 +38,11 @@ fi
 # Create log file if it doesn't exist
 touch /data/logs/ml_heating.log
 
-# Start supervisor to manage multiple services
-bashio::log.info "Starting services with supervisor..."
-exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
+# Start the ML heating system directly
+bashio::log.info "Starting ML heating system..."
+
+# Change to app directory and start the main application
+cd /app
+
+# Execute the main application directly (no supervisor needed)
+exec python3 -m src.main

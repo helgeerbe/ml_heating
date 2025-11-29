@@ -1,4 +1,4 @@
-ARG BUILD_FROM
+ARG BUILD_FROM=ghcr.io/hassio-addons/base-python:3.11-alpine3.18
 FROM $BUILD_FROM
 
 # Build arguments
@@ -33,9 +33,8 @@ LABEL \
 # Environment
 ENV LANG=C.UTF-8
 
-# Install additional system dependencies for ML workload (Python already included in base)
+# Install system dependencies for ML workload
 RUN apk add --no-cache \
-    supervisor \
     gcc \
     g++ \
     musl-dev \
@@ -55,11 +54,15 @@ RUN pip3 install --no-cache-dir --upgrade pip \
 # Copy the ML heating system source code
 COPY src/ /app/src/
 COPY notebooks/ /app/notebooks/
+COPY dashboard/ /app/dashboard/
 
-# Copy add-on specific files
-COPY run.sh /app/
+# Copy configuration adapter
 COPY config_adapter.py /app/
-COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY validate_container.py /app/
+
+# Copy and setup entrypoint
+COPY run.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 
 # Create necessary directories
 RUN mkdir -p /data/models \
@@ -67,20 +70,9 @@ RUN mkdir -p /data/models \
     && mkdir -p /data/logs \
     && mkdir -p /data/config
 
-# Copy dashboard files
-RUN mkdir -p /app/dashboard
-COPY dashboard/ /app/dashboard/
-
-# Make run script executable
-RUN chmod a+x /app/run.sh
-
 # Health check - use dedicated health endpoint
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:3002/health || exit 1
 
-# Expose health check port only (dashboard now uses ingress)
-# Development API (if enabled) will use port 3003
-EXPOSE 3002 3003
-
-# Set the entry point
-CMD ["/app/run.sh"]
+# Use the standard HA addon entrypoint pattern
+CMD /docker-entrypoint.sh
