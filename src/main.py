@@ -133,6 +133,16 @@ def main(args):
     
     influx_service = create_influx_service()
 
+    # --- Shadow Mode Status ---
+    if config.SHADOW_MODE:
+        logging.info("🔍 SHADOW MODE ENABLED: ML will observe and learn without affecting heating control")
+        logging.info("   - ML predictions calculated but not sent to HA")
+        logging.info("   - No HA sensor updates (confidence, MAE, RMSE, state)")
+        logging.info("   - Learning from heat curve's actual control decisions")
+        logging.info("   - Performance comparison logging active")
+    else:
+        logging.info("🎯 ACTIVE MODE: ML actively controls heating system")
+
     # --- Physics Model Calibration ---
     if args.calibrate_physics:
         try:
@@ -831,17 +841,25 @@ def main(args):
             # The calculated `final_temp` is sent to Home Assistant to control
             # the boiler. Other metrics like model confidence, MAE, and
             # feature importances are also published to HA for monitoring.
-            logging.debug("Setting target outlet temp")
-            ha_client.set_state(
-                config.TARGET_OUTLET_TEMP_ENTITY_ID,
-                final_temp,
-                get_sensor_attributes(config.TARGET_OUTLET_TEMP_ENTITY_ID),
-                round_digits=0,
-            )
+            # In shadow mode, skip all HA sensor updates to avoid interference.
+            if config.SHADOW_MODE:
+                logging.info("🔍 SHADOW MODE: ML prediction calculated but not applied to heating system")
+                logging.info("   Final temp: %.1f°C (calculated but not sent to HA)", final_temp)
+            else:
+                logging.debug("Setting target outlet temp")
+                ha_client.set_state(
+                    config.TARGET_OUTLET_TEMP_ENTITY_ID,
+                    final_temp,
+                    get_sensor_attributes(config.TARGET_OUTLET_TEMP_ENTITY_ID),
+                    round_digits=0,
+                )
 
             # --- Log Metrics ---
-            logging.debug("Logging model metrics")
-            ha_client.log_model_metrics(confidence, mae.get(), rmse.get())
+            # In shadow mode, skip HA sensor updates but still log to console and InfluxDB
+            if not config.SHADOW_MODE:
+                logging.debug("Logging model metrics")
+                ha_client.log_model_metrics(confidence, mae.get(), rmse.get())
+            
             importances = get_feature_importances(model)
             if importances:
                 logging.info("Feature Importances:")
@@ -860,7 +878,11 @@ def main(args):
                         importance,
                         fvals.get(feature),
                     )
-            ha_client.log_feature_importance(importances)
+            
+            # Log to HA and InfluxDB only in active mode
+            if not config.SHADOW_MODE:
+                ha_client.log_feature_importance(importances)
+                
             influx_service.write_feature_importances(
                 importances, bucket=config.INFLUX_FEATURES_BUCKET
             )
@@ -873,37 +895,41 @@ def main(args):
             )
 
             # --- Update ML State sensor ---
-            try:
-                attributes_state = get_sensor_attributes(
-                    "sensor.ml_heating_state"
-                )
-                attributes_state.update(
-                    {
-                        "state_description": "Confidence - Too Low"
-                        if confidence < config.CONFIDENCE_THRESHOLD
-                        else "OK - Prediction done",
-                        "confidence": round(confidence, 4),
-                        "sigma": round(sigma, 4),
-                        "mae": round(mae.get(), 4),
-                        "rmse": round(rmse.get(), 4),
-                        "suggested_temp": round(suggested_temp, 2),
-                        "final_temp": round(final_temp, 2),
-                        "predicted_indoor": round(predicted_indoor, 2),
-                        "last_prediction_time": (
-                            datetime.now(timezone.utc).isoformat()
-                        ),
-                    }
-                )
-                ha_client.set_state(
-                    "sensor.ml_heating_state",
-                    1 if confidence < config.CONFIDENCE_THRESHOLD else 0,
-                    attributes_state,
-                    round_digits=None,
-                )
-            except Exception:
-                logging.debug(
-                    "Failed to write ML state to HA.", exc_info=True
-                )
+            # Skip ML state sensor updates in shadow mode
+            if not config.SHADOW_MODE:
+                try:
+                    attributes_state = get_sensor_attributes(
+                        "sensor.ml_heating_state"
+                    )
+                    attributes_state.update(
+                        {
+                            "state_description": "Confidence - Too Low"
+                            if confidence < config.CONFIDENCE_THRESHOLD
+                            else "OK - Prediction done",
+                            "confidence": round(confidence, 4),
+                            "sigma": round(sigma, 4),
+                            "mae": round(mae.get(), 4),
+                            "rmse": round(rmse.get(), 4),
+                            "suggested_temp": round(suggested_temp, 2),
+                            "final_temp": round(final_temp, 2),
+                            "predicted_indoor": round(predicted_indoor, 2),
+                            "last_prediction_time": (
+                                datetime.now(timezone.utc).isoformat()
+                            ),
+                        }
+                    )
+                    ha_client.set_state(
+                        "sensor.ml_heating_state",
+                        1 if confidence < config.CONFIDENCE_THRESHOLD else 0,
+                        attributes_state,
+                        round_digits=None,
+                    )
+                except Exception:
+                    logging.debug(
+                        "Failed to write ML state to HA.", exc_info=True
+                    )
+            else:
+                logging.debug("🔍 SHADOW MODE: Skipping ML state sensor updates")
 
             # --- Shadow Mode Comparison Logging ---
             # If TARGET_OUTLET_TEMP and ACTUAL_TARGET_OUTLET_TEMP are

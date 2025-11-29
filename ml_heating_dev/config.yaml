@@ -1,5 +1,5 @@
 name: "ML Heating Control (Development)"
-version: "0.1.0-alpha.34"
+version: "0.1.0-alpha.35"
 image: "ghcr.io/helgeerbe/ml_heating"
 slug: "ml_heating_dev"
 description: "Physics-based machine learning heating control system with online learning (Development Channel)"
@@ -159,6 +159,10 @@ options:
   blocking_poll_interval_seconds: 60
   # Prediction horizon steps for calibration
   prediction_horizon_steps: 48
+  
+  # Shadow Mode Configuration - Testing without affecting heating control
+  # When enabled, ML runs in observation mode without affecting heating
+  shadow_mode: false
 schema:
   # Core Entity Configuration - All entity fields as string input
   target_indoor_temp_entity: "str"
@@ -227,3 +231,5 @@ schema:
   grace_period_max_minutes: "int(10,120)"
   blocking_poll_interval_seconds: "int(30,300)"
   prediction_horizon_steps: "int(12,96)"
+  # Shadow Mode Configuration - Boolean type
+  shadow_mode: "bool"

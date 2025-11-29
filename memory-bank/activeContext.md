@@ -2,7 +2,33 @@
 
 ## Current Work Focus - November 29, 2025
 
-### Current Phase: Home Assistant Add-on Configuration Enhancement  
+### Current Phase: Home Assistant Ingress System Migration
+**Status**: ✅ **COMPLETED** - Successfully migrated addon web UI to Home Assistant ingress system for enhanced security and native integration
+
+**Ingress Migration Implementation (November 29, 2025)**:
+- **Issue**: GitHub Issue #11 - Migrate from external port mapping to HA ingress system
+- **Implementation**: Complete migration from port 3001 exposure to embedded ingress dashboard
+- **Benefits**: Enhanced security (no external ports), native HA integration, professional UX
+- **Changes Made**:
+  - Updated both `ml_heating/config.yaml` and `ml_heating_dev/config.yaml` with ingress configuration
+  - Enhanced `dashboard/app.py` with ingress detection and path handling
+  - Modified `supervisord.conf` for automatic ingress mode detection and Streamlit configuration
+  - Updated `Dockerfile` to remove external dashboard port exposure
+  - Preserved development API port 3003 for optional external notebook access
+  - Updated validation script for new port configuration
+- **Technical Details**:
+  - Automatic detection via `HASSIO_INGRESS_PATH` environment variable
+  - Streamlit `--server.baseUrlPath` parameter for proper ingress routing
+  - Fallback to standard mode for non-ingress environments
+  - Development API remains on separate port for notebook connectivity
+- **Results**: 
+  - Dashboard now embedded directly in Home Assistant sidebar
+  - No external port exposure for enhanced security
+  - Seamless user experience consistent with other HA addons
+  - Maintained all functionality while improving integration
+- **Status**: ✅ Ingress system migration completed, resolves GitHub Issue #11
+
+### Previous Phase: Home Assistant Add-on Configuration Enhancement  
 **Status**: ✅ **COMPLETED** - Successfully resolved entity selector UI issues and improved configuration experience
 
 **Entity Configuration Fix Implementation (November 29, 2025)**:

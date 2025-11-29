@@ -220,3 +220,11 @@ MIN_SEASONAL_SAMPLES: int = int(os.getenv("MIN_SEASONAL_SAMPLES", "100"))
 ENABLE_SUMMER_LEARNING: bool = (
     os.getenv("ENABLE_SUMMER_LEARNING", "true").lower() == "true"
 )
+
+# --- Shadow Mode Configuration ---
+# SHADOW_MODE: When true, ML runs in observation mode without affecting heating
+# - ML predictions are calculated but not sent to heating system
+# - No HA sensors are updated (target temp, confidence, MAE, RMSE, state)
+# - System learns from heat curve's actual control decisions
+# - Performance comparison logging between ML vs heat curve
+SHADOW_MODE: bool = os.getenv("SHADOW_MODE", "false").lower() == "true"
