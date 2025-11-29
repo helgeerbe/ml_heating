@@ -1,5 +1,8 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.11-alpine3.18
-FROM $BUILD_FROM
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
+
+# Use architecture-specific base images
+FROM --platform=$TARGETPLATFORM python:3.11-alpine3.18
 
 # Build arguments
 ARG BUILD_ARCH
