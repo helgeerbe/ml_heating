@@ -82,6 +82,9 @@ jobs:
     runs-on: ubuntu-latest
     name: Update Add-on Configurations
     needs: [detect-release, build-multiarch]
+    permissions:
+      contents: write
+      pull-requests: write
     
     steps:
       - name: Checkout repository
