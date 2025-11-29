@@ -2,6 +2,7 @@
 """
 ML Heating Add-on Dashboard - Phase 3 Full Implementation
 Advanced dashboard with real-time monitoring, controls, and analytics
+Supports Home Assistant ingress integration
 """
 
 import streamlit as st
@@ -11,6 +12,22 @@ from streamlit_option_menu import option_menu
 
 # Add app directory to Python path
 sys.path.append('/app')
+
+# Ingress detection and configuration
+def setup_ingress_config():
+    """Configure Streamlit for Home Assistant ingress support"""
+    ingress_path = os.environ.get('HASSIO_INGRESS_PATH', '')
+    
+    # If running under ingress, configure Streamlit appropriately
+    if ingress_path:
+        st.write("<!-- Home Assistant Ingress Mode -->")
+        # Additional ingress-specific configuration can be added here
+    
+    return ingress_path
+
+def is_ingress_mode():
+    """Check if running under Home Assistant ingress"""
+    return bool(os.environ.get('HASSIO_INGRESS_PATH'))
 
 # Import dashboard components
 try:
@@ -25,6 +42,9 @@ except ImportError:
 def main():
     """Main dashboard application"""
     
+    # Setup ingress configuration if running under Home Assistant
+    ingress_path = setup_ingress_config()
+    
     # Page configuration
     st.set_page_config(
         page_title="ML Heating Control",
@@ -32,6 +52,11 @@ def main():
         layout="wide",
         initial_sidebar_state="expanded"
     )
+    
+    # Display ingress status for debugging
+    if is_ingress_mode():
+        st.markdown("<!-- Running in Home Assistant Ingress Mode -->", 
+                   unsafe_allow_html=True)
     
     # Sidebar navigation
     with st.sidebar:

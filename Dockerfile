@@ -86,8 +86,9 @@ RUN chmod a+x /app/run.sh
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:3002/health || exit 1
 
-# Expose dashboard and health check ports
-EXPOSE 3001 3002
+# Expose health check port only (dashboard now uses ingress)
+# Development API (if enabled) will use port 3003
+EXPOSE 3002 3003
 
 # Set the entry point
 CMD ["/app/run.sh"]

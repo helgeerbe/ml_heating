@@ -321,7 +321,7 @@ def validate_dockerfile():
             'COPY run.sh',
             'COPY config_adapter.py',
             'HEALTHCHECK',
-            'EXPOSE 3001 3002',
+            'EXPOSE 3002 3003',  # Health check + optional dev API (dashboard uses ingress)
             'CMD ["/app/run.sh"]'
         ]
         

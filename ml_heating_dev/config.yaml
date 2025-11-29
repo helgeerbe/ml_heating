@@ -11,11 +11,12 @@ startup: services
 init: false
 map:
   - addon_config:rw
+ingress: true
+ingress_port: 3001
 ports:
-  3001/tcp: 3001
+  3003/tcp: 3003
 ports_description:
-  3001/tcp: "ML Heating Dashboard"
-webui: "http://[HOST]:[PORT:3001]"
+  3003/tcp: "Development API (when enabled)"
 panel_icon: mdi:heat-pump
 panel_title: "ML Heating (Dev)"
 homeassistant: 2024.1.0
