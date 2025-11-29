@@ -88,6 +88,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
           
       - name: Update configurations
         run: |
@@ -119,6 +120,9 @@ jobs:
           VERSION="${{ needs.detect-release.outputs.version }}"
           IS_ALPHA="${{ needs.detect-release.outputs.is-alpha }}"
           
+          # Switch to main branch to avoid detached HEAD
+          git checkout main
+          
           if [[ "$IS_ALPHA" == "true" ]]; then
             git add ml_heating_dev/config.yaml
             git commit -m "chore: Update development addon to version $VERSION" || exit 0
@@ -127,7 +131,7 @@ jobs:
             git commit -m "chore: Update stable addon to version $VERSION" || exit 0
           fi
           
-          git push
+          git push origin main
 
   # Stage 4: Create Release
   release:
