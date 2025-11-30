@@ -714,8 +714,8 @@ def main(args):
                 continue
 
             # --- Step 1: State Retrieval ---
-            # Retrieve the previous cycle's state for context and history.
-            prediction_history = state.get("prediction_history", [])
+            # Heat balance controller doesn't use prediction history anymore.
+            # Removed prediction_history retrieval.
 
             # --- Step 2: Feature Building ---
             # Gathers all the necessary data points (current sensor values,
@@ -749,19 +749,29 @@ def main(args):
             (
                 suggested_temp,
                 confidence,
-                prediction_history,
+                control_mode,
                 sigma,
+                trajectory_stability_score,
+                predicted_trajectory,
+                tested_outlet_range,
             ) = find_best_outlet_temp(
                 model,
                 features,
                 prediction_indoor_temp,
                 target_indoor_temp,
-                prediction_history,
                 outlet_history,
                 error_target_vs_actual,
                 outdoor_temp,
             )
             final_temp = suggested_temp
+            
+            # Log heat balance controller mode
+            logging.info(
+                "Heat Balance Controller: mode=%s, error=%.3f°C, confidence=%.3f",
+                control_mode,
+                abs(error_target_vs_actual),
+                confidence
+            )
 
             # --- Gradual Temperature Control ---
             # Final safety check to prevent abrupt setpoint jumps. Baseline
@@ -916,6 +926,21 @@ def main(args):
                             "last_prediction_time": (
                                 datetime.now(timezone.utc).isoformat()
                             ),
+                            # Heat balance controller attributes
+                            "heat_balance_mode": control_mode,
+                            "temperature_error": round(
+                                abs(error_target_vs_actual), 3
+                            ),
+                            "trajectory_stability_score": round(
+                                trajectory_stability_score, 3
+                            ),
+                            "predicted_trajectory": [
+                                round(temp, 2) for temp in predicted_trajectory
+                            ] if predicted_trajectory else [],
+                            "tested_outlet_range": [
+                                round(tested_outlet_range[0], 1),
+                                round(tested_outlet_range[1], 1),
+                            ],
                         }
                     )
                     ha_client.set_state(
@@ -1025,7 +1050,6 @@ def main(args):
                 "last_indoor_temp": actual_indoor,
                 "last_avg_other_rooms_temp": avg_other_rooms_temp,
                 "last_fireplace_on": fireplace_on,
-                "prediction_history": prediction_history,
                 "last_final_temp": final_temp,
                 "last_is_blocking": is_blocking,
                 "last_blocking_reasons": (
