@@ -252,10 +252,20 @@ def ensure_monotonic(predictions, outlet_temps):
     # Correct any violations of thermodynamic principles
 ```
 
-**Stage 3: Prediction Smoothing**
+**Stage 3: Heat Balance Controller** 🆕
 ```python
-# Exponential moving average prevents erratic changes
-smoothed_temp = SMOOTHING_ALPHA * raw_temp + (1 - SMOOTHING_ALPHA) * previous_temp
+# Intelligent 3-phase control system replaces simple smoothing
+temperature_error = abs(target_temp - current_temp)
+
+if temperature_error > CHARGING_MODE_THRESHOLD:
+    mode = "CHARGING"  # Aggressive heating (>0.5°C error)
+    outlet_temp = find_outlet_for_target(target_temp)
+elif temperature_error > MAINTENANCE_MODE_THRESHOLD:
+    mode = "BALANCING"  # Trajectory optimization (0.2-0.5°C error)
+    outlet_temp = find_stable_trajectory_outlet()
+else:
+    mode = "MAINTENANCE"  # Minimal adjustments (<0.2°C error)
+    outlet_temp = current_outlet_temp + sign(temperature_error) * 0.5
 ```
 
 **Stage 4: Dynamic Boost**

@@ -8,6 +8,8 @@ This stable channel provides production-ready ML heating control with automatic 
 
 ## Features
 
+- **Heat Balance Controller** - 🆕 **Intelligent 3-phase temperature control** (CHARGING/BALANCING/MAINTENANCE modes)
+- **Trajectory Prediction** - 4-hour thermal forecasting with oscillation prevention
 - **Physics-based ML optimization** - Intelligent heating control using real-world physics models
 - **Real-time dashboard** - Advanced analytics and performance monitoring
 - **Multi-model comparison** - Compare different heating strategies

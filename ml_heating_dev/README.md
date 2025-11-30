@@ -10,6 +10,8 @@ This development channel provides access to the latest experimental features, de
 
 ## Development Features
 
+- **Heat Balance Controller** - 🆕 **Latest intelligent 3-phase temperature control** (CHARGING/BALANCING/MAINTENANCE modes)
+- **Trajectory Prediction** - 4-hour thermal forecasting with oscillation prevention
 - **Latest experimental features** - Access cutting-edge ML improvements
 - **Debug logging enabled** - Detailed DEBUG level logging for troubleshooting
 - **Development API access** - Enable external tools and Jupyter notebooks

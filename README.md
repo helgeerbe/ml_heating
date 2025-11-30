@@ -35,8 +35,12 @@ The primary goal is to improve upon traditional heat curves by creating a **self
 
 ### Intelligent Control
 
+-   **Heat Balance Controller:** 🆕 **Intelligent 3-phase temperature control system** that replaces exponential smoothing:
+    - **Charging Mode:** Aggressive heating when far from target (error > 0.5°C)
+    - **Balancing Mode:** Trajectory stability optimization when near target (error 0.2-0.5°C)
+    - **Maintenance Mode:** Minimal adjustments when at target (error < 0.2°C)
+-   **Trajectory Prediction:** 4-hour thermal forecasting with oscillation prevention through stability scoring
 -   **Smart Rounding:** Tests both floor and ceiling temperatures, predicts outcomes, chooses the one that gets closest to target
--   **Prediction Smoothing:** Exponential moving average prevents erratic temperature jumps
 -   **Dynamic Boost:** Reacts to current temperature error to accelerate correction when needed
 -   **Gradual Temperature Control:** Limits maximum temperature change per cycle to protect heat pump from abrupt setpoint jumps
 -   **Monotonic Enforcement:** Ensures predictions respect physical reality (higher outlet temp → higher indoor temp)
