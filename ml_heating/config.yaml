@@ -123,14 +123,26 @@ options:
   log_level: "INFO"
   
   # Performance Tuning - ML model optimization parameters
-  # The smoothing factor for the exponential moving average applied to the model's temperature predictions
-  smoothing_alpha: 1.0
   # The model uses a normalized confidence in the range (0..1]. This threshold determines when the model's confidence is considered sufficient
   confidence_threshold: 0.3
   # Enable physics-based validation of model predictions
   physics_validation_enabled: true
   # Enable automatic seasonal learning using cosine/sine modulation
   seasonal_learning_enabled: true
+  
+  # Heat Balance Controller - Advanced trajectory-based control system
+  # Enable the Heat Balance Controller (replaces exponential smoothing with 3-phase trajectory optimization)
+  heat_balance_mode: true
+  # Temperature error threshold for switching from CHARGING mode to BALANCING mode (in °C)
+  charging_mode_threshold: 0.5
+  # Temperature error threshold for switching from BALANCING mode to MAINTENANCE mode (in °C) 
+  maintenance_mode_threshold: 0.2
+  # Number of hours to predict in the thermal trajectory (2-8 hours)
+  trajectory_steps: 4
+  # Penalty weight for temperature oscillations in trajectory scoring (0.0-1.0)
+  oscillation_penalty_weight: 0.3
+  # Importance multiplier for the final temperature in trajectory scoring (1.0-3.0)
+  final_destination_weight: 2.0
   
   # Advanced Learning Features - Multi-lag and seasonal learning
   # Enable time-delayed learning for external heat sources (PV, fireplace, TV)
@@ -212,10 +224,16 @@ schema:
   dev_api_key: "str"
   log_level: "list(DEBUG|INFO|WARNING|ERROR)"
   # Performance Tuning - Float and boolean types
-  smoothing_alpha: "float(0.1,2.0)"
   confidence_threshold: "float(0.1,0.95)"
   physics_validation_enabled: "bool"
   seasonal_learning_enabled: "bool"
+  # Heat Balance Controller - Boolean, float, and integer types
+  heat_balance_mode: "bool"
+  charging_mode_threshold: "float(0.1,2.0)"
+  maintenance_mode_threshold: "float(0.1,1.0)"
+  trajectory_steps: "int(2,8)"
+  oscillation_penalty_weight: "float(0.0,1.0)"
+  final_destination_weight: "float(1.0,3.0)"
   # Advanced Learning Features - Boolean, integer, and float types
   enable_multi_lag_learning: "bool"
   pv_lag_steps: "int(1,8)"
