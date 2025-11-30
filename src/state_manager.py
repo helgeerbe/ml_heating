@@ -47,7 +47,6 @@ def load_state() -> Dict[str, Any]:
         return {
             "last_run_features": None,
             "last_indoor_temp": None,
-            "prediction_history": [],
             "last_avg_other_rooms_temp": None,
             "last_fireplace_on": False,
             "last_final_temp": None,
@@ -70,7 +69,6 @@ def save_state(**kwargs: Any) -> None:
         existing = load_state() or {
             "last_run_features": None,
             "last_indoor_temp": None,
-            "prediction_history": [],
             "last_avg_other_rooms_temp": None,
             "last_fireplace_on": False,
             "last_final_temp": None,
@@ -81,7 +79,6 @@ def save_state(**kwargs: Any) -> None:
         existing = {
             "last_run_features": None,
             "last_indoor_temp": None,
-            "prediction_history": [],
             "last_avg_other_rooms_temp": None,
             "last_fireplace_on": False,
             "last_final_temp": None,

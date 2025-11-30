@@ -149,11 +149,18 @@ FIREPLACE_STATUS_ENTITY_ID: str = os.getenv(
 #   normalized confidence score (0-1) drops below this threshold, the system
 #   will fall back to the baseline temperature. A lower threshold means the
 #   system is more tolerant of model uncertainty.
-# SMOOTHING_ALPHA: The smoothing factor for the exponential moving average
-#   applied to the model's temperature predictions. A lower value (e.g., 0.1)
-#   results in more aggressive smoothing and less volatile output. A higher
-#   value (e.g., 0.8) makes the output more responsive to the latest raw
-#   prediction.
+# HEAT_BALANCE_MODE: Enable the intelligent heat balance controller that uses
+#   trajectory prediction instead of smoothing. Uses 3-phase control:
+#   Charging (>0.5°C error), Balancing (0.2-0.5°C), Maintenance (<0.2°C).
+# CHARGING_MODE_THRESHOLD: Temperature error threshold for entering charging
+#   mode vs balancing mode. Higher values make charging mode more aggressive.
+# MAINTENANCE_MODE_THRESHOLD: Temperature error threshold for entering
+#   maintenance mode vs balancing mode. Lower values activate maintenance sooner.
+# TRAJECTORY_STEPS: Number of hours to predict in trajectory optimization.
+# OSCILLATION_PENALTY_WEIGHT: Penalty applied for temperature direction changes
+#   in trajectory scoring. Higher values prioritize stability over accuracy.
+# FINAL_DESTINATION_WEIGHT: Weight given to final trajectory endpoint in
+#   scoring. Higher values prioritize long-term stability.
 # CYCLE_INTERVAL_MINUTES: The time in minutes between each full cycle of
 #   learning and prediction. A longer interval (e.g., 10-15 mins) provides a
 #   clearer learning signal, while a shorter one is more responsive.
@@ -162,7 +169,12 @@ FIREPLACE_STATUS_ENTITY_ID: str = os.getenv(
 #   abrupt changes and is required as the heatpump only accepts full degrees.
 DEBUG: bool = os.getenv("DEBUG", "0") == "1"
 CONFIDENCE_THRESHOLD: float = float(os.getenv("CONFIDENCE_THRESHOLD", "0.2"))
-SMOOTHING_ALPHA: float = float(os.getenv("SMOOTHING_ALPHA", "0.3"))
+HEAT_BALANCE_MODE: bool = os.getenv("HEAT_BALANCE_MODE", "true").lower() == "true"
+CHARGING_MODE_THRESHOLD: float = float(os.getenv("CHARGING_MODE_THRESHOLD", "0.5"))
+MAINTENANCE_MODE_THRESHOLD: float = float(os.getenv("MAINTENANCE_MODE_THRESHOLD", "0.2"))
+TRAJECTORY_STEPS: int = int(os.getenv("TRAJECTORY_STEPS", "4"))
+OSCILLATION_PENALTY_WEIGHT: float = float(os.getenv("OSCILLATION_PENALTY_WEIGHT", "0.3"))
+FINAL_DESTINATION_WEIGHT: float = float(os.getenv("FINAL_DESTINATION_WEIGHT", "2.0"))
 CYCLE_INTERVAL_MINUTES: int = int(os.getenv("CYCLE_INTERVAL_MINUTES", "10"))
 MAX_TEMP_CHANGE_PER_CYCLE: int = int(
     os.getenv("MAX_TEMP_CHANGE_PER_CYCLE", "2")
