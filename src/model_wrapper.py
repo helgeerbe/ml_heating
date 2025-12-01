@@ -594,26 +594,39 @@ def find_best_outlet_temp(
                 )
                 
     else:  # MAINTENANCE mode
-        # Maintenance mode: Minimal adjustments
-        logging.info("MAINTENANCE mode: Using minimal adjustments")
+        # Maintenance mode: Minimal adjustments with dead band for perfect temperature
+        logging.info("MAINTENANCE mode: Using minimal adjustments with dead band")
         
         # Calculate adjustment with detailed logging
         temperature_error = current_temp - target_temp
-        adjustment = 0.5 if current_temp < target_temp else -0.5
-        new_outlet_temp = last_outlet_temp + adjustment
+        
+        # Dead band: if error is essentially zero, keep outlet temp as is
+        if abs(temperature_error) < 0.01:  # Within 0.01°C = essentially perfect
+            adjustment = 0.0
+            new_outlet_temp = last_outlet_temp
+            action_reason = "perfect temperature (dead band)"
+        elif current_temp < target_temp:
+            adjustment = 0.5
+            new_outlet_temp = last_outlet_temp + adjustment
+            action_reason = "too cold"
+        else:
+            adjustment = -0.5
+            new_outlet_temp = last_outlet_temp + adjustment
+            action_reason = "too warm"
         
         # Debug: log maintenance mode decision process
         if logging.getLogger().isEnabledFor(logging.INFO):
             logging.info("Complete maintenance mode analysis:")
             logging.info(f"  - Current indoor: {current_temp:.2f}°C")
             logging.info(f"  - Target: {target_temp:.1f}°C") 
-            error_status = ('too cold' if temperature_error < 0 
-                           else 'too warm')
             logging.info(f"  - Error: {temperature_error:.3f}°C "
-                        f"({error_status})")
+                        f"({action_reason})")
             logging.info(f"  - Last outlet: {last_outlet_temp:.1f}°C")
-            logging.info(f"  - Adjustment: {adjustment:+.1f}°C → "
-                         f"New outlet: {new_outlet_temp:.1f}°C")
+            if adjustment == 0.0:
+                logging.info(f"  - Action: Keep as is (dead band)")
+            else:
+                logging.info(f"  - Adjustment: {adjustment:+.1f}°C → "
+                             f"New outlet: {new_outlet_temp:.1f}°C")
             logging.info(f"  - Clamping range: "
                          f"[{min_search_temp:.1f}°C - "
                          f"{max_search_temp:.1f}°C]")
