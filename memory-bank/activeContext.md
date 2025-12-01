@@ -8,6 +8,14 @@
 
 ### Recently Completed Work
 
+#### ✅ NOTEBOOK 07 BUG FIX (December 1, 2025)
+**Issue #18 Resolution**: Fixed critical sensor name bug in Heat Balance Controller monitoring notebook
+- ✅ **Sensor Name Corrected**: Changed `ml_heating_mode` to `ml_control_mode` in data collection functions
+- ✅ **Enhanced Error Handling**: Added robust fallback mechanisms for missing Heat Balance Controller data  
+- ✅ **Improved Documentation**: Clear notes about the fix and expected behavior for new deployments
+- ✅ **Git Commit Created**: Proper commit with issue reference for automatic GitHub issue closure
+- ✅ **Production Ready**: Notebook now works reliably with both existing and new Heat Balance Controller deployments
+
 #### ✅ PHASE 11: DOCUMENTATION FINALIZATION (December 1, 2025)
 - ✅ All memory bank files synchronized with Phase 10 completion
 - ✅ Main README.md updated with Heat Balance Controller features
