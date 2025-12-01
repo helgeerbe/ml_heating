@@ -170,8 +170,8 @@ FIREPLACE_STATUS_ENTITY_ID: str = os.getenv(
 DEBUG: bool = os.getenv("DEBUG", "0") == "1"
 CONFIDENCE_THRESHOLD: float = float(os.getenv("CONFIDENCE_THRESHOLD", "0.2"))
 HEAT_BALANCE_MODE: bool = os.getenv("HEAT_BALANCE_MODE", "true").lower() == "true"
-CHARGING_MODE_THRESHOLD: float = float(os.getenv("CHARGING_MODE_THRESHOLD", "0.5"))
-MAINTENANCE_MODE_THRESHOLD: float = float(os.getenv("MAINTENANCE_MODE_THRESHOLD", "0.2"))
+CHARGING_MODE_THRESHOLD: float = float(os.getenv("CHARGING_MODE_THRESHOLD", "0.2"))
+MAINTENANCE_MODE_THRESHOLD: float = float(os.getenv("MAINTENANCE_MODE_THRESHOLD", "0.1"))
 TRAJECTORY_STEPS: int = int(os.getenv("TRAJECTORY_STEPS", "4"))
 OSCILLATION_PENALTY_WEIGHT: float = float(os.getenv("OSCILLATION_PENALTY_WEIGHT", "0.3"))
 FINAL_DESTINATION_WEIGHT: float = float(os.getenv("FINAL_DESTINATION_WEIGHT", "2.0"))

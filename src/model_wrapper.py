@@ -227,6 +227,98 @@ def predict_thermal_trajectory(
     return trajectory
 
 
+def apply_smart_rounding(
+    before_rounding: float,
+    model: RealisticPhysicsModel,
+    x_base: dict,
+    current_temp: float,
+    target_temp: float,
+    last_outlet_temp: float,
+    outdoor_temp: float
+) -> float:
+    """
+    Smart Rounding: Test both floor and ceiling to see which gets closer
+    to target indoor temperature.
+    
+    Tests floor vs ceiling temperatures and chooses the one that results
+    in predicted indoor temperature closer to target. This compensates for
+    heat pump truncation while optimizing for target achievement.
+    
+    Args:
+        before_rounding: Optimal outlet temperature before rounding
+        model: The RealisticPhysicsModel instance
+        x_base: Base feature dictionary for predictions
+        current_temp: Current indoor temperature
+        target_temp: Target indoor temperature
+        last_outlet_temp: Previous outlet temperature for change calculation
+        outdoor_temp: Current outdoor temperature
+        
+    Returns:
+        Smart rounded outlet temperature (integer)
+    """
+    floor_temp = np.floor(before_rounding)
+    ceiling_temp = np.ceil(before_rounding)
+    
+    if floor_temp == ceiling_temp:
+        # Already an integer
+        after_rounding = floor_temp
+        logging.debug(
+            f"Smart rounding: {before_rounding:.2f}°C is already integer"
+        )
+    else:
+        # Test both options and pick the one that gets closer to target
+        floor_features = x_base.copy()
+        floor_features.update({
+            "outlet_temp": floor_temp,
+            "outlet_temp_sq": floor_temp ** 2,
+            "outlet_temp_cub": floor_temp ** 3,
+            "outlet_temp_change_from_last": floor_temp - last_outlet_temp,
+            "outlet_indoor_diff": floor_temp - current_temp,
+            "outdoor_temp_x_outlet_temp": (
+                floor_features.get("outdoor_temp", outdoor_temp) *
+                floor_temp
+            ),
+        })
+        
+        ceiling_features = x_base.copy()
+        ceiling_features.update({
+            "outlet_temp": ceiling_temp,
+            "outlet_temp_sq": ceiling_temp ** 2,
+            "outlet_temp_cub": ceiling_temp ** 3,
+            "outlet_temp_change_from_last": ceiling_temp - last_outlet_temp,
+            "outlet_indoor_diff": ceiling_temp - current_temp,
+            "outdoor_temp_x_outlet_temp": (
+                ceiling_features.get("outdoor_temp", outdoor_temp) *
+                ceiling_temp
+            ),
+        })
+        
+        floor_delta = model.predict_one(floor_features)
+        ceiling_delta = model.predict_one(ceiling_features)
+        
+        floor_predicted_indoor = current_temp + floor_delta
+        ceiling_predicted_indoor = current_temp + ceiling_delta
+        
+        floor_error = abs(floor_predicted_indoor - target_temp)
+        ceiling_error = abs(ceiling_predicted_indoor - target_temp)
+        
+        if floor_error <= ceiling_error:
+            after_rounding = floor_temp
+            chosen = "floor"
+        else:
+            after_rounding = ceiling_temp
+            chosen = "ceiling"
+        
+        logging.info(
+            f"Smart rounding: {before_rounding:.2f}°C → "
+            f"{after_rounding:.0f}°C (chose {chosen}: "
+            f"floor→{floor_predicted_indoor:.2f}°C [err={floor_error:.2f}], "
+            f"ceiling→{ceiling_predicted_indoor:.2f}°C "
+            f"[err={ceiling_error:.2f}], target={target_temp:.1f}°C)"
+        )
+    
+    return after_rounding
+
 def evaluate_trajectory_stability(trajectory: list[float], target_temp: float) -> float:
     """
     Evaluate the stability of a temperature trajectory using hybrid scoring.
@@ -299,9 +391,9 @@ def find_best_outlet_temp(
     Heat Balance Controller: Find optimal outlet temperature using trajectory prediction.
     
     Replaces smoothing-based approach with intelligent 3-phase control:
-    - CHARGING: Aggressive heating when far from target (>0.5°C error)
-    - BALANCING: Trajectory stability optimization (0.2-0.5°C error)  
-    - MAINTENANCE: Minimal adjustments when at target (<0.2°C error)
+    - CHARGING: Aggressive heating when far from target (>0.2°C error)
+    - BALANCING: Trajectory stability optimization (0.1-0.2°C error)  
+    - MAINTENANCE: Minimal adjustments when at target (<0.1°C error)
     
     Args:
         model: The RealisticPhysicsModel instance
@@ -456,6 +548,9 @@ def find_best_outlet_temp(
         # Balancing mode: Use trajectory stability optimization
         logging.info("BALANCING mode: Using trajectory stability optimization")
         
+        # Store all candidates and their details for logging
+        trajectory_candidates = {}
+        
         for temp_candidate in search_range:
             trajectory = predict_thermal_trajectory(
                 model, features, temp_candidate, steps=config.TRAJECTORY_STEPS
@@ -464,22 +559,67 @@ def find_best_outlet_temp(
                 trajectory, target_temp
             )
             
+            # Store for logging
+            trajectory_candidates[temp_candidate] = {
+                'trajectory': trajectory,
+                'stability_score': stability_score
+            }
+            
             if stability_score < best_score:
                 best_score = stability_score
                 best_outlet_temp = temp_candidate
                 best_trajectory = trajectory
+        
+        # Debug: log complete search range with trajectory analysis
+        if logging.getLogger().isEnabledFor(logging.INFO):
+            logging.info("Complete trajectory analysis for balancing mode:")
+            for temp_candidate in sorted(trajectory_candidates.keys()):
+                candidate_data = trajectory_candidates[temp_candidate]
+                trajectory = candidate_data['trajectory']
+                stability_score = candidate_data['stability_score']
+                final_temp = trajectory[-1] if trajectory else 0.0
+                logging.info(
+                    f"  - Test {temp_candidate:.1f}°C -> "
+                    f"Trajectory: {[f'{t:.1f}' for t in trajectory]} -> "
+                    f"Final: {final_temp:.1f}°C, "
+                    f"Stability: {stability_score:.3f}"
+                )
                 
     else:  # MAINTENANCE mode
         # Maintenance mode: Minimal adjustments
         logging.info("MAINTENANCE mode: Using minimal adjustments")
         
-        # Small adjustment toward target
+        # Calculate adjustment with detailed logging
+        temperature_error = current_temp - target_temp
         adjustment = 0.5 if current_temp < target_temp else -0.5
+        new_outlet_temp = last_outlet_temp + adjustment
+        
+        # Debug: log maintenance mode decision process
+        if logging.getLogger().isEnabledFor(logging.INFO):
+            logging.info("Complete maintenance mode analysis:")
+            logging.info(f"  - Current indoor: {current_temp:.2f}°C")
+            logging.info(f"  - Target: {target_temp:.1f}°C") 
+            error_status = ('too cold' if temperature_error < 0 
+                           else 'too warm')
+            logging.info(f"  - Error: {temperature_error:.3f}°C "
+                        f"({error_status})")
+            logging.info(f"  - Last outlet: {last_outlet_temp:.1f}°C")
+            logging.info(f"  - Adjustment: {adjustment:+.1f}°C → "
+                         f"New outlet: {new_outlet_temp:.1f}°C")
+            logging.info(f"  - Clamping range: "
+                         f"[{min_search_temp:.1f}°C - "
+                         f"{max_search_temp:.1f}°C]")
+        
         best_outlet_temp = np.clip(
-            last_outlet_temp + adjustment,
+            new_outlet_temp,
             min_search_temp,
             max_search_temp
         )
+        
+        # Log if clamping occurred
+        if best_outlet_temp != new_outlet_temp:
+            logging.info(f"  - Clamped outlet: {new_outlet_temp:.1f}°C → {best_outlet_temp:.1f}°C")
+        
         best_score = abs(current_temp - target_temp)
         best_trajectory = [current_temp]
     
@@ -488,12 +628,21 @@ def find_best_outlet_temp(
         best_outlet_temp = last_outlet_temp
         logging.warning("No optimal temperature found, using last outlet temp")
     
-    # Round to nearest 0.5°C for practical implementation
-    final_outlet_temp = round(best_outlet_temp * 2) / 2
+    # Apply Smart Rounding (before final clamping)
+    x_base = features.to_dict(orient="records")[0]
+    smart_rounded_temp = apply_smart_rounding(
+        best_outlet_temp,
+        model,
+        x_base,
+        current_temp,
+        target_temp,
+        last_outlet_temp,
+        outdoor_temp
+    )
     
-    # Apply final clamping
+    # Apply final clamping (safety net)
     final_outlet_temp = np.clip(
-        final_outlet_temp, config.CLAMP_MIN_ABS, config.CLAMP_MAX_ABS
+        smart_rounded_temp, config.CLAMP_MIN_ABS, config.CLAMP_MAX_ABS
     )
     
     logging.info(
