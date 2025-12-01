@@ -116,13 +116,39 @@ def get_feature_importances(model):
         return feature_importances
 print("  ✓ get_feature_importances")
 
-# Create mock functions for other imports if needed
-def create_influx_service():
-    print("Note: InfluxDB service not available in notebook mode")
-    return None
+# Import real InfluxDB service for notebooks
+try:
+    from src import influx_service
+    # Expose the real InfluxDB service
+    create_influx_service = influx_service.create_influx_service
+    InfluxService = influx_service.InfluxService
+    print("  ✓ influx_service")
+except Exception as e:
+    print(f"⚠️ Error importing influx_service: {e}")
+    # Fallback mock function if import fails
+    def create_influx_service():
+        print("Note: InfluxDB service not available - import failed")
+        return None
+    
+    class InfluxService:
+        def __init__(self, *args, **kwargs):
+            print("Note: InfluxDB service not available - using mock")
 
+# Create mock HA client for notebooks (not needed for monitoring)
 class HAClient:
     def __init__(self):
         print("Note: HA client not available in notebook mode")
 
+def strip_entity_domain(entity_id):
+    """Strip domain prefix from entity ID like the core system does.
+    
+    Args:
+        entity_id (str): Full entity ID like 'sensor.thermometer_wohnzimmer_kompensiert'
+        
+    Returns:
+        str: Stripped entity ID like 'thermometer_wohnzimmer_kompensiert'
+    """
+    return entity_id.split(".", 1)[-1]
+
+print("  ✓ strip_entity_domain utility function")
 print("✅ Successfully loaded ml_heating modules for notebooks")

@@ -11,8 +11,55 @@
 │ - Sensors       │      │                  │      │ - Historical    │
 │ - Controls      │      │ - Physics Model  │      │   Data          │
 │ - Metrics       │      │ - Online Learning│      │ - Features      │
-└─────────────────┘      │ - Optimization   │      └─────────────────┘
-                         └──────────────────┘
+│ - Notebooks     │      │ - Optimization   │      │ - Analytics     │
+└─────────────────┘      └──────────────────┘      └─────────────────┘
+```
+
+### Notebook Data Access Architecture
+
+The system includes 7 Jupyter notebooks for analysis and monitoring, each requiring access to historical data stored in InfluxDB. A critical design pattern has emerged for reliable data access:
+
+**Proven Data Access Pattern** (Used by notebooks 00-06 and fixed 07):
+```python
+# CORRECT: Use influx_service.fetch_history() method
+influx = influx_service.InfluxService(url=config.INFLUX_URL, token=config.INFLUX_TOKEN, org=config.INFLUX_ORG)
+ml_confidence_data = influx.fetch_history('sensor.ml_model_confidence', steps, 0.0, agg_fn='mean')
+```
+
+**Anti-Pattern** (Broken approach found in original notebook 07):
+```python
+# INCORRECT: Direct InfluxDB Flux queries fail in notebook environment
+result = influx.query_api.query_data_frame(flux_query)  # Returns empty results
+```
+
+**Why the Pattern Works**:
+- **Entity ID Handling**: `fetch_history()` automatically strips domain prefixes (`sensor.name` → `name`)
+- **Aggregation**: Built-in aggregation functions (`mean`, `last`, etc.) handle data properly
+- **Error Handling**: Graceful fallback to default values when data unavailable
+- **Consistency**: Same method used across all working notebooks and core system
+
+**Pattern Implementation**:
+```python
+def get_real_data_correctly():
+    try:
+        # Calculate data points needed
+        steps = int((hours_back * 60) / config.HISTORY_STEP_MINUTES)
+        
+        # Use proven fetch_history method
+        confidence_data = influx.fetch_history('sensor.ml_model_confidence', steps, 0.0, agg_fn='mean')
+        temperature_data = influx.fetch_history(config.INDOOR_TEMP_ENTITY_ID, steps, 21.0, agg_fn='mean')
+        
+        if not any([confidence_data, temperature_data]):
+            print("⚠️ No data found - falling back to demo")
+            return generate_demo_data()
+            
+        # Create time-indexed DataFrame
+        time_index = pd.date_range(start=start_time, end=end_time, periods=steps)
+        return pd.DataFrame({'confidence': confidence_data, 'temperature': temperature_data}, index=time_index)
+        
+    except Exception as e:
+        print(f"Error: {e} - using demo data")
+        return generate_demo_data()
 ```
 
 ### Core Components

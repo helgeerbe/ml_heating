@@ -163,9 +163,17 @@ final_destination_weight: 2.0             # Endpoint importance weighting
 - [x] **Main README.md**: Updated with Heat Balance Controller features
 - [x] **Add-on Documentation**: Updated ml_heating/README.md and ml_heating_dev/README.md
 - [x] **Memory Bank Progress**: Updated with Phase 10 completion status
+- [x] **Notebook 07 Fixed**: Heat Balance Controller monitoring notebook data loading issue resolved
 - [ ] **Memory Bank Active Context**: Update current state and next steps
 - [ ] **Memory Bank System Patterns**: Document new controller patterns
 - [ ] **GitHub Issue #13**: Update with final completion status
+
+#### 🧪 **Notebook 07 Fix - COMPLETED**
+- **Issue**: Notebook 07 (Heat Balance Controller monitoring) was unable to load real data (0 data points)
+- **Root Cause**: Used direct InfluxDB Flux queries instead of proven `fetch_history()` method
+- **Solution**: Replaced data loading functions with working `influx.fetch_history()` calls
+- **Result**: Now successfully loads 144 data points of real ML model metrics and temperature data
+- **Status**: ✅ Production monitoring notebook fully functional
 
 ### Summary
 

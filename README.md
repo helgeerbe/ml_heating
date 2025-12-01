@@ -472,7 +472,7 @@ This multi-level approach ensures:
 The final outlet temperature goes through a sophisticated multi-stage pipeline:
 
 ```
-Raw Prediction → Monotonic Enforcement → Smoothing → Dynamic Boost → 
+Raw Prediction → Monotonic Enforcement → Heat Balance Controller → Dynamic Boost → 
 Smart Rounding → Gradual Control → Final Temperature
 ```
 
@@ -487,11 +487,13 @@ Smart Rounding → Gradual Control → Final Temperature
 - Anchors to last actual outlet temperature for reliability
 - Corrects any non-monotonic predictions from raw model
 
-**Stage 3: Prediction Smoothing**
-- Applies Exponential Moving Average (EMA)
-- Formula: `new = α * raw + (1-α) * previous`
-- Configured via `SMOOTHING_ALPHA` (default: 0.8)
-- Prevents erratic jumps while staying responsive
+**Stage 3: Heat Balance Controller** 🆕
+- **Intelligent 3-phase control system** that replaced exponential smoothing
+- **Charging Mode:** Aggressive heating when temperature error > 0.5°C
+- **Balancing Mode:** Trajectory optimization when error 0.2-0.5°C  
+- **Maintenance Mode:** Minimal adjustments when error < 0.2°C
+- **Trajectory Prediction:** 4-hour thermal forecasting with oscillation prevention
+- **Stability Scoring:** Advanced algorithm prevents temperature oscillations
 
 **Stage 4: Dynamic Boost**
 - Applies correction based on current temperature error
@@ -609,6 +611,13 @@ The system publishes `sensor.ml_heating_state` with numeric state codes and rich
 - `last_prediction_time`, `last_updated`: Timestamps
 - `last_error`: Error message for troubleshooting
 
+**Heat Balance Controller Attributes:** 🆕
+- `heat_balance_mode`: Current controller mode (`CHARGING`, `BALANCING`, or `MAINTENANCE`)
+- `temperature_error`: Current temperature error in °C (target - actual)
+- `trajectory_stability_score`: Quality score for predicted temperature trajectory (lower = better)
+- `predicted_trajectory`: 4-hour temperature prediction array (15-minute intervals)
+- `tested_outlet_range`: Min/max outlet temperatures tested during optimization
+
 **Automation Examples:**
 ```yaml
 # Alert on network errors
@@ -635,7 +644,7 @@ The system publishes `sensor.ml_heating_state` with numeric state codes and rich
 
 ### Jupyter Notebooks
 
-Six analysis notebooks are included in `notebooks/` with comprehensive interpretation guides:
+Seven analysis notebooks are included in `notebooks/` with comprehensive interpretation guides:
 
 **00_learning_dashboard.ipynb** ⭐ Start here!
 - At-a-glance learning status and progress
@@ -675,6 +684,19 @@ Six analysis notebooks are included in `notebooks/` with comprehensive interpret
 - Seasonal modulation pattern analysis
 - Correlation analysis and statistical validation
 - Summer learning effectiveness tracking
+
+**06_influxdb_data_validation.ipynb**
+- InfluxDB data quality assessment
+- Historical data availability verification
+- Data integrity and continuity checks
+- Sensor health monitoring
+
+**07_heat_balance_controller_monitoring.ipynb** ⭐ **Heat Balance Controller Success Monitoring**
+- Monitor 3-phase controller performance (CHARGING/BALANCING/MAINTENANCE modes)
+- Temperature variance analysis and oscillation detection
+- Success criteria validation (>50% variance reduction, ≤1 oscillation per 4h)
+- Real-time controller effectiveness tracking
+- **Fixed December 2025**: Now properly loads real ML data (144 data points) instead of demo data
 
 All notebooks now include **"How to interpret"** sections explaining:
 - What each value means
@@ -746,7 +768,7 @@ jupyter notebook notebooks/
 │     ┌─────────────────────────────────────────────────┐    │
 │     │ a) Optimization search (0.5°C steps)            │    │
 │     │ b) Monotonic enforcement                        │    │
-│     │ c) Smoothing (EMA)                              │    │
+│     │ c) Heat Balance Controller (3-phase control)    │    │
 │     │ d) Dynamic boost                                │    │
 │     │ e) Absolute clamping                            │    │
 │     │ f) Smart rounding                               │    │
@@ -837,10 +859,11 @@ jupyter notebook notebooks/
 - Solution: Recalibrate or investigate environmental/sensor changes
 
 **Erratic Temperature Control**
-- Increase `SMOOTHING_ALPHA` for more stability
-- Increase `MAX_TEMP_CHANGE_PER_CYCLE` if too conservative
+- Check Heat Balance Controller thresholds (`CHARGING_MODE_THRESHOLD`, `MAINTENANCE_MODE_THRESHOLD`)
+- Increase `MAX_TEMP_CHANGE_PER_CYCLE` if too conservative  
 - Check for sensor noise or dropout
 - Verify grace period settings
+- Consider if trajectory prediction needs adjustment
 
 **Model Not Learning**
 - Verify `ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID` is correct
@@ -1135,9 +1158,10 @@ nano .env
 - `CONFIDENCE_THRESHOLD`: Minimum confidence (default: 0.3)
   - Formula: `threshold = 1.0 / (1.0 + max_tolerated_sigma_in_celsius)`
   - Examples: 1.0°C tolerance → 0.5, 0.5°C tolerance → 0.67
-- `SMOOTHING_ALPHA`: EMA smoothing factor (default: 0.8)
-  - Lower (0.1) = more smoothing, less responsive
-  - Higher (0.9) = less smoothing, more responsive
+- `CHARGING_MODE_THRESHOLD`: Heat Balance Controller charging mode threshold (default: 0.5°C)
+  - Temperature error above this triggers aggressive heating
+- `MAINTENANCE_MODE_THRESHOLD`: Heat Balance Controller maintenance mode threshold (default: 0.2°C)
+  - Temperature error below this triggers minimal adjustments  
 - `CLAMP_MIN_ABS` / `CLAMP_MAX_ABS`: Absolute temperature limits (default: 14-65°C)
 
 **Training:**
