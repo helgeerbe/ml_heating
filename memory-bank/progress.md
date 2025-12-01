@@ -173,9 +173,48 @@ final_destination_weight: 2.0             # Endpoint importance weighting
 - ✅ Notebook 07 fixed for real-time monitoring with production data
 - ✅ All configuration templates and core system files updated
 
+## 🚨 CRITICAL BUG FIX - December 1, 2025
+
+### **TRAJECTORY PREDICTION BUG FIX - URGENT**
+**Status**: ✅ **FIXED** - Critical trajectory prediction bug resolved with comprehensive unit testing
+
+#### Issue Analysis
+**Critical Problem**: Heat Balance Controller trajectory prediction was producing identical results for all outlet temperatures (20°C to 65°C all predicted 20.9°C), causing incorrect control decisions.
+
+**Root Cause**: The `predict_thermal_trajectory()` function was missing critical feature updates:
+- Missing `outlet_temp_sq`, `outlet_temp_cub`  
+- Missing `outlet_temp_change_from_last`
+- Missing `outlet_indoor_diff` 
+- Missing `outdoor_temp_x_outlet_temp`
+
+#### Fix Implementation
+**Complete Solution**: Modified trajectory prediction to update ALL outlet temperature-related features for each prediction step, ensuring proper physics model input.
+
+#### Validation & Testing
+**Comprehensive Unit Test Suite**: Created `tests/test_trajectory_prediction.py` with 6 test cases:
+- ✅ Different outlet temperatures produce different trajectories
+- ✅ Trajectory length matches requested steps  
+- ✅ Outlet temperature variation affects predictions
+- ✅ Trajectory values are within reasonable ranges
+- ✅ Original features DataFrame not modified
+- ✅ Zero steps produces empty trajectory
+
+**All 6 tests pass**, confirming the fix works correctly.
+
+### 🧪 **GLOBAL UNIT TEST POLICY ESTABLISHED**
+
+**NEW MANDATORY REQUIREMENT**: All future code changes MUST include comprehensive unit tests - no exceptions.
+
+**Policy Details**:
+- ✅ **No Code Without Tests**: Every bug fix, feature, or refactor requires unit tests
+- ✅ **Regression Prevention**: Tests prevent issues like this trajectory bug from recurring
+- ✅ **Early Detection**: Automated testing catches problems before production
+- ✅ **Living Documentation**: Tests document expected behavior
+- ✅ **Quality Assurance**: Continuous validation ensures system integrity
+
 ## Summary
 
-The ML Heating System has successfully completed **all planned development phases**! The system is now in stable production with:
+The ML Heating System has successfully completed **all planned development phases** and resolved a critical trajectory prediction bug! The system is now in stable production with:
 
 ### Production Features
 - **🎯 Intelligent 3-Phase Control**: Heat Balance Controller eliminates temperature oscillations

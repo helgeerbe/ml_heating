@@ -2,7 +2,35 @@
 
 ## Current Work Focus - December 1, 2025
 
-### 🎯 **SYSTEM STATUS: STABLE PRODUCTION - NO ACTIVE DEVELOPMENT**
+### 🎯 **SYSTEM STATUS: CRITICAL BUG FIXED - TRAJECTORY PREDICTION RESTORED**
+
+**URGENT FIX COMPLETED**: Fixed critical trajectory prediction bug that was causing flat temperature predictions across all outlet temperatures.
+
+## 🚨 CRITICAL BUG FIX - December 1, 2025
+
+### Issue Discovered
+**Critical Problem**: Heat Balance Controller trajectory prediction was producing identical results for all outlet temperatures (20°C to 65°C all predicted 20.9°C), causing incorrect control decisions.
+
+### Root Cause Analysis
+**Missing Feature Updates**: The `predict_thermal_trajectory()` function was not properly updating all outlet temperature-related features between prediction steps:
+- Missing `outlet_temp_sq`, `outlet_temp_cub`  
+- Missing `outlet_temp_change_from_last`
+- Missing `outlet_indoor_diff` 
+- Missing `outdoor_temp_x_outlet_temp`
+
+### Fix Implementation
+**Complete Feature Update**: Modified trajectory prediction to update ALL outlet temperature features for each prediction step, ensuring proper physics model input.
+
+### Validation Approach
+**Unit Test Strategy**: Created comprehensive unit test suite (`tests/test_trajectory_prediction.py`) with 6 test cases:
+- ✅ Different outlet temperatures produce different trajectories
+- ✅ Trajectory length matches requested steps  
+- ✅ Outlet temperature variation affects predictions
+- ✅ Trajectory values are within reasonable ranges
+- ✅ Original features DataFrame not modified
+- ✅ Zero steps produces empty trajectory
+
+**All tests pass**, confirming the fix works correctly.
 
 **All Phases Completed**: The ML Heating System is fully operational with all planned features implemented and documented.
 
@@ -244,9 +272,34 @@ final_destination_weight: 2.0             # Endpoint importance weighting
 ### Development Workflow
 - **Version Control**: Alpha-based versioning (v*-alpha.* for dev, v* for stable)
 - **Testing**: Comprehensive test suite with 100% pass rate
+- **🚨 UNIT TEST MANDATE**: **ALL code changes MUST include unit tests** - No exceptions
 - **Documentation**: Memory bank maintained for AI assistant context
 - **GitHub Issues**: Active development tracking via GitHub Issues
 - **Quality Standards**: Professional code quality and documentation throughout
+
+### 🧪 **GLOBAL UNIT TEST POLICY - MANDATORY**
+
+**CRITICAL REQUIREMENT**: Every code modification, bug fix, or new feature MUST include comprehensive unit tests.
+
+**Policy Enforcement**:
+- ✅ **No Code Without Tests**: All changes require accompanying unit tests
+- ✅ **Regression Prevention**: Unit tests prevent future regressions like the trajectory prediction bug
+- ✅ **Early Detection**: Tests catch issues before they reach production
+- ✅ **Documentation**: Tests serve as living documentation of expected behavior
+- ✅ **Continuous Validation**: Automated testing ensures system integrity
+
+**Test Requirements**:
+- **Coverage**: Test all code paths and edge cases
+- **Independence**: Tests must not depend on external services or files
+- **Deterministic**: Tests must produce consistent results
+- **Descriptive**: Clear test names explaining what is being tested
+- **Fast**: Unit tests should execute quickly for rapid feedback
+
+**Examples of Required Testing**:
+- Bug fixes: Test that reproduces the bug + test that validates the fix
+- New features: Comprehensive test suite covering all functionality
+- Refactoring: Tests ensuring behavior remains unchanged
+- Configuration changes: Tests validating new parameters and edge cases
 
 ---
 

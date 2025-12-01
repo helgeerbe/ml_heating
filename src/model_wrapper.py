@@ -182,11 +182,6 @@ def predict_thermal_trajectory(
     trajectory = []
     current_features = features.to_dict(orient="records")[0].copy()
     
-    # Set the test outlet temperature and related features
-    current_features['outlet_temp'] = outlet_temp
-    current_features['outlet_temp_sq'] = outlet_temp ** 2
-    current_features['outlet_temp_cub'] = outlet_temp ** 3
-    
     # Get forecast arrays from current features
     temp_forecasts = [
         current_features.get('temp_forecast_1h', 0.0),
@@ -204,8 +199,20 @@ def predict_thermal_trajectory(
     
     # Current indoor temperature from features
     current_indoor = current_features.get('indoor_temp_lag_30m', 20.0)
+    last_outlet_temp = current_features.get('outlet_temp', 35.0)
+    outdoor_temp = current_features.get('outdoor_temp', 10.0)
     
     for step in range(steps):
+        # Set the test outlet temperature and ALL related features
+        current_features.update({
+            'outlet_temp': outlet_temp,
+            'outlet_temp_sq': outlet_temp ** 2,
+            'outlet_temp_cub': outlet_temp ** 3,
+            'outlet_temp_change_from_last': outlet_temp - last_outlet_temp,
+            'outlet_indoor_diff': outlet_temp - current_indoor,
+            'outdoor_temp_x_outlet_temp': outdoor_temp * outlet_temp,
+        })
+        
         # Predict temperature delta for this step
         predicted_delta = model.predict_one(current_features)
         predicted_indoor = current_indoor + predicted_delta
@@ -214,6 +221,7 @@ def predict_thermal_trajectory(
         # Update features for next prediction step
         current_indoor = predicted_indoor
         current_features['indoor_temp_lag_30m'] = predicted_indoor
+        last_outlet_temp = outlet_temp  # For next iteration's change calculation
         
         # Update forecasts for next hour
         if step < len(temp_forecasts) - 1:
