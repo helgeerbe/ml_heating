@@ -26,9 +26,19 @@ load_dotenv()
 
 # --- API Credentials and Endpoints ---
 # This section contains the connection details for external services.
-# For Home Assistant addon, uses internal supervisor API by default.
-HASS_URL: str = os.getenv("HASS_URL", "http://supervisor/core")
-HASS_TOKEN: str = os.getenv("SUPERVISOR_TOKEN", "").strip()
+# Detect if running in Home Assistant addon environment
+def _is_addon_environment():
+    """Detect if running in Home Assistant addon environment."""
+    return os.getenv("SUPERVISOR_TOKEN") is not None
+
+# For Home Assistant addon, uses internal supervisor API; for standalone, uses .env
+if _is_addon_environment():
+    HASS_URL: str = os.getenv("HASS_URL", "http://supervisor/core")
+    HASS_TOKEN: str = os.getenv("SUPERVISOR_TOKEN", "").strip()
+else:
+    HASS_URL: str = os.getenv("HASS_URL", "http://localhost:8123")
+    HASS_TOKEN: str = os.getenv("HASS_TOKEN", "").strip()
+
 HASS_HEADERS: dict[str, str] = {
     "Authorization": f"Bearer {HASS_TOKEN}",
     "Content-Type": "application/json",
@@ -42,11 +52,15 @@ INFLUX_FEATURES_BUCKET: str = os.getenv("INFLUX_FEATURES_BUCKET", "ml_heating_fe
 
 # --- File Paths ---
 # Defines where the application's persistent data is stored.
-# For Home Assistant addon, uses /data/ directory structure by default.
+# For Home Assistant addon, uses /data/ directory; for standalone, uses current directory.
 # MODEL_FILE: The trained machine learning model.
 # STATE_FILE: The application's state, like prediction history.
-MODEL_FILE: str = os.getenv("MODEL_FILE_PATH", "/data/models/ml_model.pkl")
-STATE_FILE: str = os.getenv("STATE_FILE_PATH", "/data/models/ml_state.pkl")
+if _is_addon_environment():
+    MODEL_FILE: str = os.getenv("MODEL_FILE_PATH", "/data/models/ml_model.pkl")
+    STATE_FILE: str = os.getenv("STATE_FILE_PATH", "/data/models/ml_state.pkl")
+else:
+    MODEL_FILE: str = os.getenv("MODEL_FILE", "/opt/ml_heating/ml_model.pkl")
+    STATE_FILE: str = os.getenv("STATE_FILE", "/opt/ml_heating/ml_state.pkl")
 
 # --- Model & History Parameters ---
 # These parameters control the time windows for feature creation and prediction.
