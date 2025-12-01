@@ -240,3 +240,13 @@ ENABLE_SUMMER_LEARNING: bool = (
 # - System learns from heat curve's actual control decisions
 # - Performance comparison logging between ML vs heat curve
 SHADOW_MODE: bool = os.getenv("SHADOW_MODE", "false").lower() == "true"
+
+# --- ML Heating Control Entity ---
+# ML_HEATING_CONTROL_ENTITY_ID: HA input_boolean to enable/disable ML control
+# - When ON: ML actively controls heating (Active Mode)
+# - When OFF: Shadow mode (ML observes only, doesn't control)
+# - Note: SHADOW_MODE environment variable overrides this setting
+ML_HEATING_CONTROL_ENTITY_ID: str = os.getenv(
+    "ML_HEATING_CONTROL_ENTITY_ID", 
+    "input_boolean.ml_heating"
+)

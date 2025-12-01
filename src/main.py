@@ -927,7 +927,6 @@ def main(args):
                                 datetime.now(timezone.utc).isoformat()
                             ),
                             # Heat balance controller attributes
-                            "heat_balance_mode": control_mode,
                             "temperature_error": round(
                                 abs(error_target_vs_actual), 3
                             ),
@@ -953,18 +952,66 @@ def main(args):
                     logging.debug(
                         "Failed to write ML state to HA.", exc_info=True
                     )
+                
+                # --- Update ML Control Mode sensor ---
+                try:
+                    # Map mode to integer: 0=Off, 1=MAINTENANCE, 2=BALANCING, 3=CHARGING
+                    mode_map = {"MAINTENANCE": 1, "BALANCING": 2, "CHARGING": 3}
+                    mode_value = mode_map.get(control_mode, 0)
+                    
+                    mode_attributes = get_sensor_attributes("sensor.ml_control_mode")
+                    mode_attributes["mode_name"] = f"{control_mode.title()} Mode"
+                    mode_attributes["temperature_error"] = round(abs(error_target_vs_actual), 3)
+                    mode_attributes["last_updated"] = datetime.now(timezone.utc).isoformat()
+                    
+                    ha_client.set_state(
+                        "sensor.ml_control_mode",
+                        mode_value,
+                        mode_attributes,
+                        round_digits=None,
+                    )
+                except Exception:
+                    logging.debug(
+                        "Failed to write ML control mode to HA.", exc_info=True
+                    )
             else:
                 logging.debug("🔍 SHADOW MODE: Skipping ML state sensor updates")
 
-            # --- Shadow Mode Comparison Logging ---
-            # If TARGET_OUTLET_TEMP and ACTUAL_TARGET_OUTLET_TEMP are
-            # different entities, we're in shadow mode. Log comparison.
-            shadow_mode_active = (
-                config.TARGET_OUTLET_TEMP_ENTITY_ID !=
-                config.ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID
+            # --- Shadow Mode Control via HA Boolean ---
+            # Read input_boolean.ml_heating to determine control mode
+            ml_heating_enabled = ha_client.get_state(
+                config.ML_HEATING_CONTROL_ENTITY_ID, 
+                all_states, 
+                is_binary=True
             )
             
-            if shadow_mode_active:
+            # Shadow mode is active when:
+            # - Config SHADOW_MODE=true (override), OR
+            # - ML heating boolean is OFF/unavailable
+            if ml_heating_enabled is None:
+                logging.warning(
+                    "Cannot read %s, defaulting to shadow mode for safety",
+                    config.ML_HEATING_CONTROL_ENTITY_ID
+                )
+                ml_heating_enabled = False
+            
+            effective_shadow_mode = config.SHADOW_MODE or not ml_heating_enabled
+            
+            if config.SHADOW_MODE:
+                logging.info("🔍 SHADOW MODE: Enabled via config (SHADOW_MODE=true)")
+            elif not ml_heating_enabled:
+                logging.info(
+                    "🔍 SHADOW MODE: ML control disabled via %s", 
+                    config.ML_HEATING_CONTROL_ENTITY_ID
+                )
+            else:
+                logging.info(
+                    "✅ ACTIVE MODE: ML controlling heating via %s", 
+                    config.ML_HEATING_CONTROL_ENTITY_ID
+                )
+            
+            # --- Shadow Mode Comparison Logging ---
+            if effective_shadow_mode:
                 # Read what the heat curve actually set
                 heat_curve_temp = ha_client.get_state(
                     config.ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID, all_states

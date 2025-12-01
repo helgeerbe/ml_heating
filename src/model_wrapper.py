@@ -351,26 +351,86 @@ def find_best_outlet_temp(
     last_outlet_temp = outlet_history[-1] if outlet_history else 35.0
     
     if control_mode == "CHARGING":
-        # Charging mode: Use traditional target-reaching optimization
-        logging.info("CHARGING mode: Using target-reaching optimization")
+        # Charging mode: Use target-reaching optimization with monotonic enforcement
+        logging.info("CHARGING mode: Using target-reaching optimization with monotonic enforcement")
         
-        best_outcome = -999
+        # Step 1: Find anchor point (last outlet temperature)
+        last_outlet_rounded = round(last_outlet_temp * 2) / 2
+        last_outlet_rounded = np.clip(
+            last_outlet_rounded, min_search_temp, max_search_temp
+        )
+        
+        # Get anchor prediction
+        anchor_temp = last_outlet_rounded
+        anchor_features = features.to_dict(orient="records")[0].copy()
+        anchor_features.update({
+            "outlet_temp": anchor_temp,
+            "outlet_temp_sq": anchor_temp**2,
+            "outlet_temp_cub": anchor_temp**3,
+            "outlet_temp_change_from_last": 0,
+            "outlet_indoor_diff": anchor_temp - current_temp,
+            "outdoor_temp_x_outlet_temp": outdoor_temp * anchor_temp,
+        })
+        anchor_prediction = current_temp + model.predict_one(anchor_features)
+        
+        logging.debug(
+            f"Physics anchor: outlet={anchor_temp:.1f}°C → "
+            f"indoor={anchor_prediction:.2f}°C"
+        )
+        
+        # Step 2: Build predictions with monotonic enforcement
+        raw_predictions = {}
+        monotonic_predictions = {}
+        raw_deltas = {}  # Track predicted deltas for debug logging
+        min_slope = 0.02  # Minimum heating per degree outlet increase
+        
         for temp_candidate in search_range:
-            # Simple prediction for current step
+            # Get raw prediction
             x_candidate = features.to_dict(orient="records")[0].copy()
             x_candidate.update({
                 "outlet_temp": temp_candidate,
                 "outlet_temp_sq": temp_candidate**2,
                 "outlet_temp_cub": temp_candidate**3,
-                "outlet_temp_change_from_last": (
-                    temp_candidate - last_outlet_temp
-                ),
+                "outlet_temp_change_from_last": temp_candidate - last_outlet_temp,
                 "outlet_indoor_diff": temp_candidate - current_temp,
                 "outdoor_temp_x_outlet_temp": outdoor_temp * temp_candidate,
             })
-            
             predicted_delta = model.predict_one(x_candidate)
-            predicted_indoor = current_temp + predicted_delta
+            raw_prediction = current_temp + predicted_delta
+            raw_predictions[temp_candidate] = raw_prediction
+            raw_deltas[temp_candidate] = predicted_delta  # Store for debug logging
+            
+            # Apply monotonic correction
+            if temp_candidate < anchor_temp:
+                # Below anchor: prediction must be lower
+                max_allowed = anchor_prediction - (anchor_temp - temp_candidate) * min_slope
+                monotonic_predictions[temp_candidate] = min(raw_prediction, max_allowed)
+            elif temp_candidate == anchor_temp:
+                monotonic_predictions[temp_candidate] = anchor_prediction
+            else:
+                # Above anchor: prediction must be higher
+                min_allowed = anchor_prediction + (temp_candidate - anchor_temp) * min_slope
+                monotonic_predictions[temp_candidate] = max(raw_prediction, min_allowed)
+        
+        # Debug: log complete search range with corrections
+        if logging.getLogger().isEnabledFor(logging.INFO):
+            logging.info("Complete search range with monotonic corrections:")
+            for temp_candidate in sorted(search_range):
+                raw_pred = raw_predictions.get(temp_candidate, None)
+                mono_pred = monotonic_predictions.get(temp_candidate, None)
+                delta = raw_deltas.get(temp_candidate, None)
+                if raw_pred is not None and mono_pred is not None:
+                    logging.info(
+                        f"  - Test {temp_candidate:.1f}°C -> "
+                        f"Pred ΔT: {delta:.3f}°C, "
+                        f"Raw Indoor: {raw_pred:.2f}°C, "
+                        f"Corrected: {mono_pred:.2f}°C"
+                    )
+        
+        # Step 3: Find optimal temperature using corrected predictions
+        best_outcome = -999
+        for temp_candidate in search_range:
+            predicted_indoor = monotonic_predictions[temp_candidate]
             
             # Calculate outcome score (closer to target = better)
             overshoot = max(0, predicted_indoor - target_temp)
@@ -382,12 +442,15 @@ def find_best_outlet_temp(
             if outcome > best_outcome:
                 best_outcome = outcome
                 best_outlet_temp = temp_candidate
+                best_prediction = predicted_indoor
         
         best_score = -best_outcome
-        best_trajectory = [current_temp + model.predict_one(
-            {**features.to_dict(orient="records")[0], 
-             "outlet_temp": best_outlet_temp}
-        )]
+        best_trajectory = [best_prediction]
+        
+        logging.info(
+            f"CHARGING result: outlet={best_outlet_temp:.1f}°C → "
+            f"predicted_indoor={best_prediction:.2f}°C (target={target_temp:.1f}°C)"
+        )
         
     elif control_mode == "BALANCING":
         # Balancing mode: Use trajectory stability optimization

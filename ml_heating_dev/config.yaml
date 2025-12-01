@@ -163,6 +163,9 @@ options:
   # Shadow Mode Configuration - Testing without affecting heating control
   # When enabled, ML runs in observation mode without affecting heating
   shadow_mode: false
+  # Home Assistant input_boolean to enable/disable ML control dynamically
+  # When ON: ML actively controls heating, When OFF: Shadow mode (ML observes only)
+  ml_heating_control_entity: "input_boolean.ml_heating"
 schema:
   # Core Entity Configuration - All entity fields as string input
   target_indoor_temp_entity: "str"
@@ -239,3 +242,5 @@ schema:
   prediction_horizon_steps: "int(12,96)"
   # Shadow Mode Configuration - Boolean type
   shadow_mode: "bool"
+  # ML Heating Control Entity - String type
+  ml_heating_control_entity: "str"
