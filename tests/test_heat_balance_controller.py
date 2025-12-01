@@ -61,42 +61,42 @@ def test_heat_balance_controller_charging_mode():
 
 def test_heat_balance_controller_maintenance_mode():
     """Test that controller enters MAINTENANCE mode for small temperature errors."""
-    # Set up state with small temperature error (< 0.2°C threshold)
+    # Set up state with small temperature error (< 0.1°C threshold)
     ha = DummyHA({})
     state = {
         "last_final_temp": 40.0,
         "last_is_blocking": False,
     }
-    
-    # Mock scenario: indoor is 20.9°C, target is 21.0°C (0.1°C error)
-    indoor_temp = 20.9
+
+    # Mock scenario: indoor is 20.95°C, target is 21.0°C (0.05°C error)
+    indoor_temp = 20.95
     target_temp = 21.0
     actual_outlet = 42.0
-    
-    # This should trigger MAINTENANCE mode due to small temperature error
+
+    # This should trigger MAINTENANCE mode due to small temperature error (< 0.1°C)
     temp_error = target_temp - indoor_temp
     assert temp_error < config.MAINTENANCE_MODE_THRESHOLD
-    assert temp_error == pytest.approx(0.1)  # Small error should trigger maintenance mode
+    assert temp_error == pytest.approx(0.05)  # Small error should trigger maintenance mode
 
 
 def test_heat_balance_controller_balancing_mode():
     """Test that controller enters BALANCING mode for medium temperature errors."""
-    # Set up state with medium temperature error (0.2-0.5°C range)
+    # Set up state with medium temperature error (0.1-0.2°C range)
     ha = DummyHA({})
     state = {
         "last_final_temp": 40.0,
         "last_is_blocking": False,
     }
     
-    # Mock scenario: indoor is 20.7°C, target is 21.0°C (0.3°C error)
-    indoor_temp = 20.7
+    # Mock scenario: indoor is 20.85°C, target is 21.0°C (0.15°C error)
+    indoor_temp = 20.85
     target_temp = 21.0
     actual_outlet = 42.0
     
-    # This should trigger BALANCING mode
+    # This should trigger BALANCING mode (0.1°C < error < 0.2°C)
     temp_error = target_temp - indoor_temp
     assert config.MAINTENANCE_MODE_THRESHOLD < temp_error < config.CHARGING_MODE_THRESHOLD
-    assert temp_error == pytest.approx(0.3)  # Medium error should trigger balancing mode
+    assert temp_error == pytest.approx(0.15)  # Medium error should trigger balancing mode
 
 
 def test_configuration_values_are_valid():
@@ -104,9 +104,9 @@ def test_configuration_values_are_valid():
     # Test that thresholds are properly ordered
     assert config.MAINTENANCE_MODE_THRESHOLD < config.CHARGING_MODE_THRESHOLD
     
-    # Test default values are reasonable
-    assert 0.1 <= config.MAINTENANCE_MODE_THRESHOLD <= 0.3
-    assert 0.3 <= config.CHARGING_MODE_THRESHOLD <= 1.0
+    # Test default values are reasonable (updated for optimized thresholds)
+    assert 0.05 <= config.MAINTENANCE_MODE_THRESHOLD <= 0.15  # 0.1°C is optimal
+    assert 0.15 <= config.CHARGING_MODE_THRESHOLD <= 0.5   # 0.2°C is optimal
     
     # Test trajectory parameters
     assert 2 <= config.TRAJECTORY_STEPS <= 8  # Reasonable prediction horizon
