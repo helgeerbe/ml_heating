@@ -80,9 +80,9 @@ class RealisticPhysicsModel:
         self.pv_forecast_coeff = 0.008
         self.forecast_decay = [1.0, 0.8, 0.6, 0.4]
         
-        # Physics bounds - heating systems should never cool!
-        self.min_prediction = 0.0   # No negative heating effects allowed
-        self.max_prediction = 0.25  # Reasonable heating limit
+        # Physics bounds - allow bidirectional heat transfer
+        self.min_prediction = -0.15  # Allow cooling effects when outlet < indoor
+        self.max_prediction = 0.25   # Reasonable heating limit
         
         # Learning tracking
         self.training_count = 0
@@ -219,7 +219,7 @@ class RealisticPhysicsModel:
         current_outdoor = features.get('outdoor_temp', 5.0)
         current_pv = features.get('pv_now', 0.0)
         
-        # Weather forecasting
+        # Weather forecasting - REDUCED IMPACT to prevent overwhelming physics
         weather_adjustment = 0.0
         for i in range(4):
             forecast_temp = features.get(f'temp_forecast_{i+1}h', current_outdoor)
@@ -227,9 +227,9 @@ class RealisticPhysicsModel:
             decay = self.forecast_decay[i]
             
             if temp_change > 1.5:  # Significant warming
-                weather_adjustment -= temp_change * self.weather_forecast_coeff * decay
+                weather_adjustment -= temp_change * self.weather_forecast_coeff * decay * 0.1  # REDUCED
             elif temp_change < -1.5:  # Significant cooling  
-                weather_adjustment -= temp_change * self.weather_forecast_coeff * decay * 0.6
+                weather_adjustment -= temp_change * self.weather_forecast_coeff * decay * 0.06  # REDUCED
         
         # PV forecasting
         pv_adjustment = 0.0

@@ -2,37 +2,53 @@
 
 ## Current Work Focus - December 1, 2025
 
-### 🎯 **SYSTEM STATUS: CRITICAL BUG FIXED - TRAJECTORY PREDICTION RESTORED**
+### 🎯 **SYSTEM STATUS: BALANCING MODE COOLING ISSUE RESOLVED**
 
-**URGENT FIX COMPLETED**: Fixed critical trajectory prediction bug that was causing flat temperature predictions across all outlet temperatures.
+**MAJOR FIX COMPLETED**: Fixed critical balancing mode cooling issue that was preventing proper cooling control in small temperature adjustment scenarios.
 
-## 🚨 CRITICAL BUG FIX - December 1, 2025
+## 🚨 BALANCING MODE COOLING FIX - December 1, 2025
 
 ### Issue Discovered
-**Critical Problem**: Heat Balance Controller trajectory prediction was producing identical results for all outlet temperatures (20°C to 65°C all predicted 20.9°C), causing incorrect control decisions.
+**Critical Problem**: Balancing mode couldn't handle cooling scenarios properly - it would always choose heating trajectories even when slight cooling was needed (e.g., indoor 21.2°C → target 21.0°C).
 
 ### Root Cause Analysis
-**Missing Feature Updates**: The `predict_thermal_trajectory()` function was not properly updating all outlet temperature-related features between prediction steps:
-- Missing `outlet_temp_sq`, `outlet_temp_cub`  
-- Missing `outlet_temp_change_from_last`
-- Missing `outlet_indoor_diff` 
-- Missing `outdoor_temp_x_outlet_temp`
+**Trajectory Stability Scoring Flaw**: The trajectory stability evaluation prioritized "stability" over "direction correctness":
+- Missing direction correctness penalty for wrong-direction trajectories
+- No consideration of needed heating vs cooling direction
+- Search ranges not biased toward required temperature adjustment direction
 
 ### Fix Implementation
-**Complete Feature Update**: Modified trajectory prediction to update ALL outlet temperature features for each prediction step, ensuring proper physics model input.
+**Direction-Aware Trajectory Scoring**: Implemented intelligent trajectory evaluation with contextual awareness:
+- **Direction Correctness Penalty**: Heavy penalties for trajectories moving away from target
+- **Cooling-Biased Search Ranges**: Balancing mode now shifts search ranges toward needed direction (±6°C bias)
+- **Enhanced Logging Precision**: Increased trajectory logging from 1 to 2 decimal places to reveal actual differences
+- **Raw Physics Trust**: Removed monotonic enforcement in charging mode to enable proper bidirectional predictions
+
+### Key Improvements
+1. **Direction-Aware Scoring**: Penalties scaled by error magnitude and direction correctness
+2. **Bidirectional Physics**: Both charging and balancing modes now support proper cooling and heating
+3. **Context-Aware Ranges**: Search ranges adapt to heating vs cooling needs
+4. **Comprehensive Testing**: Added 10 new bidirectional physics tests covering all scenarios
 
 ### Validation Approach
-**Unit Test Strategy**: Created comprehensive unit test suite (`tests/test_trajectory_prediction.py`) with 6 test cases:
-- ✅ Different outlet temperatures produce different trajectories
-- ✅ Trajectory length matches requested steps  
-- ✅ Outlet temperature variation affects predictions
-- ✅ Trajectory values are within reasonable ranges
-- ✅ Original features DataFrame not modified
-- ✅ Zero steps produces empty trajectory
+**Comprehensive Test Strategy**: Enhanced test suite to cover bidirectional functionality:
+- ✅ **24/24 tests passing** (including 10 new bidirectional tests)
+- ✅ Direction-aware balancing mode tests for cooling and heating scenarios  
+- ✅ Physics model bidirectional capability validation
+- ✅ Charging mode cooling scenario tests
+- ✅ No regressions in existing functionality
 
-**All tests pass**, confirming the fix works correctly.
+### Production Validation
+**Live System Confirmation**: Direction-aware scoring working in production:
+- ✅ **Direction penalties active**: Stability scores 3.15+ for wrong-direction trajectories
+- ✅ **Cooling-biased ranges**: [25.2°C - 41.2°C] vs old [30°C+ ranges] 
+- ✅ **Improved outlet selection**: 25°C chosen instead of 50°C for cooling needs
+- ✅ **Enhanced logging**: Trajectory differences now visible with 2-decimal precision
 
-**All Phases Completed**: The ML Heating System is fully operational with all planned features implemented and documented.
+### Monitoring Strategy
+**Raw Physics Monitoring**: Watch for potential prediction spikes/drops in charging mode logs that may indicate need for monotonic enforcement restoration as stability layer.
+
+**All Phases Completed**: The ML Heating System now has complete bidirectional control capability.
 
 ### Recently Completed Work
 

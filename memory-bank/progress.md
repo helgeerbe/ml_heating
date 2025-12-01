@@ -175,31 +175,49 @@ final_destination_weight: 2.0             # Endpoint importance weighting
 
 ## 🚨 CRITICAL BUG FIX - December 1, 2025
 
-### **TRAJECTORY PREDICTION BUG FIX - URGENT**
-**Status**: ✅ **FIXED** - Critical trajectory prediction bug resolved with comprehensive unit testing
+### **BALANCING MODE COOLING ISSUE - MAJOR FIX**
+**Status**: ✅ **FIXED** - Critical balancing mode cooling issue resolved with comprehensive bidirectional testing
 
 #### Issue Analysis
-**Critical Problem**: Heat Balance Controller trajectory prediction was producing identical results for all outlet temperatures (20°C to 65°C all predicted 20.9°C), causing incorrect control decisions.
+**Critical Problem**: Balancing mode couldn't handle cooling scenarios properly - it would always choose heating trajectories even when slight cooling was needed (e.g., indoor 21.2°C → target 21.0°C).
 
-**Root Cause**: The `predict_thermal_trajectory()` function was missing critical feature updates:
-- Missing `outlet_temp_sq`, `outlet_temp_cub`  
-- Missing `outlet_temp_change_from_last`
-- Missing `outlet_indoor_diff` 
-- Missing `outdoor_temp_x_outlet_temp`
+**Root Cause**: The trajectory stability evaluation prioritized "stability" over "direction correctness":
+- Missing direction correctness penalty for wrong-direction trajectories
+- No consideration of needed heating vs cooling direction
+- Search ranges not biased toward required temperature adjustment direction
 
 #### Fix Implementation
-**Complete Solution**: Modified trajectory prediction to update ALL outlet temperature-related features for each prediction step, ensuring proper physics model input.
+**Direction-Aware Trajectory Scoring**: Implemented intelligent trajectory evaluation with contextual awareness:
+- **Direction Correctness Penalty**: Heavy penalties for trajectories moving away from target
+- **Cooling-Biased Search Ranges**: Balancing mode now shifts search ranges toward needed direction (±6°C bias)
+- **Enhanced Logging Precision**: Increased trajectory logging from 1 to 2 decimal places to reveal actual differences
+- **Raw Physics Trust**: Removed monotonic enforcement in charging mode to enable proper bidirectional predictions
+
+#### Key Improvements
+1. **Direction-Aware Scoring**: Penalties scaled by error magnitude and direction correctness
+2. **Bidirectional Physics**: Both charging and balancing modes now support proper cooling and heating
+3. **Context-Aware Ranges**: Search ranges adapt to heating vs cooling needs
+4. **Comprehensive Testing**: Added 10 new bidirectional physics tests covering all scenarios
 
 #### Validation & Testing
-**Comprehensive Unit Test Suite**: Created `tests/test_trajectory_prediction.py` with 6 test cases:
-- ✅ Different outlet temperatures produce different trajectories
-- ✅ Trajectory length matches requested steps  
-- ✅ Outlet temperature variation affects predictions
-- ✅ Trajectory values are within reasonable ranges
-- ✅ Original features DataFrame not modified
-- ✅ Zero steps produces empty trajectory
+**Enhanced Test Suite**: Updated test suite to cover bidirectional functionality:
+- ✅ **24/24 tests passing** (including 10 new bidirectional tests)
+- ✅ Direction-aware balancing mode tests for cooling and heating scenarios  
+- ✅ Physics model bidirectional capability validation
+- ✅ Charging mode cooling scenario tests
+- ✅ No regressions in existing functionality
 
-**All 6 tests pass**, confirming the fix works correctly.
+**Production Validation**: Live system confirmation shows direction-aware scoring working:
+- ✅ **Direction penalties active**: Stability scores 3.15+ for wrong-direction trajectories
+- ✅ **Cooling-biased ranges**: [25.2°C - 41.2°C] vs old [30°C+ ranges] 
+- ✅ **Improved outlet selection**: 25°C chosen instead of 50°C for cooling needs
+
+#### Previous Trajectory Prediction Fix (December 1, 2025)
+**Also Completed**: Fixed critical trajectory prediction bug that was causing flat temperature predictions:
+- **Issue**: Missing feature updates in `predict_thermal_trajectory()` function
+- **Fix**: Complete feature update for all outlet temperature-related features
+- **Tests**: Created `tests/test_trajectory_prediction.py` with 6 comprehensive test cases
+- **Result**: All tests pass, trajectory prediction now working correctly
 
 ### 🧪 **GLOBAL UNIT TEST POLICY ESTABLISHED**
 

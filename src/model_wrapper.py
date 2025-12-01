@@ -202,6 +202,9 @@ def predict_thermal_trajectory(
     last_outlet_temp = current_features.get('outlet_temp', 35.0)
     outdoor_temp = current_features.get('outdoor_temp', 10.0)
     
+    # CRITICAL FIX: Store original outlet temp to restore for calculations
+    original_outlet_temp = current_features.get('outlet_temp', 35.0)
+    
     for step in range(steps):
         # Set the test outlet temperature and ALL related features
         current_features.update({
@@ -213,10 +216,29 @@ def predict_thermal_trajectory(
             'outdoor_temp_x_outlet_temp': outdoor_temp * outlet_temp,
         })
         
+        # CRITICAL: Ensure other temperature-based features are consistent
+        current_features['target_temp'] = current_features.get('target_temp', 21.0)
+        
+        # DEBUG: Log what we're passing to the model for first two outlets
+        if outlet_temp in [14.0, 15.0, 50.0, 51.0] and step == 0:
+            logging.info(
+                f"TRAJECTORY DEBUG outlet={outlet_temp:.1f}°C step={step}: "
+                f"outlet_indoor_diff={outlet_temp - current_indoor:.1f}°C, "
+                f"target={current_features['target_temp']:.1f}°C, "
+                f"indoor={current_indoor:.1f}°C, outdoor={outdoor_temp:.1f}°C"
+            )
+        
         # Predict temperature delta for this step
         predicted_delta = model.predict_one(current_features)
         predicted_indoor = current_indoor + predicted_delta
         trajectory.append(predicted_indoor)
+        
+        # DEBUG: Log prediction result for first two outlets
+        if outlet_temp in [14.0, 15.0, 50.0, 51.0] and step == 0:
+            logging.info(
+                f"TRAJECTORY DEBUG result: delta={predicted_delta:.4f}°C, "
+                f"new_indoor={predicted_indoor:.2f}°C"
+            )
         
         # Update features for next prediction step
         current_indoor = predicted_indoor
@@ -327,16 +349,19 @@ def apply_smart_rounding(
     
     return after_rounding
 
-def evaluate_trajectory_stability(trajectory: list[float], target_temp: float) -> float:
+def evaluate_trajectory_stability(trajectory: list[float], target_temp: float, 
+                                current_temp: float = None) -> float:
     """
     Evaluate the stability of a temperature trajectory using hybrid scoring.
     
-    Combines deviation from target, oscillation penalty, and final destination
-    to score trajectory quality. Lower scores indicate better stability.
+    Combines deviation from target, oscillation penalty, final destination,
+    and direction correctness to score trajectory quality. Lower scores 
+    indicate better stability.
     
     Args:
         trajectory: List of predicted indoor temperatures
         target_temp: Desired target temperature
+        current_temp: Current indoor temperature (for direction analysis)
         
     Returns:
         Stability score (lower is better)
@@ -359,8 +384,22 @@ def evaluate_trajectory_stability(trajectory: list[float], target_temp: float) -
     final_error = abs(trajectory[-1] - target_temp)
     final_penalty = final_error * config.FINAL_DESTINATION_WEIGHT
     
+    # 4. Direction correctness penalty (NEW - critical for cooling/heating)
+    direction_penalty = 0.0
+    if current_temp is not None and len(trajectory) > 0:
+        needed_direction = target_temp - current_temp  # Negative = need cooling
+        actual_direction = trajectory[-1] - current_temp  # Negative = cooling
+        
+        # Heavy penalty if trajectory moves away from target
+        if needed_direction * actual_direction < 0:
+            # Moving in wrong direction - massive penalty
+            direction_penalty = abs(needed_direction) * 5.0
+        elif abs(actual_direction) < abs(needed_direction) * 0.1:
+            # Moving in right direction but too slowly - moderate penalty
+            direction_penalty = abs(needed_direction) * 1.0
+    
     # Combined score (lower is better)
-    total_score = deviation_score + oscillation_penalty + final_penalty
+    total_score = deviation_score + oscillation_penalty + final_penalty + direction_penalty
     
     return total_score
 
@@ -436,6 +475,36 @@ def find_best_outlet_temp(
     # Define search parameters
     min_search_temp = config.CLAMP_MIN_ABS
     max_search_temp = config.CLAMP_MAX_ABS
+    
+    # BALANCING MODE: Use direction-aware smooth adjustment range
+    # This respects heat pump stability while ensuring proper cooling/heating search
+    if control_mode == "BALANCING":
+        current_outlet_temp = outlet_history[-1] if outlet_history else 35.0
+        adjustment_range = 8.0  # ±8°C adjustment range
+        
+        # Direction-aware range: bias search toward needed direction
+        if current_temp > target_temp:
+            # Need cooling: search more in cooling range (below current)
+            cooling_bias = 6.0  # Strong bias toward lower temperatures for cooling
+            min_search_temp = max(config.CLAMP_MIN_ABS, 
+                                current_outlet_temp - adjustment_range - cooling_bias)
+            max_search_temp = min(config.CLAMP_MAX_ABS, 
+                                current_outlet_temp + adjustment_range - cooling_bias)
+            direction = "cooling"
+        else:
+            # Need heating: search more in heating range (above current)
+            heating_bias = 6.0  # Strong bias toward higher temperatures for heating
+            min_search_temp = max(config.CLAMP_MIN_ABS, 
+                                current_outlet_temp - adjustment_range + heating_bias)
+            max_search_temp = min(config.CLAMP_MAX_ABS, 
+                                current_outlet_temp + adjustment_range + heating_bias)
+            direction = "heating"
+        
+        logging.info(
+            f"Balancing mode: {direction}-biased range around current outlet "
+            f"{current_outlet_temp:.1f}°C → [{min_search_temp:.1f}°C - {max_search_temp:.1f}°C]"
+        )
+    
     step = 1.0 if control_mode == "CHARGING" else 0.5
     search_range = np.arange(min_search_temp, max_search_temp + step, step)
     
@@ -478,11 +547,10 @@ def find_best_outlet_temp(
             f"indoor={anchor_prediction:.2f}°C"
         )
         
-        # Step 2: Build predictions with monotonic enforcement
+        # Step 2: Build predictions using raw physics (no monotonic enforcement)
+        # Trust the bidirectional physics model for accurate cooling/heating predictions
         raw_predictions = {}
-        monotonic_predictions = {}
         raw_deltas = {}  # Track predicted deltas for debug logging
-        min_slope = 0.02  # Minimum heating per degree outlet increase
         
         for temp_candidate in search_range:
             # Get raw prediction
@@ -499,38 +567,25 @@ def find_best_outlet_temp(
             raw_prediction = current_temp + predicted_delta
             raw_predictions[temp_candidate] = raw_prediction
             raw_deltas[temp_candidate] = predicted_delta  # Store for debug logging
-            
-            # Apply monotonic correction
-            if temp_candidate < anchor_temp:
-                # Below anchor: prediction must be lower
-                max_allowed = anchor_prediction - (anchor_temp - temp_candidate) * min_slope
-                monotonic_predictions[temp_candidate] = min(raw_prediction, max_allowed)
-            elif temp_candidate == anchor_temp:
-                monotonic_predictions[temp_candidate] = anchor_prediction
-            else:
-                # Above anchor: prediction must be higher
-                min_allowed = anchor_prediction + (temp_candidate - anchor_temp) * min_slope
-                monotonic_predictions[temp_candidate] = max(raw_prediction, min_allowed)
         
-        # Debug: log complete search range with corrections
+        # Debug: log complete search range with raw physics predictions
         if logging.getLogger().isEnabledFor(logging.INFO):
-            logging.info("Complete search range with monotonic corrections:")
+            logging.info("Complete search range with raw physics predictions:")
             for temp_candidate in sorted(search_range):
                 raw_pred = raw_predictions.get(temp_candidate, None)
-                mono_pred = monotonic_predictions.get(temp_candidate, None)
                 delta = raw_deltas.get(temp_candidate, None)
-                if raw_pred is not None and mono_pred is not None:
+                if raw_pred is not None:
                     logging.info(
                         f"  - Test {temp_candidate:.1f}°C -> "
                         f"Pred ΔT: {delta:.3f}°C, "
-                        f"Raw Indoor: {raw_pred:.2f}°C, "
-                        f"Corrected: {mono_pred:.2f}°C"
+                        f"Predicted Indoor: {raw_pred:.2f}°C"
                     )
         
-        # Step 3: Find optimal temperature using corrected predictions
+        # Step 3: Find optimal temperature using raw physics predictions
         best_outcome = -999
+        best_prediction = current_temp  # Initialize to avoid undefined variable
         for temp_candidate in search_range:
-            predicted_indoor = monotonic_predictions[temp_candidate]
+            predicted_indoor = raw_predictions[temp_candidate]
             
             # Calculate outcome score (closer to target = better)
             overshoot = max(0, predicted_indoor - target_temp)
@@ -564,7 +619,7 @@ def find_best_outlet_temp(
                 model, features, temp_candidate, steps=config.TRAJECTORY_STEPS
             )
             stability_score = evaluate_trajectory_stability(
-                trajectory, target_temp
+                trajectory, target_temp, current_temp
             )
             
             # Store for logging
@@ -588,8 +643,8 @@ def find_best_outlet_temp(
                 final_temp = trajectory[-1] if trajectory else 0.0
                 logging.info(
                     f"  - Test {temp_candidate:.1f}°C -> "
-                    f"Trajectory: {[f'{t:.1f}' for t in trajectory]} -> "
-                    f"Final: {final_temp:.1f}°C, "
+                    f"Trajectory: {[f'{t:.2f}' for t in trajectory]} -> "
+                    f"Final: {final_temp:.2f}°C, "
                     f"Stability: {stability_score:.3f}"
                 )
                 
