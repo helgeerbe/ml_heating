@@ -43,7 +43,18 @@ def train_realistic_physics_model():
     features_list = []
     labels_list = []
     
-    logging.info("Building features with target temperature context...")
+    # Data quality tracking
+    total_samples = 0
+    filtered_samples = {
+        'temp_gap': 0,
+        'delta_outlier': 0, 
+        'sensor_divergence': 0,
+        'outlet_range': 0,
+        'rate_limiting': 0,
+        'missing_data': 0
+    }
+    
+    logging.info("Building features with enhanced data filtering...")
     
     # Get column names
     outlet_col = config.ACTUAL_OUTLET_TEMP_ENTITY_ID.split(".", 1)[-1]
@@ -60,6 +71,7 @@ def train_realistic_physics_model():
     
     for idx in range(12, len(df) - config.PREDICTION_HORIZON_STEPS):
         row = df.iloc[idx]
+        total_samples += 1
         
         # Extract core temperatures
         outlet_temp = row.get(outlet_col)
@@ -74,20 +86,49 @@ def train_realistic_physics_model():
         # Skip if missing critical data
         if (pd.isna(outlet_temp) or pd.isna(indoor_temp) 
                 or pd.isna(outdoor_temp)):
+            filtered_samples['missing_data'] += 1
             continue
         
         # Calculate actual temperature change
         future_indoor = df.iloc[idx + config.PREDICTION_HORIZON_STEPS].get(
             indoor_col)
         if pd.isna(future_indoor) or pd.isna(target_temp):
+            filtered_samples['missing_data'] += 1
             continue
         
         actual_delta = float(future_indoor) - float(indoor_temp)
         
-        # Filter for realistic heating scenarios
+        # Enhanced data filtering for outlier removal (same as validation)
         temp_gap = target_temp - indoor_temp
-        if abs(temp_gap) > 2.0:
+        
+        # 1. Skip very large temperature gaps (system faults)
+        if abs(temp_gap) > 3.0:
+            filtered_samples['temp_gap'] += 1
             continue
+            
+        # 2. Enhanced outlier filtering for realistic temperature changes
+        if abs(actual_delta) > 0.5:  # Skip large unrealistic changes
+            filtered_samples['delta_outlier'] += 1
+            continue
+            
+        # 3. Sensor consistency checks
+        if abs(indoor_temp - target_temp) > 5.0:  # Extreme sensor divergence
+            filtered_samples['sensor_divergence'] += 1
+            continue
+            
+        # 4. Physics constraint validation
+        if outlet_temp < 10.0 or outlet_temp > 70.0:  # Unrealistic outlet temps
+            filtered_samples['outlet_range'] += 1
+            continue
+            
+        # 5. Rate limiting - check previous temperature for sudden jumps
+        if idx >= 6:  # Need some history
+            prev_indoor = df.iloc[idx - 6].get(indoor_col)  # 1 hour ago
+            if prev_indoor is not None:
+                temp_rate = abs(indoor_temp - prev_indoor)  # Change over 1 hour
+                if temp_rate > 2.0:  # Skip sudden temperature jumps
+                    filtered_samples['rate_limiting'] += 1
+                    continue
         
         # Build feature dictionary (only 19 features needed)
         features = {
@@ -118,9 +159,24 @@ def train_realistic_physics_model():
     if not features_list:
         logging.error("ERROR: No valid training samples after filtering")
         return None
-        
+    
+    # Log data quality statistics
+    total_filtered = sum(filtered_samples.values())
+    kept_samples = len(features_list)
+    filter_rate = (total_filtered / total_samples) * 100 if total_samples > 0 else 0
+    
+    logging.info("=== DATA QUALITY FILTERING RESULTS ===")
+    logging.info(f"Total samples processed: {total_samples}")
+    logging.info(f"Samples filtered out: {total_filtered} ({filter_rate:.1f}%)")
+    logging.info(f"Samples kept for training: {kept_samples}")
+    logging.info("Filter breakdown:")
+    for filter_type, count in filtered_samples.items():
+        if count > 0:
+            pct = (count / total_samples) * 100
+            logging.info(f"  {filter_type}: {count} ({pct:.1f}%)")
+    
     logging.info(
-        f"Training on {len(features_list)} realistic heating scenarios"
+        f"Training on {kept_samples} realistic heating scenarios"
     )
     
     # Training loop

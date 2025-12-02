@@ -145,7 +145,7 @@ class RealisticPhysicsModel:
             self.hvac_off_tracking = []
     
     def predict_one(self, features):
-        """Enhanced physics-based prediction using target temperature context"""
+        """Enhanced physics-based prediction with physics compliance validation"""
         
         # System availability check
         dhw_heating = features.get('dhw_heating', 0.0)
@@ -190,26 +190,68 @@ class RealisticPhysicsModel:
         # Update history buffers for multi-lag
         self._update_histories(pv_now, fireplace_on, tv_on)
         
-        # MULTI-LAG: Calculate time-delayed contributions
-        pv_contribution = self._calculate_pv_lagged(month_cos, month_sin)
-        fireplace_contribution = self._calculate_fireplace_lagged()
-        tv_contribution = self._calculate_tv_lagged(month_cos, month_sin)
+        # PHYSICS-CONSTRAINED EXTERNAL SOURCES
+        pv_contribution = self._calculate_pv_lagged_constrained(month_cos, month_sin, features)
+        fireplace_contribution = self._calculate_fireplace_lagged_constrained()
+        tv_contribution = self._calculate_tv_lagged_constrained(month_cos, month_sin)
         
-        # Fallback to simple if not enough history
+        # Fallback to simple if not enough history (with constraints)
         if pv_contribution == 0.0 and len(self.pv_history) < 5:
-            pv_contribution = pv_now * self.pv_warming_coefficient * 0.01
+            pv_contribution = self._calculate_pv_simple_constrained(pv_now, features)
         if fireplace_contribution == 0.0 and len(self.fireplace_history) < 4:
-            fireplace_contribution = fireplace_on * self.fireplace_heating_rate
+            fireplace_contribution = min(fireplace_on * self.fireplace_heating_rate, 0.02)  # Max 0.02°C
         if tv_contribution == 0.0 and len(self.tv_history) < 2:
-            tv_contribution = tv_on * self.tv_heat_contribution
+            tv_contribution = min(tv_on * self.tv_heat_contribution, 0.01)  # Max 0.01°C
         
         # Forecast adjustments
         forecast_effect = self._calculate_forecast_adjustment(features)
         
+        # PHYSICS COMPLIANCE CHECK
+        basic_physics = base_heating + target_boost + weather_adjustment
+        total_external = pv_contribution + fireplace_contribution + tv_contribution
+        
+        # CRITICAL: When outlet temp < indoor temp, prediction MUST be negative or very small
+        if outlet_effect < -2.0:  # Cold outlet (more than 2°C below indoor)
+            # External sources cannot make cold outlet predict significant heating
+            max_allowed_external = max(0.01, abs(basic_physics) * 0.5)  # Max 50% of physics magnitude or 0.01°C
+            
+            if total_external > max_allowed_external:
+                scale_factor = max_allowed_external / total_external
+                pv_contribution *= scale_factor
+                fireplace_contribution *= scale_factor
+                tv_contribution *= scale_factor
+                total_external = pv_contribution + fireplace_contribution + tv_contribution
+                
+                logging.debug(
+                    f"Cold outlet physics compliance: scaled external sources by {scale_factor:.3f} "
+                    f"(outlet_effect={outlet_effect:.1f}°C, basic_physics={basic_physics:.6f}°C)"
+                )
+        
+        # General external source scaling (less aggressive for normal cases)
+        elif abs(total_external) > abs(basic_physics) * 2.0 and abs(basic_physics) > 0.005:
+            # Scale down external sources to respect physics
+            scale_factor = abs(basic_physics) * 2.0 / abs(total_external)
+            pv_contribution *= scale_factor
+            fireplace_contribution *= scale_factor
+            tv_contribution *= scale_factor
+            total_external = pv_contribution + fireplace_contribution + tv_contribution
+            
+            logging.debug(
+                f"General physics compliance: scaled external sources by {scale_factor:.3f} "
+                f"(basic_physics={basic_physics:.6f}°C, external={total_external:.6f}°C)"
+            )
+        
         # Total prediction
-        total_effect = (base_heating + target_boost + weather_adjustment + 
-                       pv_contribution + fireplace_contribution + 
-                       tv_contribution + forecast_effect)
+        total_effect = (basic_physics + total_external + forecast_effect)
+        
+        # FINAL SANITY CHECK: Cold outlet cannot predict significant heating
+        if outlet_effect < -2.0 and total_effect > 0.02:
+            # Force prediction to be cooling or minimal heating
+            total_effect = min(total_effect, 0.01)  # Max 0.01°C heating from cold outlet
+            logging.debug(
+                f"Final sanity check: limited prediction to {total_effect:.6f}°C "
+                f"(outlet {outlet_effect:.1f}°C below indoor)"
+            )
         
         # Apply physics bounds
         return np.clip(total_effect, self.min_prediction, self.max_prediction)
@@ -345,6 +387,100 @@ class RealisticPhysicsModel:
         effect += self.tv_history[-2] * self.tv_coeffs['lag_1']
         
         return effect * tv_seasonal
+    
+    def _calculate_pv_lagged_constrained(self, month_cos, month_sin, features):
+        """Calculate PV warming with natural thermal physics - no artificial constraints"""
+        if len(self.pv_history) < 5:
+            return 0.0
+        
+        # NATURAL PHYSICS: Only apply thermal effects where PV energy actually existed
+        # This creates natural sunrise ramp-up and sunset decay without time checks
+        
+        pv_seasonal = 1.0 + (
+            self.pv_seasonal_cos * month_cos +
+            self.pv_seasonal_sin * month_sin
+        )
+        pv_seasonal = max(0.5, min(1.5, pv_seasonal))
+        
+        effect = 0.0
+        
+        # Only apply lag coefficients to non-zero PV values (natural physics)
+        if len(self.pv_history) >= 2 and self.pv_history[-2] > 0:  # lag_1 (30min ago)
+            effect += (self.pv_history[-2] * 0.01 * min(self.pv_coeffs['lag_1'], 0.005))
+            
+        if len(self.pv_history) >= 3 and self.pv_history[-3] > 0:  # lag_2 (60min ago)
+            effect += (self.pv_history[-3] * 0.01 * min(self.pv_coeffs['lag_2'], 0.005))
+            
+        if len(self.pv_history) >= 4 and self.pv_history[-4] > 0:  # lag_3 (90min ago)
+            effect += (self.pv_history[-4] * 0.01 * min(self.pv_coeffs['lag_3'], 0.003))
+            
+        if len(self.pv_history) >= 5 and self.pv_history[-5] > 0:  # lag_4 (120min ago)
+            effect += (self.pv_history[-5] * 0.01 * min(self.pv_coeffs['lag_4'], 0.001))
+        
+        # Apply seasonal modulation and reasonable maximum
+        constrained_effect = effect * pv_seasonal
+        max_pv_effect = 0.03  # Maximum 0.03°C heating from PV
+        
+        return min(constrained_effect, max_pv_effect)
+    
+    def _calculate_fireplace_lagged_constrained(self):
+        """Calculate fireplace heating with time delays and magnitude constraints"""
+        if len(self.fireplace_history) < 4:
+            return 0.0
+        
+        effect = 0.0
+        # Apply magnitude limits to prevent unrealistic heating
+        effect += (self.fireplace_history[-1] * min(self.fireplace_coeffs['immediate'], 0.05))
+        effect += (self.fireplace_history[-2] * min(self.fireplace_coeffs['lag_1'], 0.04))
+        effect += (self.fireplace_history[-3] * min(self.fireplace_coeffs['lag_2'], 0.03))
+        effect += (self.fireplace_history[-4] * min(self.fireplace_coeffs['lag_3'], 0.02))
+        
+        # Maximum fireplace effect
+        max_fireplace_effect = 0.08  # Maximum 0.08°C heating from fireplace
+        
+        return min(effect, max_fireplace_effect)
+    
+    def _calculate_tv_lagged_constrained(self, month_cos, month_sin):
+        """Calculate TV heat with time delay, seasonal, and magnitude constraints"""
+        if len(self.tv_history) < 2:
+            return 0.0
+        
+        tv_seasonal = 1.0 + (
+            self.tv_seasonal_cos * month_cos +
+            self.tv_seasonal_sin * month_sin
+        )
+        tv_seasonal = max(0.7, min(1.3, tv_seasonal))
+        
+        effect = 0.0
+        # Apply magnitude limits to prevent unrealistic TV heating
+        effect += self.tv_history[-1] * min(self.tv_coeffs['immediate'], 0.01)
+        effect += self.tv_history[-2] * min(self.tv_coeffs['lag_1'], 0.005)
+        
+        constrained_effect = effect * tv_seasonal
+        
+        # Maximum TV effect - TVs don't generate significant heat
+        max_tv_effect = 0.015  # Maximum 0.015°C heating from TV
+        
+        return min(constrained_effect, max_tv_effect)
+    
+    def _calculate_pv_simple_constrained(self, pv_now, features):
+        """Calculate simple PV contribution with natural physics - no artificial constraints"""
+        # NATURAL PHYSICS: Only apply thermal effects when there's actual PV energy
+        if pv_now <= 0:
+            return 0.0  # No energy = no thermal effect (natural!)
+        
+        # Constrained PV coefficient
+        constrained_coeff = min(self.pv_warming_coefficient, 0.003)  # Max 0.3% per 100W
+        simple_effect = pv_now * constrained_coeff * 0.01
+        
+        # Maximum simple PV effect
+        max_simple_pv = 0.02  # Maximum 0.02°C heating from current PV
+        
+        return min(simple_effect, max_simple_pv)
+    
+    # NOTE: _estimate_hour_from_pv and _is_nighttime methods removed
+    # Natural physics approach eliminates need for artificial time-of-day checks
+    # PV thermal effects now naturally follow energy presence/absence
     
     def learn_one(self, features, target):
         """Learn from training data and adapt parameters"""

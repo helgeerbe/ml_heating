@@ -272,7 +272,8 @@ The controller uses **RealisticPhysicsModel** - a physics-based machine learning
 
 **Initial Calibration (Recommended):**
 ```bash
-python3 -m src.main --calibrate-physics
+
+
 ```
 - Trains model on historical data from InfluxDB
 - Duration: `TRAINING_LOOKBACK_HOURS` (default: 168 hours / 7 days)

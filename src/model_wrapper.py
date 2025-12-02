@@ -581,23 +581,69 @@ def find_best_outlet_temp(
                         f"Predicted Indoor: {raw_pred:.2f}°C"
                     )
         
-        # Step 3: Find optimal temperature using raw physics predictions
+        # Step 3: Battery Charger Optimization - Two-stage logic
+        temperature_gap = target_temp - current_temp
+        PRECISION_THRESHOLD = 0.2  # Switch to fine-tuning when within 0.2°C
+        
         best_outcome = -999
         best_prediction = current_temp  # Initialize to avoid undefined variable
-        for temp_candidate in search_range:
-            predicted_indoor = raw_predictions[temp_candidate]
+        
+        if abs(temperature_gap) > PRECISION_THRESHOLD:
+            # Stage 1: Maximum Progress Mode (Battery Charger Logic)
+            logging.info(f"Stage 1: Maximum Progress Mode (gap={temperature_gap:.2f}°C > {PRECISION_THRESHOLD}°C)")
             
-            # Calculate outcome score (closer to target = better)
-            overshoot = max(0, predicted_indoor - target_temp)
-            undershoot = max(0, target_temp - predicted_indoor)
-            penalty = undershoot * 5.0 + overshoot * 2.0
-            efficiency_bonus = (max_search_temp - temp_candidate) * 0.01
-            outcome = -penalty + efficiency_bonus
+            if temperature_gap > 0:
+                # Need heating: Use maximum available heating
+                # Find the highest temperature that provides positive heating
+                best_heating = -999
+                for temp_candidate in sorted(search_range, reverse=True):  # Start from hottest
+                    predicted_indoor = raw_predictions[temp_candidate]
+                    heating_progress = predicted_indoor - current_temp
+                    
+                    if heating_progress > best_heating:
+                        best_heating = heating_progress
+                        best_outlet_temp = temp_candidate
+                        best_prediction = predicted_indoor
+                        best_outcome = heating_progress  # Maximize progress
+                
+                logging.info(f"Heating mode: Selected outlet={best_outlet_temp:.1f}°C for maximum progress={best_heating:.3f}°C")
+                
+            else:
+                # Need cooling: Use maximum available cooling
+                # Find the lowest temperature that provides positive cooling
+                best_cooling = 999
+                for temp_candidate in sorted(search_range):  # Start from coolest
+                    predicted_indoor = raw_predictions[temp_candidate]
+                    cooling_progress = current_temp - predicted_indoor  # Positive = cooling
+                    
+                    if predicted_indoor < best_cooling:
+                        best_cooling = predicted_indoor
+                        best_outlet_temp = temp_candidate
+                        best_prediction = predicted_indoor
+                        best_outcome = cooling_progress  # Maximize cooling
+                
+                logging.info(f"Cooling mode: Selected outlet={best_outlet_temp:.1f}°C for maximum cooling to {best_cooling:.2f}°C")
+        
+        else:
+            # Stage 2: Fine Balancing Mode (Original Logic for Precision)
+            logging.info(f"Stage 2: Fine Balancing Mode (gap={temperature_gap:.2f}°C <= {PRECISION_THRESHOLD}°C)")
             
-            if outcome > best_outcome:
-                best_outcome = outcome
-                best_outlet_temp = temp_candidate
-                best_prediction = predicted_indoor
+            for temp_candidate in search_range:
+                predicted_indoor = raw_predictions[temp_candidate]
+                
+                # Calculate outcome score (closer to target = better)
+                overshoot = max(0, predicted_indoor - target_temp)
+                undershoot = max(0, target_temp - predicted_indoor)
+                penalty = undershoot * 5.0 + overshoot * 2.0
+                efficiency_bonus = (max_search_temp - temp_candidate) * 0.01
+                outcome = -penalty + efficiency_bonus
+                
+                if outcome > best_outcome:
+                    best_outcome = outcome
+                    best_outlet_temp = temp_candidate
+                    best_prediction = predicted_indoor
+            
+            logging.info(f"Fine balancing: Selected outlet={best_outlet_temp:.1f}°C for precision targeting")
         
         best_score = -best_outcome
         best_trajectory = [best_prediction]
@@ -748,10 +794,11 @@ def find_best_outlet_temp(
 
 def get_feature_importances(model: RealisticPhysicsModel) -> Dict[str, float]:
     """
-    Get feature importances for RealisticPhysicsModel.
+    Get LEARNED feature importances from RealisticPhysicsModel.
 
-    For the physics model, returns physics-based importances indicating
-    which features have the strongest influence on predictions.
+    Dynamically calculates importances based on the model's actual learned 
+    parameters instead of hardcoded values. This reflects what the model 
+    has actually learned about your specific heating system.
 
     Args:
         model: The RealisticPhysicsModel instance
@@ -759,37 +806,127 @@ def get_feature_importances(model: RealisticPhysicsModel) -> Dict[str, float]:
     Returns:
         Dictionary mapping feature names to importance scores (0.0-1.0)
     """
-    # Physics-based feature importances for all 19 features
-    feature_importances = {
-        # Core temperatures (highest importance)
-        'outlet_temp': 0.25,  # Primary physics driver
-        'target_temp': 0.15,  # Target temperature influence
-        'indoor_temp_lag_30m': 0.15,  # Temperature difference calculation
-        'outdoor_temp': 0.12,  # Weather influence
+    # Extract learned coefficients from the model
+    raw_importances = {}
+    
+    # Core physics parameters (normalized by typical ranges)
+    # These control the main heating physics
+    raw_importances['outlet_temp'] = model.base_heating_rate * 50  # Typical temp range ~50°C
+    raw_importances['target_temp'] = model.target_influence * 10   # Typical gap ~10°C
+    raw_importances['indoor_temp_lag_30m'] = model.base_heating_rate * 25  # For temp differences
+    raw_importances['outdoor_temp'] = model.outdoor_factor * 30   # Typical range ~30°C
+    
+    # System states (binary, use as-is but scaled)
+    raw_importances['dhw_heating'] = 0.08  # Fixed impact when active
+    raw_importances['defrosting'] = 0.05   # Fixed impact when active  
+    raw_importances['dhw_disinfection'] = 0.02  # Fixed impact when active
+    raw_importances['dhw_boost_heater'] = 0.02  # Fixed impact when active
+    
+    # External heat sources - USE LEARNED VALUES!
+    # Multi-lag coefficients (sum all lags for total importance)
+    if hasattr(model, 'pv_coeffs') and model.pv_coeffs:
+        pv_total_effect = sum(model.pv_coeffs.values())
+        raw_importances['pv_now'] = pv_total_effect * 1000  # Scale by typical PV power
+    else:
+        # Fallback to simple learned coefficient
+        raw_importances['pv_now'] = model.pv_warming_coefficient * 1000
+    
+    if hasattr(model, 'fireplace_coeffs') and model.fireplace_coeffs:
+        fireplace_total_effect = sum(model.fireplace_coeffs.values())
+        raw_importances['fireplace_on'] = fireplace_total_effect
+    else:
+        raw_importances['fireplace_on'] = model.fireplace_heating_rate
+    
+    if hasattr(model, 'tv_coeffs') and model.tv_coeffs:
+        tv_total_effect = sum(model.tv_coeffs.values())
+        raw_importances['tv_on'] = tv_total_effect
+    else:
+        raw_importances['tv_on'] = model.tv_heat_contribution
+    
+    # Forecast coefficients - learned from model
+    forecast_weight = getattr(model, 'weather_forecast_coeff', 0.015)
+    pv_forecast_weight = getattr(model, 'pv_forecast_coeff', 0.008)
+    
+    # Decay weights for forecast horizons
+    decay_weights = getattr(model, 'forecast_decay', [1.0, 0.8, 0.6, 0.4])
+    
+    for i in range(4):
+        hour = i + 1
+        decay = decay_weights[i] if i < len(decay_weights) else 0.2
+        
+        # Weather forecasts
+        raw_importances[f'temp_forecast_{hour}h'] = forecast_weight * decay * 10
+        
+        # PV forecasts  
+        raw_importances[f'pv_forecast_{hour}h'] = pv_forecast_weight * decay * 100
+    
+    # Normalize to sum to 1.0
+    total_raw = sum(raw_importances.values())
+    if total_raw > 0:
+        feature_importances = {
+            feature: importance / total_raw 
+            for feature, importance in raw_importances.items()
+        }
+    else:
+        # Fallback if model not trained yet
+        logging.warning("Model not trained yet, using default importances")
+        feature_importances = _get_default_importances()
+    
+    # Log actual learned values for debugging
+    logging.info("LEARNED Feature Importances (top 5):")
+    sorted_features = sorted(feature_importances.items(), 
+                           key=lambda x: x[1], reverse=True)
+    for feature, importance in sorted_features[:5]:
+        logging.info(f"  {feature}: {importance:.4f}")
+    
+    # Log some key learned parameters that drive these importances
+    logging.info("Key Learned Parameters:")
+    logging.info(f"  base_heating_rate: {model.base_heating_rate:.6f}")
+    logging.info(f"  target_influence: {model.target_influence:.6f}")
+    logging.info(f"  pv_warming_coeff: {model.pv_warming_coefficient:.6f}")
+    logging.info(f"  fireplace_heating: {model.fireplace_heating_rate:.6f}")
+    logging.info(f"  tv_heat_contrib: {model.tv_heat_contribution:.6f}")
+    
+    if hasattr(model, 'pv_coeffs'):
+        pv_total = sum(model.pv_coeffs.values())
+        logging.info(f"  pv_multilag_total: {pv_total:.6f}")
+    
+    return feature_importances
+
+def _get_default_importances() -> Dict[str, float]:
+    """
+    Fallback feature importances when model is not yet trained.
+    
+    Returns:
+        Default importance dictionary
+    """
+    return {
+        # Core temperatures (reasonable defaults)
+        'outlet_temp': 0.25,
+        'target_temp': 0.15, 
+        'indoor_temp_lag_30m': 0.15,
+        'outdoor_temp': 0.12,
         
         # System states
-        'dhw_heating': 0.08,  # DHW heating state
-        'defrosting': 0.05,  # Defrost cycle handling
-        'dhw_disinfection': 0.02,  # DHW disinfection
-        'dhw_boost_heater': 0.02,  # DHW boost heater
+        'dhw_heating': 0.08,
+        'defrosting': 0.05,
+        'dhw_disinfection': 0.02,
+        'dhw_boost_heater': 0.02,
         
         # External heat sources
-        'fireplace_on': 0.04,  # Fireplace heat
-        'pv_now': 0.03,  # Solar warming
-        'tv_on': 0.01,  # TV heat contribution
+        'fireplace_on': 0.04,
+        'pv_now': 0.03,
+        'tv_on': 0.01,
         
-        # Temperature forecasts (1-4 hours)
+        # Temperature forecasts
         'temp_forecast_1h': 0.02,
         'temp_forecast_2h': 0.015,
         'temp_forecast_3h': 0.01,
         'temp_forecast_4h': 0.01,
         
-        # PV forecasts (1-4 hours)
+        # PV forecasts
         'pv_forecast_1h': 0.015,
         'pv_forecast_2h': 0.01,
         'pv_forecast_3h': 0.005,
         'pv_forecast_4h': 0.005,
     }
-
-    logging.debug("Physics-based feature importances: %s", feature_importances)
-    return feature_importances
