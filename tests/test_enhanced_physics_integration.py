@@ -109,7 +109,7 @@ class TestEnhancedPhysicsIntegration(unittest.TestCase):
         
         # Validate enhanced features are available
         self.assertIsNotNone(features_df)
-        self.assertEqual(len(features_df.columns), 34)  # 19 original + 15 new
+        self.assertEqual(len(features_df.columns), 37)  # 19 original + 15 enhanced + 3 Week 4 forecast
         
         # Validate thermal momentum features have meaningful values
         features = features_df.iloc[0]
@@ -273,7 +273,7 @@ class TestEnhancedPhysicsIntegration(unittest.TestCase):
         self.assertLess(avg_time, 0.05)
         
         # Validate all features are computed
-        self.assertEqual(len(features_df.columns), 34)
+        self.assertEqual(len(features_df.columns), 37)
 
 if __name__ == '__main__':
     unittest.main()

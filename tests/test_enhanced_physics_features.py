@@ -106,13 +106,13 @@ class TestEnhancedPhysicsFeatures(unittest.TestCase):
         return None
 
     def test_enhanced_feature_count(self):
-        """Test that 34 total features are generated (19 original + 15 new)."""
+        """Test that 37 total features are generated (19 original + 15 enhanced + 3 Week 4 forecast)."""
         features_df, _ = build_physics_features(
             self.mock_ha_client, self.mock_influx_service
         )
         
         self.assertIsNotNone(features_df)
-        self.assertEqual(len(features_df.columns), 34)
+        self.assertEqual(len(features_df.columns), 37)
         self.assertEqual(len(features_df), 1)  # Single row
         
     def test_backward_compatibility_original_features(self):
