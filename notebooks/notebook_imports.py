@@ -119,10 +119,35 @@ print("  ✓ get_feature_importances")
 # Import real InfluxDB service for notebooks
 try:
     from src import influx_service
-    # Expose the real InfluxDB service
-    create_influx_service = influx_service.create_influx_service
-    InfluxService = influx_service.InfluxService
-    print("  ✓ influx_service")
+    
+    # Create wrapper class to maintain compatibility with notebook expectations
+    class NotebookInfluxService(influx_service.InfluxService):
+        """Wrapper to maintain compatibility with notebook fetch_history calls."""
+        
+        def fetch_history(self, entity_id, steps, default_value):
+            """
+            Wrapper method for notebook compatibility with the correct signature.
+            
+            This matches the expected call pattern from notebooks:
+            fetch_history(entity_id, steps, default_value)
+            """
+            # Call the base class method with correct parameters
+            return super().fetch_history(entity_id, steps, default_value)
+    
+    # Expose the wrapped InfluxDB service
+    def create_influx_service():
+        """Create wrapped InfluxDB service with notebook compatibility."""
+        # Use config values directly instead of extracting from client
+        wrapped_service = NotebookInfluxService(
+            url=config.INFLUX_URL,
+            token=config.INFLUX_TOKEN,
+            org=config.INFLUX_ORG
+        )
+        return wrapped_service
+        
+    InfluxService = NotebookInfluxService
+    print("  ✓ influx_service (with notebook compatibility wrapper)")
+    
 except Exception as e:
     print(f"⚠️ Error importing influx_service: {e}")
     # Fallback mock function if import fails

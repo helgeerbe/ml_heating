@@ -194,6 +194,157 @@ class InfluxService:
             config.INDOOR_TEMP_ENTITY_ID, steps, 21.0
         )
 
+    def fetch_historical_data(
+        self,
+        entities: list[str],
+        start_time: datetime,
+        end_time: datetime,
+        freq: str = "30min"
+    ) -> pd.DataFrame:
+        """
+        Fetch historical data for multiple entities over a time range.
+        
+        This method supports the notebook pattern where multiple entities
+        are fetched over a specific datetime range.
+        
+        Args:
+            entities: List of entity names (can include domain prefix or generic names)
+            start_time: Start datetime
+            end_time: End datetime  
+            freq: Resampling frequency (default "30min")
+            
+        Returns:
+            DataFrame with time index and entity columns
+        """
+        # Calculate lookback hours from time range
+        time_delta = end_time - start_time
+        lookback_hours = int(time_delta.total_seconds() / 3600)
+        
+        # Map generic entity names to actual config entity IDs
+        entity_mapping = {
+            'indoor_temperature': config.INDOOR_TEMP_ENTITY_ID,
+            'outdoor_temperature': config.OUTDOOR_TEMP_ENTITY_ID,
+            'outlet_temperature': config.ACTUAL_OUTLET_TEMP_ENTITY_ID,
+            'pv_power': config.PV_POWER_ENTITY_ID,
+            'dhw_heating': config.DHW_STATUS_ENTITY_ID,
+            'heat_pump_heating': config.ACTUAL_OUTLET_TEMP_ENTITY_ID,  # Same as outlet
+            'ml_target_temperature': 'sensor.ml_target_temperature',  # Typical ML target
+            'ml_control_mode': 'sensor.ml_control_mode',  # Typical ML mode
+        }
+        
+        # Map entities to real entity IDs, fallback to original if not mapped
+        real_entities = []
+        for entity in entities:
+            mapped_entity = entity_mapping.get(entity, entity)
+            real_entities.append(mapped_entity)
+        
+        # Strip domain prefixes if present
+        entity_ids_short = []
+        original_names = []  # Keep track for column mapping later
+        for i, entity in enumerate(real_entities):
+            if "." in entity:
+                entity_ids_short.append(entity.split(".", 1)[-1])
+            else:
+                entity_ids_short.append(entity)
+            original_names.append(entities[i])  # Keep original name for mapping
+        
+        # Debug: log entity processing for troubleshooting
+        logging.debug(f"Original entities: {entities}")
+        logging.debug(f"Mapped to real entities: {real_entities}")
+        logging.debug(f"Stripped entity IDs: {entity_ids_short}")
+        
+        # BULLETPROOF APPROACH: Query each entity separately to avoid OR operator issues
+        # This completely sidesteps the Flux syntax problems by using proven single-entity queries
+        logging.debug("Using separate queries approach to avoid OR operator issues")
+        
+        # Query each entity separately using proven single-entity method
+        entity_dataframes = []
+        for i, entity_short in enumerate(entity_ids_short):
+            original_entity = entities[i]
+            real_entity = real_entities[i]
+            
+            try:
+                # Use single entity query (we know this works)
+                flux_query = f"""
+                from(bucket: "{config.INFLUX_BUCKET}")
+                |> range(start: -{lookback_hours}h)
+                |> filter(fn: (r) => r["_field"] == "value")
+                |> filter(fn: (r) => r["entity_id"] == "{entity_short}")
+                |> aggregateWindow(every: {freq}, fn: mean, createEmpty: false)
+                |> pivot(
+                    rowKey: ["_time"],
+                    columnKey: ["entity_id"],
+                    valueColumn: "_value"
+                )
+                |> sort(columns: ["_time"])
+                """
+                
+                logging.debug(f"Querying entity: {entity_short}")
+                raw = self.query_api.query_data_frame(flux_query)
+                df_single = (
+                    pd.concat(raw, ignore_index=True)
+                    if isinstance(raw, list)
+                    else raw
+                )
+                
+                if not df_single.empty:
+                    df_single["_time"] = pd.to_datetime(df_single["_time"], utc=True)
+                    
+                    # Rename column to expected name
+                    entity_lower = original_entity.lower()
+                    if "indoor" in entity_lower:
+                        new_name = "indoor_temperature"
+                    elif "outdoor" in entity_lower:
+                        new_name = "outdoor_temperature"
+                    elif ("outlet" in entity_lower or "flow" in entity_lower):
+                        new_name = "outlet_temperature"
+                    elif ("pv" in entity_lower or "power" in entity_lower):
+                        new_name = "pv_power"
+                    elif ("dhw" in entity_lower and "heat" in entity_lower):
+                        new_name = "dhw_heating"
+                    elif ("heat" in entity_lower and "pump" in entity_lower):
+                        new_name = "heat_pump_heating"
+                    elif "target" in entity_lower:
+                        new_name = "ml_target_temperature"
+                    elif "mode" in entity_lower:
+                        new_name = "ml_control_mode"
+                    else:
+                        new_name = original_entity.replace(".", "_")
+                    
+                    # Rename the data column
+                    if entity_short in df_single.columns:
+                        df_single.rename(columns={entity_short: new_name}, inplace=True)
+                    
+                    entity_dataframes.append(df_single)
+                    
+            except Exception as e:
+                logging.warning(f"Failed to query entity {entity_short}: {e}")
+                continue
+        
+        # Combine all entity dataframes
+        if not entity_dataframes:
+            return pd.DataFrame()
+        
+        # Start with the first dataframe
+        result_df = entity_dataframes[0].copy()
+        
+        # Merge additional dataframes on time
+        for df_additional in entity_dataframes[1:]:
+            result_df = pd.merge(result_df, df_additional, on="_time", how="outer")
+        
+        # Sort by time and clean up
+        result_df.sort_values("_time", inplace=True)
+        result_df.set_index("_time", inplace=True)
+        result_df.index.name = "time"
+        result_df.reset_index(inplace=True)
+        
+        # Fill missing values
+        result_df.ffill(inplace=True)
+        result_df.bfill(inplace=True)
+        
+        logging.debug(f"Successfully combined {len(entity_dataframes)} entities into DataFrame with shape {result_df.shape}")
+        return result_df
+
     def get_training_data(self, lookback_hours: int) -> pd.DataFrame:
         """
         Fetches a comprehensive dataset for model training.

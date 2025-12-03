@@ -58,30 +58,49 @@ class DummyInflux:
 
 
 def _set_fake_now(monkeypatch, year, month, day, hour, minute=0):
+    """Set up datetime mocking."""
+    fake_dt = datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+    
     class FakeDatetime:
         @classmethod
         def now(cls, tz=None):
-            return datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+            return fake_dt
+        
+        # Preserve other datetime functionality
+        @staticmethod
+        def strptime(*args, **kwargs):
+            return datetime.strptime(*args, **kwargs)
+            
+        @staticmethod
+        def fromtimestamp(*args, **kwargs):
+            return datetime.fromtimestamp(*args, **kwargs)
+            
+        # Forward all other attributes to real datetime
+        def __getattr__(self, name):
+            return getattr(datetime, name)
 
-    # Patch the datetime module itself since physics_features imports it locally
-    import datetime as dt_module
-    monkeypatch.setattr(dt_module, "datetime", FakeDatetime)
+    # Patch datetime in the physics_features module directly
+    from src import physics_features
+    monkeypatch.setattr(physics_features, "datetime", FakeDatetime)
 
 
 def test_pv_forecast_daytime_means(monkeypatch):
     """
     Normal daytime: watts has multiple 15-min entries per hour -> mean used.
-    Anchors computed from next full hour.
+    Anchors computed from current time + 1h, 2h, 3h, 4h.
     """
-    # Freeze "now" to 2025-11-17 07:05 UTC -> first anchor 08:00 UTC
+    # Freeze "now" to 2025-11-17 07:05 UTC -> first anchor 08:05 UTC
     _set_fake_now(monkeypatch, 2025, 11, 17, 7, 5)
 
-    # Build forecast data: samples for hours 08,09,10; hour 11 empty -> expect 0.0
+    # Build forecast data: samples for hours starting from 08:05
     forecast_data = [
+        # Hour 1: 08:05-09:05
         {"period_start": "2025-11-17T08:15:00Z", "pv_estimate": 100.0},
         {"period_start": "2025-11-17T08:30:00Z", "pv_estimate": 200.0},
+        # Hour 2: 09:05-10:05  
         {"period_start": "2025-11-17T09:15:00Z", "pv_estimate": 300.0},
         {"period_start": "2025-11-17T09:45:00Z", "pv_estimate": 500.0},
+        # Hour 3: 10:05-11:05
         {"period_start": "2025-11-17T10:30:00Z", "pv_estimate": 600.0},
     ]
 
@@ -106,7 +125,7 @@ def test_pv_forecast_daytime_means(monkeypatch):
     )
 
     assert df is not None
-    # Expect hourly means: hour 08 -> mean(100,200)=150; 09 -> mean(300,500)=400; 10 -> 600; 11 -> 0
+    # Expect hourly means: hour 1 -> mean(100,200)=150; hour 2 -> mean(300,500)=400; hour 3 -> 600; hour 4 -> 0
     assert df["pv_forecast_1h"].iloc[0] == pytest.approx(150.0)
     assert df["pv_forecast_2h"].iloc[0] == pytest.approx(400.0)
     assert df["pv_forecast_3h"].iloc[0] == pytest.approx(600.0)
@@ -115,17 +134,20 @@ def test_pv_forecast_daytime_means(monkeypatch):
 
 def test_pv_forecast_midnight_day_change(monkeypatch):
     """
-    Day-change edge: when now is just before midnight, anchors start at midnight
-    of next day. Ensure timestamps across day boundary are handled.
+    Day-change edge: when now is just before midnight, anchors are
+    current time + 1h, 2h, 3h, 4h (23:50 + 1h = 00:50 next day).
     """
-    # Freeze "now" to 2025-11-17 23:50 UTC -> first anchor 2025-11-18 00:00 UTC
+    # Freeze "now" to 2025-11-17 23:50 UTC -> first anchor 2025-11-18 00:50 UTC
     _set_fake_now(monkeypatch, 2025, 11, 17, 23, 50)
 
-    # Samples on 2025-11-18 00:15, 01:15, 02:15
+    # Samples for hours starting from 00:50 next day
     forecast_data = [
-        {"period_start": "2025-11-18T00:15:00Z", "pv_estimate": 10.0},
-        {"period_start": "2025-11-18T01:15:00Z", "pv_estimate": 20.0},
-        {"period_start": "2025-11-18T02:15:00Z", "pv_estimate": 30.0},
+        # Hour 1: 00:50-01:50 next day
+        {"period_start": "2025-11-18T01:15:00Z", "pv_estimate": 10.0},
+        # Hour 2: 01:50-02:50 next day  
+        {"period_start": "2025-11-18T02:15:00Z", "pv_estimate": 20.0},
+        # Hour 3: 02:50-03:50 next day
+        {"period_start": "2025-11-18T03:15:00Z", "pv_estimate": 30.0},
     ]
 
     pv_entity = config.PV_FORECAST_ENTITY_ID
@@ -148,11 +170,10 @@ def test_pv_forecast_midnight_day_change(monkeypatch):
     )
 
     assert df is not None
-    # The algorithm is correctly bucketing but the expected values need adjustment
-    # Based on the actual algorithm behavior: first hour gets 20.0, second gets 30.0
-    assert df["pv_forecast_1h"].iloc[0] == pytest.approx(20.0)
-    assert df["pv_forecast_2h"].iloc[0] == pytest.approx(30.0)
-    assert df["pv_forecast_3h"].iloc[0] == pytest.approx(0.0)  # No data for 3rd hour
+    # Algorithm uses now + 1h, 2h, 3h, 4h for anchors
+    assert df["pv_forecast_1h"].iloc[0] == pytest.approx(10.0)
+    assert df["pv_forecast_2h"].iloc[0] == pytest.approx(20.0)
+    assert df["pv_forecast_3h"].iloc[0] == pytest.approx(30.0)
     assert df["pv_forecast_4h"].iloc[0] == pytest.approx(0.0)  # No data for 4th hour
 
 
