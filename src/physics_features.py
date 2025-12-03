@@ -230,6 +230,13 @@ def build_physics_features(
         'outlet_effectiveness_ratio': ((actual_indoor_f - target_temp_f) /
                                        max(0.1, outlet_temp_f - 
                                            actual_indoor_f)),
+        
+        # === WEEK 4 ENHANCED FORECAST FEATURES ===
+        
+        # Enhanced forecast analysis (3 new features)
+        'temp_trend_forecast': ((temp_forecasts[3] - outdoor_temp_f) / 4.0),  # °C/hour trend
+        'heating_demand_forecast': max(0.0, (21.0 - temp_forecasts[3]) * 0.1),  # Simple heating demand
+        'combined_forecast_thermal_load': (max(0.0, (21.0 - temp_forecasts[3]) * 0.1) - (pv_forecasts[3] * 0.001)),  # Net thermal load
     }
     
     return pd.DataFrame([features]), outlet_history
