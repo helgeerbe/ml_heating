@@ -148,9 +148,7 @@ class EnhancedModelWrapper:
         thermal_features['temp_diff_indoor_outdoor'] = features.get('temp_diff_indoor_outdoor', 0.0)
         thermal_features['outlet_indoor_diff'] = features.get('outlet_indoor_diff', 0.0)
         
-        # Occupancy and additional heat sources
-        thermal_features['occupancy'] = 2  # Default occupancy estimate
-        thermal_features['cooking'] = 0.0  # No cooking data available
+        # Note: Removed occupancy and cooking features as they don't have corresponding sensors
         
         return thermal_features
     

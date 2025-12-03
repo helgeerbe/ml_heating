@@ -1,6 +1,6 @@
-name: "ML Heating Control (Development)"
-version: "0.1.0-alpha.39"
-image: "ghcr.io/helgeerbe/ml_heating"
+name: "ML Heating Control (Dev)"
+version: "0.1.0-dev"
+image: "ghcr.io/helgeerbe/ml_heating:dev"
 slug: "ml_heating_dev"
 description: "Physics-based machine learning heating control system with online learning (Development Channel)"
 url: "https://github.com/helgeerbe/ml_heating"
@@ -13,12 +13,8 @@ map:
   - addon_config:rw
 ingress: true
 ingress_port: 3001
-ports:
-  3003/tcp: 3003
-ports_description:
-  3003/tcp: "Development API (when enabled)"
 panel_icon: mdi:heat-pump
-panel_title: "ML Heating (Dev)"
+panel_title: "ML Heating"
 homeassistant: 2024.1.0
 privileged:
   - SYS_RAWIO
@@ -47,6 +43,7 @@ options:
   avg_other_rooms_temp_entity: "sensor.avg_other_rooms_temp"
   # The Home Assistant sensor that provides today's PV forecast with attributes
   pv_forecast_entity: "sensor.energy_production_today_4"
+  
   # External Heat Sources - Entity IDs for learning external heat contributions
   # A single aggregated sensor for total PV power generation
   pv_power_entity: "sensor.power_pv"
@@ -54,6 +51,7 @@ options:
   fireplace_status_entity: "binary_sensor.fireplace_active"
   # A sensor or input_boolean that indicates if a TV or other significant internal heat source is on
   tv_power_entity: "input_boolean.fernseher"
+  
   # Blocking Detection - Entity IDs for system status monitoring
   # A binary_sensor that is 'on' when Domestic Hot Water (DHW) is being heated
   dhw_status_entity: "binary_sensor.hp_dhw_heating_status"
@@ -63,6 +61,7 @@ options:
   disinfection_status_entity: "binary_sensor.hp_dhw_tank_disinfection_status"
   # A binary_sensor that is 'on' when the DHW boost heater is active
   dhw_boost_heater_entity: "binary_sensor.hp_dhw_boost_heater_status"
+  
   # ML Learning Parameters - Numeric configuration for model behavior
   # The time in minutes between each full cycle of learning and prediction
   cycle_interval_minutes: 30
@@ -74,6 +73,7 @@ options:
   history_step_minutes: 10
   # The number of hours of historical data to use for initial training
   training_lookback_hours: 576
+  
   # Safety Configuration - Temperature limits and safety bounds
   # The maximum safe indoor temperature allowed by the system
   safety_max_temp: 25.0
@@ -83,6 +83,7 @@ options:
   clamp_min_abs: 14.0
   # Absolute maximum allowed outlet temperature (in °C)
   clamp_max_abs: 65.0
+  
   # InfluxDB Configuration - Database connection settings
   # URL of your InfluxDB instance, including the protocol and port
   influxdb_host: "a0d7b954-influxdb"
@@ -98,11 +99,13 @@ options:
   influxdb_bucket: "home_assistant/autogen"
   # InfluxDB bucket for exporting feature importances and ML metrics
   influx_features_bucket: "ml_heating_features"
+  
   # Model Management - Backup and maintenance settings
   # Enable automatic model backups before updates
   auto_backup_enabled: true
   # Number of days to retain model backups
   backup_retention_days: 30
+  
   # Dashboard Configuration - Web interface settings
   # Interval in seconds for dashboard data updates
   dashboard_update_interval: 30
@@ -110,13 +113,15 @@ options:
   show_advanced_metrics: true
   # Theme for the dashboard (auto, light, or dark)
   dashboard_theme: "auto"
-  # Development Settings - Debug and development features (Enhanced for Alpha Channel)
+  
+  # Development Settings - Debug and development features
   # Whether to enable the development API for external access (e.g., Jupyter notebooks)
-  enable_dev_api: true
+  enable_dev_api: false
   # API key for authenticating with the development API
   dev_api_key: ""
   # The minimum level of log messages to display
-  log_level: "DEBUG"
+  log_level: "INFO"
+  
   # Performance Tuning - ML model optimization parameters
   # The model uses a normalized confidence in the range (0..1]. This threshold determines when the model's confidence is considered sufficient
   confidence_threshold: 0.3
@@ -138,6 +143,7 @@ options:
   oscillation_penalty_weight: 0.3
   # Importance multiplier for the final temperature in trajectory scoring (1.0-3.0)
   final_destination_weight: 2.0
+  
   # Advanced Learning Features - Multi-lag and seasonal learning
   # Enable time-delayed learning for external heat sources (PV, fireplace, TV)
   enable_multi_lag_learning: true
@@ -153,6 +159,7 @@ options:
   min_seasonal_samples: 100
   # Enable learning from HVAC-off periods (typically summer)
   enable_summer_learning: true
+  
   # System Behavior Configuration - Timing and polling settings
   # Maximum minutes to wait during grace period after blocking ends
   grace_period_max_minutes: 30
@@ -160,12 +167,47 @@ options:
   blocking_poll_interval_seconds: 60
   # Prediction horizon steps for calibration
   prediction_horizon_steps: 48
+  
   # Shadow Mode Configuration - Testing without affecting heating control
   # When enabled, ML runs in observation mode without affecting heating
   shadow_mode: false
   # Home Assistant input_boolean to enable/disable ML control dynamically
   # When ON: ML actively controls heating, When OFF: Shadow mode (ML observes only)
   ml_heating_control_entity: "input_boolean.ml_heating"
+  
+  # Thermal Equilibrium Model Parameters - Physics-based model configuration
+  # Core thermal properties that can be tuned for different building characteristics
+  # Building thermal response time in hours (how fast building temperature changes)
+  thermal_time_constant: 24.0
+  # Heat loss rate per degree difference between indoor and outdoor temperature
+  heat_loss_coefficient: 0.05
+  # Heat pump outlet efficiency (how effectively outlet heats indoor air)
+  outlet_effectiveness: 0.8
+  # Outdoor temperature influence factor (how much outdoor temp affects indoor equilibrium)
+  outdoor_coupling: 0.3
+  # Thermal bridging losses factor (heat loss through building envelope)
+  thermal_bridge_factor: 0.1
+  
+  # External Heat Source Weights - Only for sensors actually present in system
+  # Solar heating contribution per 100W of PV power
+  pv_heat_weight: 0.001
+  # Fireplace heating contribution per unit time when active
+  fireplace_heat_weight: 0.02
+  # Electronics heating contribution per unit when TV/devices are on
+  tv_heat_weight: 0.005
+  
+  # Adaptive Learning Parameters - Real-time parameter tuning settings
+  # Base learning rate for thermal parameter adaptation
+  adaptive_learning_rate: 0.05
+  # Minimum allowed learning rate (prevents learning from stopping)
+  min_learning_rate: 0.01
+  # Maximum allowed learning rate (prevents unstable learning)
+  max_learning_rate: 0.2
+  # Initial confidence level for learning algorithms
+  learning_confidence: 3.0
+  # Number of recent prediction errors to analyze for parameter updates
+  recent_errors_window: 10
+
 schema:
   # Core Entity Configuration - All entity fields as string input
   target_indoor_temp_entity: "str"
@@ -244,3 +286,19 @@ schema:
   shadow_mode: "bool"
   # ML Heating Control Entity - String type
   ml_heating_control_entity: "str"
+  # Thermal Equilibrium Model Parameters - Float types with physics-based ranges
+  thermal_time_constant: "float(4.0,96.0)"
+  heat_loss_coefficient: "float(0.005,0.25)"
+  outlet_effectiveness: "float(0.2,1.5)"
+  outdoor_coupling: "float(0.1,0.8)"
+  thermal_bridge_factor: "float(0.01,0.5)"
+  # External Heat Source Weights - Float types with reasonable ranges
+  pv_heat_weight: "float(0.0001,0.01)"
+  fireplace_heat_weight: "float(0.001,0.1)"
+  tv_heat_weight: "float(0.001,0.05)"
+  # Adaptive Learning Parameters - Float and integer types
+  adaptive_learning_rate: "float(0.01,0.2)"
+  min_learning_rate: "float(0.001,0.1)"
+  max_learning_rate: "float(0.1,0.5)"
+  learning_confidence: "float(0.1,10.0)"
+  recent_errors_window: "int(5,50)"

@@ -229,7 +229,6 @@ class InfluxService:
             'dhw_heating': config.DHW_STATUS_ENTITY_ID,
             'heat_pump_heating': config.ACTUAL_OUTLET_TEMP_ENTITY_ID,  # Same as outlet
             'ml_target_temperature': 'sensor.ml_target_temperature',  # Typical ML target
-            'ml_control_mode': 'sensor.ml_control_mode',  # Typical ML mode
         }
         
         # Map entities to real entity IDs, fallback to original if not mapped

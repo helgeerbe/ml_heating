@@ -167,10 +167,9 @@ FIREPLACE_STATUS_ENTITY_ID: str = os.getenv(
 # HEAT_BALANCE_MODE: Enable the intelligent heat balance controller that uses
 #   trajectory prediction instead of smoothing. Uses 3-phase control:
 #   Charging (>0.5°C error), Balancing (0.2-0.5°C), Maintenance (<0.2°C).
-# CHARGING_MODE_THRESHOLD: Temperature error threshold for entering charging
-#   mode vs balancing mode. Higher values make charging mode more aggressive.
-# MAINTENANCE_MODE_THRESHOLD: Temperature error threshold for entering
-#   maintenance mode vs balancing mode. Lower values activate maintenance sooner.
+# DEPRECATED: The following mode parameters are no longer used:
+# - CHARGING_MODE_THRESHOLD (removed - no longer using 3-phase control)
+# - MAINTENANCE_MODE_THRESHOLD (removed - no longer using 3-phase control)
 # TRAJECTORY_STEPS: Number of hours to predict in trajectory optimization.
 # OSCILLATION_PENALTY_WEIGHT: Penalty applied for temperature direction changes
 #   in trajectory scoring. Higher values prioritize stability over accuracy.
@@ -265,3 +264,28 @@ ML_HEATING_CONTROL_ENTITY_ID: str = os.getenv(
     "ML_HEATING_CONTROL_ENTITY_ID", 
     "input_boolean.ml_heating"
 )
+
+# --- Thermal Equilibrium Model Parameters ---
+# Core thermal physics parameters for the thermal equilibrium model.
+# These parameters control the physics-based calculations and can be tuned
+# for different building characteristics and testing scenarios.
+
+# Core Thermal Properties (Priority 1 - Critical for Model Behavior)
+THERMAL_TIME_CONSTANT: float = float(os.getenv("THERMAL_TIME_CONSTANT", "24.0"))  # Building thermal response time (hours)
+HEAT_LOSS_COEFFICIENT: float = float(os.getenv("HEAT_LOSS_COEFFICIENT", "0.05"))  # Heat loss rate per degree difference
+OUTLET_EFFECTIVENESS: float = float(os.getenv("OUTLET_EFFECTIVENESS", "0.8"))     # Heat pump outlet efficiency
+OUTDOOR_COUPLING: float = float(os.getenv("OUTDOOR_COUPLING", "0.3"))            # Outdoor temperature influence factor
+THERMAL_BRIDGE_FACTOR: float = float(os.getenv("THERMAL_BRIDGE_FACTOR", "0.1"))  # Thermal bridging losses
+
+# External Heat Source Weights (Priority 2 - Multi-Source Testing)
+# Only includes heat sources with actual sensors in the system
+PV_HEAT_WEIGHT: float = float(os.getenv("PV_HEAT_WEIGHT", "0.001"))              # Solar heating per 100W
+FIREPLACE_HEAT_WEIGHT: float = float(os.getenv("FIREPLACE_HEAT_WEIGHT", "0.02")) # Fireplace heating per unit time
+TV_HEAT_WEIGHT: float = float(os.getenv("TV_HEAT_WEIGHT", "0.005"))              # Electronics heating per unit
+
+# Adaptive Learning Parameters (Priority 3 - Advanced Tuning)
+ADAPTIVE_LEARNING_RATE: float = float(os.getenv("ADAPTIVE_LEARNING_RATE", "0.05"))  # Base learning rate
+MIN_LEARNING_RATE: float = float(os.getenv("MIN_LEARNING_RATE", "0.01"))         # Minimum learning rate
+MAX_LEARNING_RATE: float = float(os.getenv("MAX_LEARNING_RATE", "0.2"))          # Maximum learning rate
+LEARNING_CONFIDENCE: float = float(os.getenv("LEARNING_CONFIDENCE", "3.0"))      # Initial learning confidence
+RECENT_ERRORS_WINDOW: int = int(os.getenv("RECENT_ERRORS_WINDOW", "10"))         # Error analysis window size

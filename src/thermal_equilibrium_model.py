@@ -13,7 +13,13 @@ KEY FIXES:
 
 import numpy as np
 import logging
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List
+
+# Support both package-relative and direct import for notebooks
+try:
+    from . import config  # Package-relative import
+except ImportError:
+    import config  # Direct import fallback for notebooks
 
 # Copy all the original class content but with fixed gradient methods
 class ThermalEquilibriumModel:
@@ -24,23 +30,22 @@ class ThermalEquilibriumModel:
     """
     
     def __init__(self):
-        # Core thermal properties (learned from data or defaults)
-        self.thermal_time_constant = 24.0      # hours - building thermal response time
+        # Core thermal properties (now configurable via config.py)
+        self.thermal_time_constant = config.THERMAL_TIME_CONSTANT
         self.thermal_mass_factor = 1.0         # building thermal inertia multiplier
-        self.heat_loss_coefficient = 0.05      # heat loss rate per degree difference
+        self.heat_loss_coefficient = config.HEAT_LOSS_COEFFICIENT
         
         # Heat transfer effectiveness
-        self.outlet_effectiveness = 0.8        # how efficiently outlet heats indoor air
-        self.outdoor_coupling = 0.3            # outdoor temperature influence factor
-        self.thermal_bridge_factor = 0.1       # thermal bridging losses
+        self.outlet_effectiveness = config.OUTLET_EFFECTIVENESS
+        self.outdoor_coupling = config.OUTDOOR_COUPLING
+        self.thermal_bridge_factor = config.THERMAL_BRIDGE_FACTOR
         
-        # External heat source weights (calibrated per 100W or per unit)
+        # External heat source weights (now configurable via config.py)
+        # Only includes heat sources with actual sensors in the system
         self.external_source_weights = {
-            'pv': 0.001,           # PV solar heating per 100W
-            'fireplace': 0.02,     # Fireplace heating per unit time on
-            'tv': 0.005,           # Electronics heating per unit
-            'occupancy': 0.008,    # Human body heat per person
-            'cooking': 0.015       # Kitchen appliance heat
+            'pv': config.PV_HEAT_WEIGHT,
+            'fireplace': config.FIREPLACE_HEAT_WEIGHT,
+            'tv': config.TV_HEAT_WEIGHT
         }
         
         # Overshoot prevention parameters
@@ -48,14 +53,14 @@ class ThermalEquilibriumModel:
         self.prediction_horizon_hours = 4.0    # how far ahead to predict
         self.momentum_decay_rate = 0.1         # thermal momentum decay rate
         
-        # Dynamic threshold bounds for safety
-        self.minimum_charging_threshold = 0.3   # minimum threshold for CHARGING mode
-        self.maximum_charging_threshold = 1.0   # maximum threshold for CHARGING mode
-        self.minimum_balancing_threshold = 0.1  # minimum threshold for BALANCING mode
-        self.maximum_balancing_threshold = 0.5  # maximum threshold for BALANCING mode
+        # Dynamic threshold bounds for safety (legacy - may be removed)
+        self.minimum_charging_threshold = 0.3   # deprecated - no longer used
+        self.maximum_charging_threshold = 1.0   # deprecated - no longer used
+        self.minimum_balancing_threshold = 0.1  # deprecated - no longer used
+        self.maximum_balancing_threshold = 0.5  # deprecated - no longer used
         
-        # Learning and adaptation
-        self.learning_rate = 0.05
+        # Learning and adaptation (now configurable via config.py)
+        self.learning_rate = config.ADAPTIVE_LEARNING_RATE
         self.equilibrium_samples = []
         self.trajectory_samples = []
         self.overshoot_events = []
@@ -65,16 +70,16 @@ class ThermalEquilibriumModel:
         self.mode_switch_history = []
         self.overshoot_prevention_count = 0
         
-        # Real-time adaptive learning - AGGRESSIVE SETTINGS FOR FASTER ADAPTATION
+        # Real-time adaptive learning - configurable settings
         self.adaptive_learning_enabled = True
         self.prediction_history = []  # Store recent predictions vs actual
         self.parameter_history = []   # Track parameter changes over time
-        self.learning_confidence = 3.0  # Higher initial confidence for faster start
-        self.min_learning_rate = 0.01   # Higher minimum rate (was 0.001)
-        self.max_learning_rate = 0.2    # Much higher maximum rate (was 0.05)
+        self.learning_confidence = config.LEARNING_CONFIDENCE
+        self.min_learning_rate = config.MIN_LEARNING_RATE
+        self.max_learning_rate = config.MAX_LEARNING_RATE
         self.confidence_decay_rate = 0.99  # Slower decay (was 0.98)
         self.confidence_boost_rate = 1.1   # Faster boost (was 1.05)
-        self.recent_errors_window = 10  # Smaller window for faster response (was 15)
+        self.recent_errors_window = config.RECENT_ERRORS_WINDOW
         
         # Parameter bounds for stability
         self.thermal_time_constant_bounds = (4.0, 96.0)  # 4-96 hours
@@ -87,13 +92,17 @@ class ThermalEquilibriumModel:
 
     def predict_equilibrium_temperature(self, outlet_temp: float, outdoor_temp: float,
                                        pv_power: float = 0, fireplace_on: float = 0,
-                                       tv_on: float = 0, occupancy: int = 0,
-                                       cooking: float = 0) -> float:
+                                       tv_on: float = 0) -> float:
         """
         Predict the final indoor temperature given current heating conditions.
         
         This is the core physics-based equilibrium calculation using heat balance equations:
         At equilibrium: heat_input = heat_loss
+        
+        Only includes heat sources with actual sensors in the system:
+        - PV power (sensor.power_pv)
+        - Fireplace status (binary_sensor.fireplace_active)  
+        - TV status (input_boolean.fernseher)
         """
         # Base heating input from heat pump outlet
         heat_input = outlet_temp * self.outlet_effectiveness
@@ -103,13 +112,11 @@ class ThermalEquilibriumModel:
         normalized_outdoor = outdoor_temp / 20.0  # normalize around 20°C
         heat_loss_rate = self.heat_loss_coefficient * (1 - self.outdoor_coupling * normalized_outdoor)
         
-        # External heat sources contributions
+        # External heat sources contributions (only actual sensors)
         external_heating = (
             pv_power * self.external_source_weights['pv'] +
             fireplace_on * self.external_source_weights['fireplace'] +
-            tv_on * self.external_source_weights['tv'] +
-            occupancy * self.external_source_weights['occupancy'] +
-            cooking * self.external_source_weights['cooking']
+            tv_on * self.external_source_weights['tv']
         )
         
         # Outdoor temperature coupling (outdoor affects indoor equilibrium)
