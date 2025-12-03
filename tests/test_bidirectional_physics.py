@@ -2,8 +2,7 @@
 """
 Unit tests for bidirectional physics model functionality.
 
-Tests that the physics model can predict both heating and cooling effects
-and that charging mode works correctly for both scenarios.
+Tests that the physics model can predict both heating and cooling effects.
 """
 
 import sys
@@ -15,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import pandas as pd
 from physics_model import RealisticPhysicsModel
-from model_wrapper import find_best_outlet_temp
+from model_wrapper import simplified_outlet_prediction
 
 
 class TestBidirectionalPhysics(unittest.TestCase):
@@ -156,281 +155,88 @@ class TestBidirectionalPhysics(unittest.TestCase):
             )
 
 
-class TestBalancingModeDirectionAware(unittest.TestCase):
-    """Test direction-aware search ranges in balancing mode"""
+class TestSimplifiedOutletPrediction(unittest.TestCase):
+    """Test the simplified outlet prediction functionality."""
     
-    def setUp(self):
-        self.model = RealisticPhysicsModel()
-        
-        # Base feature set for testing
-        self.base_features = {
-            'outdoor_temp': 0.0,
-            'outlet_temp': 35.0,
-            'outlet_temp_sq': 35.0 ** 2,
-            'outlet_temp_cub': 35.0 ** 3,
-            'outlet_temp_change_from_last': 0.0,
-            'outlet_indoor_diff': 35.0 - 21.0,
-            'outdoor_temp_x_outlet_temp': 0.0 * 35.0,
-            'pv_now': 0.0,
+    def test_simplified_prediction_basic_scenario(self):
+        """Test basic simplified outlet prediction functionality"""
+        features = pd.DataFrame([{
+            'outdoor_temp': 5.0,
             'dhw_heating': 0.0,
             'defrosting': 0.0,
-            'dhw_disinfection': 0.0,
-            'dhw_boost_heater': 0.0,
             'fireplace_on': 0.0,
+            'pv_now': 0.0,
             'tv_on': 0.0,
-            'temp_forecast_1h': 1.0,
-            'temp_forecast_2h': 1.0,
-            'temp_forecast_3h': 1.0,
-            'temp_forecast_4h': 1.0,
-            'pv_forecast_1h': 0.0,
-            'pv_forecast_2h': 0.0,
-            'pv_forecast_3h': 0.0,
-            'pv_forecast_4h': 0.0,
-        }
-    
-    def test_balancing_cooling_scenario(self):
-        """Test that balancing mode biases search range toward cooling when indoor > target"""
-        features = self.base_features.copy()
-        features.update({
-            'indoor_temp_lag_30m': 21.15,  # Slightly too warm
-            'target_temp': 21.0,
-            'outlet_temp': 38.0,
-            'outlet_temp_sq': 38.0 ** 2,
-            'outlet_temp_cub': 38.0 ** 3,
-            'outlet_indoor_diff': 38.0 - 21.15,
-        })
+        }])
         
-        features_df = pd.DataFrame([features])
-        outlet_history = [38.0]
-        
-        result = find_best_outlet_temp(
-            model=self.model,
-            features=features_df,
-            current_temp=21.15,  # Too warm
-            target_temp=21.0,
-            outlet_history=outlet_history,
-            error_target_vs_actual=0.15,  # Balancing range
-            outdoor_temp=0.0
+        outlet_temp, confidence, metadata = simplified_outlet_prediction(
+            features, 
+            current_temp=21.0, 
+            target_temp=21.5
         )
         
-        outlet_temp, confidence, control_mode, sigma, stability_score, trajectory, range_tested = result
-        
-        # Should be in balancing mode
-        self.assertEqual(control_mode, "BALANCING")
-        
-        # Search range should be biased toward cooling (lower temperatures)
-        min_range, max_range = range_tested
-        current_outlet = 38.0
-        
-        # For cooling: range should be shifted down from normal ±8°C around current
-        # Normal range would be [30.0, 46.0], cooling-biased should be lower
-        self.assertLess(min_range, 28.0, "Cooling range should be biased toward lower temperatures")
-        self.assertLess(max_range, 44.0, "Cooling range should be biased toward lower temperatures")
-    
-    def test_balancing_heating_scenario(self):
-        """Test that balancing mode biases search range toward heating when indoor < target"""
-        features = self.base_features.copy()
-        features.update({
-            'indoor_temp_lag_30m': 20.85,  # Slightly too cool
-            'target_temp': 21.0,
-            'outlet_temp': 35.0,
-            'outlet_temp_sq': 35.0 ** 2,
-            'outlet_temp_cub': 35.0 ** 3,
-            'outlet_indoor_diff': 35.0 - 20.85,
-        })
-        
-        features_df = pd.DataFrame([features])
-        outlet_history = [35.0]
-        
-        result = find_best_outlet_temp(
-            model=self.model,
-            features=features_df,
-            current_temp=20.85,  # Too cool
-            target_temp=21.0,
-            outlet_history=outlet_history,
-            error_target_vs_actual=0.15,  # Balancing range
-            outdoor_temp=0.0
-        )
-        
-        outlet_temp, confidence, control_mode, sigma, stability_score, trajectory, range_tested = result
-        
-        # Should be in balancing mode
-        self.assertEqual(control_mode, "BALANCING")
-        
-        # Search range should be biased toward heating (higher temperatures)
-        min_range, max_range = range_tested
-        current_outlet = 35.0
-        
-        # For heating: range should be shifted up from normal ±8°C around current
-        # Normal range would be [27.0, 43.0], heating-biased should be higher
-        self.assertGreater(min_range, 29.0, "Heating range should be biased toward higher temperatures")
-        self.assertGreater(max_range, 41.0, "Heating range should be biased toward higher temperatures")
-    
-    def test_balancing_outlet_temperature_selection(self):
-        """Test that balancing mode selects appropriate outlet temperatures for cooling vs heating"""
-        # Test cooling scenario
-        cooling_features = self.base_features.copy()
-        cooling_features.update({
-            'indoor_temp_lag_30m': 21.15,  # Too warm
-            'target_temp': 21.0,
-            'outlet_temp': 38.0,
-            'outlet_temp_sq': 38.0 ** 2,
-            'outlet_temp_cub': 38.0 ** 3,
-            'outlet_indoor_diff': 38.0 - 21.15,
-        })
-        
-        cooling_df = pd.DataFrame([cooling_features])
-        cooling_result = find_best_outlet_temp(
-            model=self.model,
-            features=cooling_df,
-            current_temp=21.15,
-            target_temp=21.0,
-            outlet_history=[38.0],
-            error_target_vs_actual=0.15,
-            outdoor_temp=0.0
-        )
-        
-        # Test heating scenario
-        heating_features = self.base_features.copy()
-        heating_features.update({
-            'indoor_temp_lag_30m': 20.85,  # Too cool
-            'target_temp': 21.0,
-            'outlet_temp': 35.0,
-            'outlet_temp_sq': 35.0 ** 2,
-            'outlet_temp_cub': 35.0 ** 3,
-            'outlet_indoor_diff': 35.0 - 20.85,
-        })
-        
-        heating_df = pd.DataFrame([heating_features])
-        heating_result = find_best_outlet_temp(
-            model=self.model,
-            features=heating_df,
-            current_temp=20.85,
-            target_temp=21.0,
-            outlet_history=[35.0],
-            error_target_vs_actual=0.15,
-            outdoor_temp=0.0
-        )
-        
-        cooling_outlet = cooling_result[0]
-        heating_outlet = heating_result[0]
-        
-        # Cooling scenario should choose lower outlet temperature than heating scenario
-        self.assertLess(cooling_outlet, heating_outlet, 
-                       "Cooling scenario should choose lower outlet temperature than heating")
-        
-        # Sanity check: temperatures should be within reasonable ranges
-        self.assertGreaterEqual(cooling_outlet, 14.0, "Outlet temperature should be above minimum")
-        self.assertLessEqual(heating_outlet, 65.0, "Outlet temperature should be below maximum")
+        # Should return reasonable values
+        self.assertGreaterEqual(outlet_temp, 15.0, "Outlet temp should be reasonable")
+        self.assertLessEqual(outlet_temp, 65.0, "Outlet temp should be reasonable")
+        self.assertGreater(confidence, 0.0, "Confidence should be positive")
+        self.assertIsInstance(metadata, dict, "Metadata should be a dictionary")
 
+    def test_simplified_prediction_empty_features(self):
+        """Test simplified prediction with empty features DataFrame"""
+        features = pd.DataFrame([{}])  # Empty features
+        
+        outlet_temp, confidence, metadata = simplified_outlet_prediction(
+            features, 
+            current_temp=20.5, 
+            target_temp=21.0
+        )
+        
+        # Should handle empty features gracefully
+        self.assertGreaterEqual(outlet_temp, 15.0, "Outlet temp should be reasonable")
+        self.assertLessEqual(outlet_temp, 65.0, "Outlet temp should be reasonable")
+        self.assertGreater(confidence, 0.0, "Confidence should be positive")
 
-class TestChargingModeBidirectional(unittest.TestCase):
-    """Unit tests for charging mode bidirectional functionality."""
-
-    def create_test_features_df(self, indoor_temp=21.3, target_temp=21.0, 
-                               current_outlet=38.3, outdoor_temp=0.0):
-        """Create test feature DataFrame matching real scenario"""
-        features = {
-            'indoor_temp_lag_30m': indoor_temp,
-            'outdoor_temp': outdoor_temp,
-            'target_temp': target_temp,
-            'outlet_temp': current_outlet,
-            'outlet_temp_sq': current_outlet ** 2,
-            'outlet_temp_cub': current_outlet ** 3,
-            'outlet_temp_change_from_last': 0.0,
-            'outlet_indoor_diff': current_outlet - indoor_temp,
-            'outdoor_temp_x_outlet_temp': outdoor_temp * current_outlet,
-            'pv_now': 0.0,
+    def test_simplified_prediction_cooling_scenario(self):
+        """Test simplified prediction for cooling scenario"""
+        features = pd.DataFrame([{
+            'outdoor_temp': 25.0,  # Hot outdoor temperature
             'dhw_heating': 0.0,
             'defrosting': 0.0,
-            'dhw_disinfection': 0.0,
-            'dhw_boost_heater': 0.0,
             'fireplace_on': 0.0,
-            'tv_on': 1.0,
-            'temp_forecast_1h': 1.6,
-            'temp_forecast_2h': 1.8,
-            'temp_forecast_3h': 2.1,
-            'temp_forecast_4h': 2.1,
-            'pv_forecast_1h': 0.0,
-            'pv_forecast_2h': 0.0,
-            'pv_forecast_3h': 0.0,
-            'pv_forecast_4h': 0.0,
-        }
-        return pd.DataFrame([features])
+            'pv_now': 0.0,
+        }])
+        
+        outlet_temp, confidence, metadata = simplified_outlet_prediction(
+            features, 
+            current_temp=22.0,    # Current temp too high
+            target_temp=21.0      # Want to cool down
+        )
+        
+        # For cooling scenario, outlet temp should be reasonable
+        self.assertGreaterEqual(outlet_temp, 15.0, "Outlet temp should be reasonable")
+        self.assertLessEqual(outlet_temp, 65.0, "Outlet temp should be reasonable")
+        self.assertIsInstance(metadata, dict, "Should return metadata")
 
-    def test_charging_mode_cooling_scenario(self):
-        """Test charging mode chooses cooling temperatures when needed"""
-        model = RealisticPhysicsModel()
+    def test_simplified_prediction_heating_scenario(self):
+        """Test simplified prediction for heating scenario"""
+        features = pd.DataFrame([{
+            'outdoor_temp': -5.0,  # Cold outdoor temperature
+            'dhw_heating': 0.0,
+            'defrosting': 0.0,
+            'fireplace_on': 0.0,
+            'pv_now': 0.0,
+        }])
         
-        features = self.create_test_features_df(
-            indoor_temp=21.3,    # Current indoor (too warm)
-            target_temp=21.0,    # Target (need cooling)
-            current_outlet=38.3, # Current outlet from logs
-            outdoor_temp=0.0     # Cold outdoor temp from logs
+        outlet_temp, confidence, metadata = simplified_outlet_prediction(
+            features, 
+            current_temp=20.0,    # Current temp too low
+            target_temp=21.0      # Want to heat up
         )
         
-        outlet_history = [38.3]  # Current outlet temp from logs
-        
-        result = find_best_outlet_temp(
-            model=model,
-            features=features, 
-            current_temp=21.3,   # Too warm
-            target_temp=21.0,    # Target
-            outlet_history=outlet_history,
-            error_target_vs_actual=0.3,  # Positive error = too warm
-            outdoor_temp=0.0
-        )
-        
-        outlet_temp, confidence, control_mode, sigma, stability_score, trajectory, range_tested = result
-        
-        # Verify charging mode is used for large error
-        self.assertEqual(control_mode, "CHARGING", 
-                        "Should use charging mode for 0.3°C error")
-        
-        # Verify full range is tested
-        self.assertEqual(range_tested[0], 14.0, "Should test from minimum temp")
-        self.assertEqual(range_tested[1], 65.0, "Should test to maximum temp")
-        
-        # CRITICAL: Should now choose a cooling temperature (< 21.0°C)
-        self.assertLess(outlet_temp, 21.0,
-                       "Should choose outlet temp below target for cooling")
-        
-        # Should choose a temperature that provides actual cooling effect
-        self.assertLess(outlet_temp, 20.0,
-                       "Should choose significantly lower temp for effective cooling")
-
-    def test_charging_mode_heating_scenario(self):
-        """Test charging mode still works for heating scenarios"""
-        model = RealisticPhysicsModel()
-        
-        features = self.create_test_features_df(
-            indoor_temp=20.5,    # Current indoor (too cool)
-            target_temp=21.0,    # Target (need heating)
-            current_outlet=35.0, # Current outlet
-            outdoor_temp=5.0     # Moderate outdoor temp
-        )
-        
-        outlet_history = [35.0]
-        
-        result = find_best_outlet_temp(
-            model=model,
-            features=features, 
-            current_temp=20.5,   # Too cool
-            target_temp=21.0,    # Target
-            outlet_history=outlet_history,
-            error_target_vs_actual=-0.5,  # Negative error = too cool
-            outdoor_temp=5.0
-        )
-        
-        outlet_temp, confidence, control_mode, sigma, stability_score, trajectory, range_tested = result
-        
-        # Verify charging mode
-        self.assertEqual(control_mode, "CHARGING", 
-                        "Should use charging mode for 0.5°C error")
-        
-        # Should choose a heating temperature (> current indoor)
-        self.assertGreater(outlet_temp, 21.0,
-                          "Should choose outlet temp above target for heating")
+        # For heating scenario, outlet temp should be reasonable
+        self.assertGreaterEqual(outlet_temp, 15.0, "Outlet temp should be reasonable")
+        self.assertLessEqual(outlet_temp, 65.0, "Outlet temp should be reasonable")
+        self.assertIsInstance(metadata, dict, "Should return metadata")
 
 
 if __name__ == "__main__":

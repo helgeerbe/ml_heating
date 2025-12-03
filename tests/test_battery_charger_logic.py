@@ -18,7 +18,7 @@ import numpy as np
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from model_wrapper import find_best_outlet_temp
+from model_wrapper import simplified_outlet_prediction
 from physics_model import RealisticPhysicsModel
 
 # Configure logging to see the optimization logic
@@ -120,18 +120,15 @@ def test_battery_charger_logic():
             outlet_history[0]
         )
         
-        # Run Heat Balance Controller
-        result = find_best_outlet_temp(
-            model=model,
-            features=features,
+        # Run simplified outlet prediction
+        selected_outlet, confidence, metadata = simplified_outlet_prediction(
+            features,
             current_temp=scenario['current'],
-            target_temp=scenario['target'],
-            outlet_history=outlet_history,
-            error_target_vs_actual=scenario['gap'],
-            outdoor_temp=outdoor_temp
+            target_temp=scenario['target']
         )
         
-        selected_outlet, confidence, control_mode, sigma, score, trajectory, outlet_range = result
+        # Extract control mode from metadata (simplified approach)
+        control_mode = metadata.get('prediction_method', 'SIMPLIFIED')
         
         # Analyze results
         stage_detected = "Stage 1" if abs(scenario['gap']) > 0.2 else "Stage 2"

@@ -25,7 +25,7 @@ from .physics_features import build_physics_features
 from .ha_client import create_ha_client, get_sensor_attributes
 from .influx_service import create_influx_service
 from .model_wrapper import (
-    find_best_outlet_temp,
+    simplified_outlet_prediction,
     get_feature_importances,
     load_model,
     save_model,
@@ -742,33 +742,21 @@ def main(args):
                 continue
 
             # --- Step 3: Prediction ---
-            # Use the physics model to find the optimal outlet temperature.
-            # The model simulates different temperatures and predicts which
-            # will achieve the target indoor temperature most effectively.
+            # Use the Enhanced Model Wrapper for simplified outlet temperature prediction.
+            # This replaces the complex Heat Balance Controller with a single prediction call.
             error_target_vs_actual = target_indoor_temp - prediction_indoor_temp
-            (
-                suggested_temp,
-                confidence,
-                control_mode,
-                sigma,
-                trajectory_stability_score,
-                predicted_trajectory,
-                tested_outlet_range,
-            ) = find_best_outlet_temp(
-                model,
+            
+            suggested_temp, confidence, metadata = simplified_outlet_prediction(
                 features,
                 prediction_indoor_temp,
-                target_indoor_temp,
-                outlet_history,
-                error_target_vs_actual,
-                outdoor_temp,
+                target_indoor_temp
             )
             final_temp = suggested_temp
             
-            # Log heat balance controller mode
+            # Log simplified prediction info
             logging.info(
-                "Heat Balance Controller: mode=%s, error=%.3f°C, confidence=%.3f",
-                control_mode,
+                "Enhanced Model Wrapper: temp=%.1f°C, error=%.3f°C, confidence=%.3f",
+                suggested_temp,
                 abs(error_target_vs_actual),
                 confidence
             )
@@ -917,7 +905,6 @@ def main(args):
                             if confidence < config.CONFIDENCE_THRESHOLD
                             else "OK - Prediction done",
                             "confidence": round(confidence, 4),
-                            "sigma": round(sigma, 4),
                             "mae": round(mae.get(), 4),
                             "rmse": round(rmse.get(), 4),
                             "suggested_temp": round(suggested_temp, 2),
@@ -926,20 +913,9 @@ def main(args):
                             "last_prediction_time": (
                                 datetime.now(timezone.utc).isoformat()
                             ),
-                            # Heat balance controller attributes
                             "temperature_error": round(
                                 abs(error_target_vs_actual), 3
                             ),
-                            "trajectory_stability_score": round(
-                                trajectory_stability_score, 3
-                            ),
-                            "predicted_trajectory": [
-                                round(temp, 2) for temp in predicted_trajectory
-                            ] if predicted_trajectory else [],
-                            "tested_outlet_range": [
-                                round(tested_outlet_range[0], 1),
-                                round(tested_outlet_range[1], 1),
-                            ],
                         }
                     )
                     ha_client.set_state(
@@ -951,28 +927,6 @@ def main(args):
                 except Exception:
                     logging.debug(
                         "Failed to write ML state to HA.", exc_info=True
-                    )
-                
-                # --- Update ML Control Mode sensor ---
-                try:
-                    # Map mode to integer: 0=Off, 1=MAINTENANCE, 2=BALANCING, 3=CHARGING
-                    mode_map = {"MAINTENANCE": 1, "BALANCING": 2, "CHARGING": 3}
-                    mode_value = mode_map.get(control_mode, 0)
-                    
-                    mode_attributes = get_sensor_attributes("sensor.ml_control_mode")
-                    mode_attributes["mode_name"] = f"{control_mode.title()} Mode"
-                    mode_attributes["temperature_error"] = round(abs(error_target_vs_actual), 3)
-                    mode_attributes["last_updated"] = datetime.now(timezone.utc).isoformat()
-                    
-                    ha_client.set_state(
-                        "sensor.ml_control_mode",
-                        mode_value,
-                        mode_attributes,
-                        round_digits=None,
-                    )
-                except Exception:
-                    logging.debug(
-                        "Failed to write ML control mode to HA.", exc_info=True
                     )
             else:
                 logging.debug("🔍 SHADOW MODE: Skipping ML state sensor updates")
