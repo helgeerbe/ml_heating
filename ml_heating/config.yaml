@@ -130,19 +130,9 @@ options:
   # Enable automatic seasonal learning using cosine/sine modulation
   seasonal_learning_enabled: true
   
-  # Heat Balance Controller - Advanced trajectory-based control system
-  # Enable the Heat Balance Controller (replaces exponential smoothing with 3-phase trajectory optimization)
-  heat_balance_mode: true
-  # Temperature error threshold for switching from CHARGING mode to BALANCING mode (in °C)
-  charging_mode_threshold: 0.5
-  # Temperature error threshold for switching from BALANCING mode to MAINTENANCE mode (in °C) 
-  maintenance_mode_threshold: 0.2
+  # Trajectory Prediction Configuration
   # Number of hours to predict in the thermal trajectory (2-8 hours)
   trajectory_steps: 4
-  # Penalty weight for temperature oscillations in trajectory scoring (0.0-1.0)
-  oscillation_penalty_weight: 0.3
-  # Importance multiplier for the final temperature in trajectory scoring (1.0-3.0)
-  final_destination_weight: 2.0
   
   # Advanced Learning Features - Multi-lag and seasonal learning
   # Enable time-delayed learning for external heat sources (PV, fireplace, TV)
@@ -207,6 +197,50 @@ options:
   learning_confidence: 3.0
   # Number of recent prediction errors to analyze for parameter updates
   recent_errors_window: 10
+  
+  # Hybrid Learning Strategy (Phase 2 Enhancement) - Intelligent learning periods
+  # Enable intelligent learning phase classification with weighted periods
+  hybrid_learning_enabled: true
+  # Enable stability classification for learning periods
+  stability_classification_enabled: true
+  # Weight for stable periods (high confidence learning)
+  high_confidence_weight: 1.0
+  # Weight for controlled transitions (low confidence learning)
+  low_confidence_weight: 0.3
+  # Weight for chaotic periods (skip learning)
+  learning_phase_skip_weight: 0.0
+  
+  # MAE/RMSE Tracking System (Phase 2 Enhancement) - Prediction accuracy monitoring
+  # Enable comprehensive prediction accuracy tracking
+  prediction_metrics_enabled: true
+  # 1 hour window (12 x 5min samples)
+  metrics_window_1h: 12
+  # 6 hour window (72 x 5min samples)
+  metrics_window_6h: 72
+  # 24 hour window (288 x 5min samples)
+  metrics_window_24h: 288
+  # °C threshold for accuracy classification
+  prediction_accuracy_threshold: 0.3
+  
+  # Trajectory Prediction Enhancement (Phase 2) - Advanced trajectory prediction
+  # Enable advanced trajectory prediction with forecast integration
+  trajectory_prediction_enabled: true
+  # Use weather forecasts in trajectory prediction
+  weather_forecast_integration: true
+  # Use PV forecasts in trajectory prediction
+  pv_forecast_integration: true
+  # Enable trajectory-based overshoot detection
+  overshoot_detection_enabled: true
+  
+  # Historical Calibration System (Phase 0) - Physics-based optimization
+  # Calibrated baseline storage file path
+  calibration_baseline_file: "/data/calibrated_baseline.json"
+  # °C change threshold for stability filtering
+  stability_temp_change_threshold: 0.1
+  # Minimum duration for stable periods (minutes)
+  min_stable_period_minutes: 30
+  # Scipy optimization method
+  optimization_method: "L-BFGS-B"
 
 schema:
   # Core Entity Configuration - All entity fields as string input
@@ -263,13 +297,8 @@ schema:
   confidence_threshold: "float(0.1,0.95)"
   physics_validation_enabled: "bool"
   seasonal_learning_enabled: "bool"
-  # Heat Balance Controller - Boolean, float, and integer types
-  heat_balance_mode: "bool"
-  charging_mode_threshold: "float(0.1,2.0)"
-  maintenance_mode_threshold: "float(0.1,1.0)"
+  # Trajectory Prediction - Integer type
   trajectory_steps: "int(2,8)"
-  oscillation_penalty_weight: "float(0.0,1.0)"
-  final_destination_weight: "float(1.0,3.0)"
   # Advanced Learning Features - Boolean, integer, and float types
   enable_multi_lag_learning: "bool"
   pv_lag_steps: "int(1,8)"
@@ -302,3 +331,25 @@ schema:
   max_learning_rate: "float(0.1,0.5)"
   learning_confidence: "float(0.1,10.0)"
   recent_errors_window: "int(5,50)"
+  # Hybrid Learning Strategy (Phase 2) - Boolean and float types
+  hybrid_learning_enabled: "bool"
+  stability_classification_enabled: "bool"
+  high_confidence_weight: "float(0.0,2.0)"
+  low_confidence_weight: "float(0.0,1.0)"
+  learning_phase_skip_weight: "float(0.0,1.0)"
+  # MAE/RMSE Tracking System (Phase 2) - Boolean, integer, and float types
+  prediction_metrics_enabled: "bool"
+  metrics_window_1h: "int(6,24)"
+  metrics_window_6h: "int(36,144)"
+  metrics_window_24h: "int(144,576)"
+  prediction_accuracy_threshold: "float(0.1,1.0)"
+  # Trajectory Prediction Enhancement (Phase 2) - Boolean types
+  trajectory_prediction_enabled: "bool"
+  weather_forecast_integration: "bool"
+  pv_forecast_integration: "bool"
+  overshoot_detection_enabled: "bool"
+  # Historical Calibration System (Phase 0) - String, float, integer, and list types
+  calibration_baseline_file: "str"
+  stability_temp_change_threshold: "float(0.05,0.5)"
+  min_stable_period_minutes: "int(15,120)"
+  optimization_method: "str"

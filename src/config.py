@@ -167,14 +167,7 @@ FIREPLACE_STATUS_ENTITY_ID: str = os.getenv(
 # HEAT_BALANCE_MODE: Enable the intelligent heat balance controller that uses
 #   trajectory prediction instead of smoothing. Uses 3-phase control:
 #   Charging (>0.5°C error), Balancing (0.2-0.5°C), Maintenance (<0.2°C).
-# DEPRECATED: The following mode parameters are no longer used:
-# - CHARGING_MODE_THRESHOLD (removed - no longer using 3-phase control)
-# - MAINTENANCE_MODE_THRESHOLD (removed - no longer using 3-phase control)
 # TRAJECTORY_STEPS: Number of hours to predict in trajectory optimization.
-# OSCILLATION_PENALTY_WEIGHT: Penalty applied for temperature direction changes
-#   in trajectory scoring. Higher values prioritize stability over accuracy.
-# FINAL_DESTINATION_WEIGHT: Weight given to final trajectory endpoint in
-#   scoring. Higher values prioritize long-term stability.
 # CYCLE_INTERVAL_MINUTES: The time in minutes between each full cycle of
 #   learning and prediction. A longer interval (e.g., 10-15 mins) provides a
 #   clearer learning signal, while a shorter one is more responsive.
@@ -183,12 +176,7 @@ FIREPLACE_STATUS_ENTITY_ID: str = os.getenv(
 #   abrupt changes and is required as the heatpump only accepts full degrees.
 DEBUG: bool = os.getenv("DEBUG", "0") == "1"
 CONFIDENCE_THRESHOLD: float = float(os.getenv("CONFIDENCE_THRESHOLD", "0.2"))
-HEAT_BALANCE_MODE: bool = os.getenv("HEAT_BALANCE_MODE", "true").lower() == "true"
-CHARGING_MODE_THRESHOLD: float = float(os.getenv("CHARGING_MODE_THRESHOLD", "0.2"))
-MAINTENANCE_MODE_THRESHOLD: float = float(os.getenv("MAINTENANCE_MODE_THRESHOLD", "0.1"))
 TRAJECTORY_STEPS: int = int(os.getenv("TRAJECTORY_STEPS", "4"))
-OSCILLATION_PENALTY_WEIGHT: float = float(os.getenv("OSCILLATION_PENALTY_WEIGHT", "0.3"))
-FINAL_DESTINATION_WEIGHT: float = float(os.getenv("FINAL_DESTINATION_WEIGHT", "2.0"))
 CYCLE_INTERVAL_MINUTES: int = int(os.getenv("CYCLE_INTERVAL_MINUTES", "10"))
 MAX_TEMP_CHANGE_PER_CYCLE: int = int(
     os.getenv("MAX_TEMP_CHANGE_PER_CYCLE", "2")
@@ -261,7 +249,7 @@ SHADOW_MODE: bool = os.getenv("SHADOW_MODE", "false").lower() == "true"
 # - When OFF: Shadow mode (ML observes only, doesn't control)
 # - Note: SHADOW_MODE environment variable overrides this setting
 ML_HEATING_CONTROL_ENTITY_ID: str = os.getenv(
-    "ML_HEATING_CONTROL_ENTITY_ID", 
+    "ML_HEATING_CONTROL_ENTITY_ID",
     "input_boolean.ml_heating"
 )
 
@@ -289,3 +277,47 @@ MIN_LEARNING_RATE: float = float(os.getenv("MIN_LEARNING_RATE", "0.01"))        
 MAX_LEARNING_RATE: float = float(os.getenv("MAX_LEARNING_RATE", "0.2"))          # Maximum learning rate
 LEARNING_CONFIDENCE: float = float(os.getenv("LEARNING_CONFIDENCE", "3.0"))      # Initial learning confidence
 RECENT_ERRORS_WINDOW: int = int(os.getenv("RECENT_ERRORS_WINDOW", "10"))         # Error analysis window size
+
+# --- Hybrid Learning Strategy (Phase 2 Enhancement) ---
+# Enable intelligent learning phase classification with weighted periods
+HYBRID_LEARNING_ENABLED: bool = (
+    os.getenv("HYBRID_LEARNING_ENABLED", "true").lower() == "true"
+)
+STABILITY_CLASSIFICATION_ENABLED: bool = (
+    os.getenv("STABILITY_CLASSIFICATION_ENABLED", "true").lower() == "true"
+)
+HIGH_CONFIDENCE_WEIGHT: float = float(os.getenv("HIGH_CONFIDENCE_WEIGHT", "1.0"))
+LOW_CONFIDENCE_WEIGHT: float = float(os.getenv("LOW_CONFIDENCE_WEIGHT", "0.3"))
+LEARNING_PHASE_SKIP_WEIGHT: float = float(os.getenv("LEARNING_PHASE_SKIP_WEIGHT", "0.0"))
+
+# --- MAE/RMSE Tracking System (Phase 2 Enhancement) ---
+# Enable comprehensive prediction accuracy tracking
+PREDICTION_METRICS_ENABLED: bool = (
+    os.getenv("PREDICTION_METRICS_ENABLED", "true").lower() == "true"
+)
+METRICS_WINDOW_1H: int = int(os.getenv("METRICS_WINDOW_1H", "12"))
+METRICS_WINDOW_6H: int = int(os.getenv("METRICS_WINDOW_6H", "72"))
+METRICS_WINDOW_24H: int = int(os.getenv("METRICS_WINDOW_24H", "288"))
+PREDICTION_ACCURACY_THRESHOLD: float = float(os.getenv("PREDICTION_ACCURACY_THRESHOLD", "0.3"))
+
+# --- Trajectory Prediction Enhancement (Phase 2) ---
+# Advanced trajectory prediction with forecast integration
+TRAJECTORY_PREDICTION_ENABLED: bool = (
+    os.getenv("TRAJECTORY_PREDICTION_ENABLED", "true").lower() == "true"
+)
+WEATHER_FORECAST_INTEGRATION: bool = (
+    os.getenv("WEATHER_FORECAST_INTEGRATION", "true").lower() == "true"
+)
+PV_FORECAST_INTEGRATION: bool = (
+    os.getenv("PV_FORECAST_INTEGRATION", "true").lower() == "true"
+)
+OVERSHOOT_DETECTION_ENABLED: bool = (
+    os.getenv("OVERSHOOT_DETECTION_ENABLED", "true").lower() == "true"
+)
+
+# --- Historical Calibration System (Phase 0) ---
+# Physics-based historical parameter optimization
+CALIBRATION_BASELINE_FILE: str = os.getenv("CALIBRATION_BASELINE_FILE", "/data/calibrated_baseline.json")
+STABILITY_TEMP_CHANGE_THRESHOLD: float = float(os.getenv("STABILITY_TEMP_CHANGE_THRESHOLD", "0.1"))
+MIN_STABLE_PERIOD_MINUTES: int = int(os.getenv("MIN_STABLE_PERIOD_MINUTES", "30"))
+OPTIMIZATION_METHOD: str = os.getenv("OPTIMIZATION_METHOD", "L-BFGS-B")

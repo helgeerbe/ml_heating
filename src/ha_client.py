@@ -292,6 +292,85 @@ class HAClient:
             round_digits=4,
         )
 
+    def log_adaptive_learning_metrics(self, learning_metrics: Dict[str, Any]) -> None:
+        """
+        Publishes adaptive learning metrics to Home Assistant sensors.
+
+        Creates dedicated sensors for adaptive learning status, prediction
+        accuracy metrics (MAE/RMSE), and learned thermal parameters.
+
+        Args:
+            learning_metrics: Dictionary containing all learning metrics
+                from the EnhancedModelWrapper
+        """
+        now_utc = datetime.now(timezone.utc).isoformat()
+
+        # Main adaptive learning sensor
+        attributes_learning = get_sensor_attributes("sensor.ml_heating_learning")
+        attributes_learning.update({
+            # Learned thermal parameters
+            "thermal_time_constant": learning_metrics.get("thermal_time_constant", 24.0),
+            "heat_loss_coefficient": learning_metrics.get("heat_loss_coefficient", 0.05),
+            "outlet_effectiveness": learning_metrics.get("outlet_effectiveness", 0.8),
+            "learning_confidence": learning_metrics.get("learning_confidence", 3.0),
+            
+            # Learning progress
+            "cycle_count": learning_metrics.get("cycle_count", 0),
+            "parameter_updates": learning_metrics.get("parameter_updates", 0),
+            "update_percentage": learning_metrics.get("update_percentage", 0.0),
+            
+            # MAE/RMSE tracking
+            "mae_1h": learning_metrics.get("mae_1h", 0.0),
+            "mae_6h": learning_metrics.get("mae_6h", 0.0),
+            "mae_24h": learning_metrics.get("mae_24h", 0.0),
+            "mae_all_time": learning_metrics.get("mae_all_time", 0.0),
+            "rmse_all_time": learning_metrics.get("rmse_all_time", 0.0),
+            
+            # Recent performance
+            "recent_mae_10": learning_metrics.get("recent_mae_10", 0.0),
+            "recent_max_error": learning_metrics.get("recent_max_error", 0.0),
+            
+            # Model health
+            "model_health": learning_metrics.get("model_health", "unknown"),
+            "is_improving": learning_metrics.get("is_improving", False),
+            "improvement_percentage": learning_metrics.get("improvement_percentage", 0.0),
+            
+            # Total predictions tracked
+            "total_predictions": learning_metrics.get("total_predictions", 0),
+            "last_updated": now_utc
+        })
+
+        # State is the learning confidence score
+        learning_confidence = learning_metrics.get("learning_confidence", 0.0)
+        self.set_state(
+            "sensor.ml_heating_learning",
+            learning_confidence,
+            attributes_learning,
+            round_digits=3,
+        )
+
+        # Prediction accuracy sensor (percentage of good predictions)
+        attributes_accuracy = get_sensor_attributes("sensor.ml_prediction_accuracy")
+        attributes_accuracy.update({
+            "excellent_accuracy_pct": learning_metrics.get("excellent_accuracy_pct", 0.0),
+            "good_accuracy_pct": learning_metrics.get("good_accuracy_pct", 0.0),
+            "mae_current": learning_metrics.get("mae_1h", 0.0),
+            "rmse_current": learning_metrics.get("rmse_all_time", 0.0),
+            "prediction_count": learning_metrics.get("total_predictions", 0),
+            "last_updated": now_utc
+        })
+
+        # State is the percentage of good predictions (±0.5°C)
+        good_accuracy_pct = learning_metrics.get("good_accuracy_pct", 0.0)
+        self.set_state(
+            "sensor.ml_prediction_accuracy",
+            good_accuracy_pct,
+            attributes_accuracy,
+            round_digits=1,
+        )
+
+        logging.debug("Logged adaptive learning metrics to HA")
+
 
 def get_sensor_attributes(entity_id: str) -> Dict[str, Any]:
     """
@@ -355,6 +434,18 @@ def get_sensor_attributes(entity_id: str) -> Dict[str, Any]:
             "friendly_name": "ML Heating State",
             "unit_of_measurement": "state",
             "icon": "mdi:information-outline",
+        },
+        "sensor.ml_heating_learning": {
+            "unique_id": "ml_heating_learning",
+            "friendly_name": "ML Adaptive Learning Metrics",
+            "unit_of_measurement": "metrics",
+            "icon": "mdi:brain",
+        },
+        "sensor.ml_prediction_accuracy": {
+            "unique_id": "ml_prediction_accuracy", 
+            "friendly_name": "ML Prediction Accuracy",
+            "unit_of_measurement": "%",
+            "icon": "mdi:target",
         },
     }
     attributes = base_attributes.copy()

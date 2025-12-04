@@ -5,6 +5,7 @@ This module resolves the relative import issues when running notebooks.
 
 import sys
 import os
+from datetime import datetime
 
 # Add the parent directory and src directory to Python path for notebook imports
 notebook_dir = os.path.dirname(os.path.abspath(__file__))

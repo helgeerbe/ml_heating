@@ -216,3 +216,9 @@ pyrightconfig.json
 # Ignore symlinks in add-on directory (created for Home Assistant Builder)
 ml_heating_addon/src
 ml_heating_addon/notebooks
+
+# House-specific calibration data (contains private thermal characteristics)
+calibrated_baseline*.json
+
+# Runtime prediction metrics data (generated during operation)
+prediction_metrics.json

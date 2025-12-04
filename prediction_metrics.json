@@ -15,8 +15,24 @@
         "fireplace_on": 0,
         "tv_on": 1
       }
+    },
+    {
+      "timestamp": "2025-12-04T14:05:30.691291",
+      "predicted": 21.0,
+      "actual": 20.8,
+      "error": -0.1999999999999993,
+      "abs_error": 0.1999999999999993,
+      "squared_error": 0.039999999999999716,
+      "context": {
+        "indoor_temp_lag_30m": 20.0,
+        "target_temp": 21.0,
+        "outdoor_temp": 10.0,
+        "pv_now": 500.0,
+        "fireplace_on": 0,
+        "tv_on": 1
+      }
     }
   ],
   "max_history_size": 1000,
-  "saved_at": "2025-12-04T12:21:23.755264"
+  "saved_at": "2025-12-04T14:05:30.691645"
 }
