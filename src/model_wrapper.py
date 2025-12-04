@@ -1,67 +1,31 @@
 """
-Simplified Model Wrapper for Week 3 Persistent Learning Optimization.
+ThermalEquilibriumModel-based Model Wrapper.
 
-This module provides a SIMPLIFIED replacement for the complex model_wrapper.py,
-removing the Heat Balance Controller complexity and providing a clean interface
-for the Enhanced Model Wrapper integration.
+This module provides a clean interface for thermal physics-based heating control
+using only the ThermalEquilibriumModel. All legacy ML model code has been removed
+as part of the thermal equilibrium model migration.
 
-Key simplifications:
-- Removed find_best_outlet_temp() function (~400 lines)
-- Removed trajectory prediction complexity
-- Removed control mode logic (CHARGING/BALANCING/MAINTENANCE)
-- Kept essential model loading/saving and metrics functionality
+Key features:
+- Single ThermalEquilibriumModel-based prediction pathway
+- Persistent thermal learning state across service restarts
+- Simplified outlet temperature prediction interface
+- Adaptive thermal parameter learning
 """
 import logging
-import pickle
 from typing import Dict, Optional, Tuple
 from datetime import datetime
 
-import numpy as np
 import pandas as pd
 
 # Support both package-relative and direct import for notebooks
 try:
-    from . import config  # Package-relative import
-    from .physics_model import RealisticPhysicsModel
     from .thermal_equilibrium_model import ThermalEquilibriumModel
     from .state_manager import load_state, save_state
+    from .prediction_metrics import PredictionMetrics, track_prediction
 except ImportError:
-    import config  # Direct import fallback for notebooks
-    from physics_model import RealisticPhysicsModel
     from thermal_equilibrium_model import ThermalEquilibriumModel
     from state_manager import load_state, save_state
-
-
-class MAE:
-    """Mean Absolute Error metric"""
-    def __init__(self):
-        self._sum_abs_errors = 0.0
-        self._n = 0
-
-    def get(self):
-        if self._n == 0:
-            return 0.0
-        return self._sum_abs_errors / self._n
-
-    def update(self, y_true, y_pred):
-        self._sum_abs_errors += abs(y_true - y_pred)
-        self._n += 1
-
-
-class RMSE:
-    """Root Mean Squared Error metric"""
-    def __init__(self):
-        self._sum_squared_errors = 0.0
-        self._n = 0
-
-    def get(self):
-        if self._n == 0:
-            return 0.0
-        return (self._sum_squared_errors / self._n) ** 0.5
-
-    def update(self, y_true, y_pred):
-        self._sum_squared_errors += (y_true - y_pred) ** 2
-        self._n += 1
+    from prediction_metrics import PredictionMetrics, track_prediction
 
 
 class EnhancedModelWrapper:
@@ -77,8 +41,20 @@ class EnhancedModelWrapper:
         self.learning_enabled = True
         self.cycle_count = 0
         
+        # Initialize prediction metrics tracker
+        self.prediction_metrics = PredictionMetrics()
+        
         # Load any existing thermal learning state
         self._restore_learning_state()
+        
+        # Load prediction metrics if available
+        try:
+            self.prediction_metrics.load_state('/opt/ml_heating/prediction_metrics.json')
+            logging.info("✅ Loaded existing prediction metrics")
+        except FileNotFoundError:
+            logging.info("ℹ️  No existing prediction metrics found - starting fresh")
+        except Exception as e:
+            logging.warning(f"Failed to load prediction metrics: {e}")
         
         logging.info("🎯 Enhanced Model Wrapper initialized with ThermalEquilibriumModel")
         logging.info(f"   - Thermal time constant: {self.thermal_model.thermal_time_constant:.1f}h")
@@ -154,24 +130,61 @@ class EnhancedModelWrapper:
     
     def _calculate_required_outlet_temp(self, current_indoor: float, target_indoor: float, 
                                       outdoor_temp: float, thermal_features: Dict) -> float:
-        """Calculate the outlet temperature required to reach target indoor temperature."""
+        """Calculate the outlet temperature required to reach target indoor temperature using learned thermal model."""
         # If we're already at target, use moderate heating
         if abs(current_indoor - target_indoor) < 0.1:
             return 35.0
             
-        # Temperature difference needed
-        temp_diff = target_indoor - current_indoor
+        # Use the calibrated thermal model to find required outlet temperature
+        # This leverages the 26 days of learned parameters instead of simple heuristics
+        pv_power = thermal_features.get('pv_power', 0.0)
+        fireplace_on = thermal_features.get('fireplace_on', 0.0)
+        tv_on = thermal_features.get('tv_on', 0.0)
         
-        # Start with a reasonable guess based on temperature difference
-        if temp_diff > 0:
-            # Need heating
-            outlet_guess = 30.0 + (temp_diff * 10.0)  # Rough heuristic
-        else:
-            # Need less heating or cooling effect
-            outlet_guess = max(25.0, 35.0 + (temp_diff * 5.0))
+        # Iterative search to find outlet temperature that produces target indoor temp
+        # This uses the learned thermal physics parameters from calibration
+        tolerance = 0.1  # °C
+        outlet_min, outlet_max = 25.0, 65.0
+        
+        # Binary search for optimal outlet temperature
+        for iteration in range(20):  # Max 20 iterations for efficiency
+            outlet_mid = (outlet_min + outlet_max) / 2.0
             
-        # Final safety check and return
-        return max(25.0, min(60.0, outlet_guess))
+            # Predict indoor temperature with this outlet temperature
+            predicted_indoor = self.thermal_model.predict_equilibrium_temperature(
+                outlet_temp=outlet_mid,
+                outdoor_temp=outdoor_temp,
+                pv_power=pv_power,
+                fireplace_on=fireplace_on,
+                tv_on=tv_on
+            )
+            
+            # Check if we're close enough
+            error = predicted_indoor - target_indoor
+            if abs(error) < tolerance:
+                logging.debug(f"Converged after {iteration+1} iterations: {outlet_mid:.1f}°C → {predicted_indoor:.1f}°C (target: {target_indoor:.1f}°C)")
+                return outlet_mid
+            
+            # Adjust search range based on error
+            if predicted_indoor < target_indoor:
+                # Need higher outlet temperature
+                outlet_min = outlet_mid
+            else:
+                # Need lower outlet temperature
+                outlet_max = outlet_mid
+        
+        # Return best guess if didn't converge
+        final_outlet = (outlet_min + outlet_max) / 2.0
+        final_predicted = self.thermal_model.predict_equilibrium_temperature(
+            outlet_temp=final_outlet,
+            outdoor_temp=outdoor_temp,
+            pv_power=pv_power,
+            fireplace_on=fireplace_on,
+            tv_on=tv_on
+        )
+        logging.debug(f"Binary search completed: {final_outlet:.1f}°C → {final_predicted:.1f}°C (target: {target_indoor:.1f}°C)")
+        
+        return final_outlet
     
     def _restore_learning_state(self):
         """Restore thermal learning state from persistent storage."""
@@ -216,11 +229,26 @@ class EnhancedModelWrapper:
                 timestamp=timestamp or datetime.now().isoformat()
             )
             
+            # Track prediction in metrics system
+            self.prediction_metrics.add_prediction(
+                predicted=predicted_temp,
+                actual=actual_temp,
+                context=prediction_context,
+                timestamp=timestamp
+            )
+            
             # Track learning cycles
             self.cycle_count += 1
             
             # Auto-save learning state every cycle
             self._save_learning_state()
+            
+            # Save prediction metrics periodically
+            if self.cycle_count % 10 == 0:
+                try:
+                    self.prediction_metrics.save_state('/opt/ml_heating/prediction_metrics.json')
+                except Exception as e:
+                    logging.warning(f"Failed to save prediction metrics: {e}")
             
             prediction_error = abs(predicted_temp - actual_temp)
             logging.debug(
@@ -249,6 +277,76 @@ class EnhancedModelWrapper:
                 'cycle_count': self.cycle_count
             }
     
+    def get_comprehensive_metrics_for_ha(self) -> Dict:
+        """Get comprehensive metrics for Home Assistant sensor export."""
+        try:
+            # Get thermal learning metrics
+            thermal_metrics = self.get_learning_metrics()
+            
+            # Get prediction accuracy metrics
+            prediction_metrics = self.prediction_metrics.get_metrics()
+            
+            # Get recent performance
+            recent_performance = self.prediction_metrics.get_recent_performance(10)
+            
+            # Combine into comprehensive HA-friendly format
+            ha_metrics = {
+                # Core thermal parameters (learned)
+                'thermal_time_constant': thermal_metrics.get('thermal_time_constant', 24.0),
+                'heat_loss_coefficient': thermal_metrics.get('heat_loss_coefficient', 0.05),
+                'outlet_effectiveness': thermal_metrics.get('outlet_effectiveness', 0.8),
+                'learning_confidence': thermal_metrics.get('learning_confidence', 3.0),
+                
+                # Learning progress
+                'cycle_count': self.cycle_count,
+                'parameter_updates': thermal_metrics.get('parameter_updates', 0),
+                'update_percentage': thermal_metrics.get('update_percentage', 0),
+                
+                # Prediction accuracy (MAE/RMSE)
+                'mae_1h': prediction_metrics.get('1h', {}).get('mae', 0.0),
+                'mae_6h': prediction_metrics.get('6h', {}).get('mae', 0.0), 
+                'mae_24h': prediction_metrics.get('24h', {}).get('mae', 0.0),
+                'mae_all_time': prediction_metrics.get('all', {}).get('mae', 0.0),
+                'rmse_all_time': prediction_metrics.get('all', {}).get('rmse', 0.0),
+                
+                # Recent performance
+                'recent_mae_10': recent_performance.get('mae', 0.0),
+                'recent_max_error': recent_performance.get('max_error', 0.0),
+                
+                # Accuracy breakdown
+                'excellent_accuracy_pct': prediction_metrics.get('accuracy_breakdown', {}).get('excellent', {}).get('percentage', 0.0),
+                'good_accuracy_pct': (
+                    prediction_metrics.get('accuracy_breakdown', {}).get('excellent', {}).get('percentage', 0.0) +
+                    prediction_metrics.get('accuracy_breakdown', {}).get('very_good', {}).get('percentage', 0.0) +
+                    prediction_metrics.get('accuracy_breakdown', {}).get('good', {}).get('percentage', 0.0)
+                ),
+                
+                # Trend analysis
+                'is_improving': prediction_metrics.get('trends', {}).get('is_improving', False),
+                'improvement_percentage': prediction_metrics.get('trends', {}).get('mae_improvement_percentage', 0.0),
+                
+                # Model health summary
+                'model_health': 'excellent' if thermal_metrics.get('learning_confidence', 0) >= 4.0 else
+                               'good' if thermal_metrics.get('learning_confidence', 0) >= 3.0 else
+                               'fair' if thermal_metrics.get('learning_confidence', 0) >= 2.0 else 'poor',
+                
+                # Total predictions tracked
+                'total_predictions': len(self.prediction_metrics.predictions),
+                
+                # Timestamp
+                'last_updated': datetime.now().isoformat()
+            }
+            
+            return ha_metrics
+            
+        except Exception as e:
+            logging.error(f"Failed to get comprehensive metrics: {e}")
+            return {
+                'error': str(e),
+                'cycle_count': self.cycle_count,
+                'last_updated': datetime.now().isoformat()
+            }
+    
     def _save_learning_state(self):
         """Save current thermal learning state to persistent storage."""
         try:
@@ -268,85 +366,7 @@ class EnhancedModelWrapper:
             logging.error(f"Failed to save learning state: {e}")
 
 
-def load_model() -> Tuple[RealisticPhysicsModel, MAE, RMSE]:
-    """
-    Load the persisted RealisticPhysicsModel and metrics from disk.
-    
-    This function is kept for backward compatibility but simplified.
-    """
-    try:
-        with open(config.MODEL_FILE, "rb") as f:
-            saved_data = pickle.load(f)
-            if isinstance(saved_data, dict):
-                model = saved_data["model"]
-                mae = saved_data.get("mae", MAE())
-                rmse = saved_data.get("rmse", RMSE())
-
-                if not isinstance(model, RealisticPhysicsModel):
-                    logging.warning(
-                        "Loaded model is not RealisticPhysicsModel "
-                        "(type: %s), creating new model.",
-                        type(model).__name__
-                    )
-                    model = RealisticPhysicsModel()
-                else:
-                    logging.info(
-                        "Successfully loaded RealisticPhysicsModel from %s",
-                        config.MODEL_FILE,
-                    )
-            else:
-                logging.warning(
-                    "Old save format detected, creating new "
-                    "RealisticPhysicsModel."
-                )
-                model = RealisticPhysicsModel()
-                mae = MAE()
-                rmse = RMSE()
-
-            return model, mae, rmse
-    except (FileNotFoundError, pickle.UnpicklingError, EOFError,
-            AttributeError) as e:
-        logging.warning(
-            "Could not load model from %s (error: %s), creating new "
-            "RealisticPhysicsModel.",
-            config.MODEL_FILE, e
-        )
-
-        model = RealisticPhysicsModel()
-        mae = MAE()
-        rmse = RMSE()
-
-        logging.info("🎯 RealisticPhysicsModel initialized:")
-        logging.info("   - MAE: %.4f°C", mae.get())
-        logging.info("   - RMSE: %.4f°C", rmse.get())
-        logging.info(
-            "   - Physics-based predictions with learned house characteristics"
-        )
-
-        return model, mae, rmse
-
-
-def save_model(model: RealisticPhysicsModel, mae: MAE, rmse: RMSE) -> None:
-    """
-    Save the current state of the model and its metrics to a file.
-    """
-    try:
-        with open(config.MODEL_FILE, "wb") as f:
-            pickle.dump({
-                "model": model,
-                "mae": mae,
-                "rmse": rmse
-            }, f)
-            logging.debug(
-                "Successfully saved model and metrics to %s",
-                config.MODEL_FILE
-            )
-    except Exception as e:
-        logging.error(
-            "Failed to save model and metrics to %s: %s",
-            config.MODEL_FILE,
-            e,
-        )
+# Legacy functions removed - ThermalEquilibriumModel handles persistence internally
 
 
 def get_enhanced_model_wrapper() -> EnhancedModelWrapper:
@@ -396,6 +416,10 @@ def simplified_outlet_prediction(
         outlet_temp, metadata = wrapper.calculate_optimal_outlet_temp(features_dict)
         confidence = metadata.get('learning_confidence', 3.0)
         
+        # Calculate thermal trust metrics for HA sensor display
+        thermal_trust_metrics = _calculate_thermal_trust_metrics(wrapper, outlet_temp, current_temp, target_temp)
+        metadata['thermal_trust_metrics'] = thermal_trust_metrics
+        
         logging.info(
             f"✨ Simplified prediction: {current_temp:.2f}°C → {target_temp:.1f}°C "
             f"requires {outlet_temp:.1f}°C (confidence: {confidence:.3f})"
@@ -409,51 +433,84 @@ def simplified_outlet_prediction(
         return 35.0, 2.0, {'error': str(e), 'method': 'fallback'}
 
 
-def apply_smart_rounding(
-    before_rounding: float,
-    model: RealisticPhysicsModel,
-    x_base: dict,
-    current_temp: float,
-    target_temp: float,
-    last_outlet_temp: float,
-    outdoor_temp: float
-) -> float:
+def _calculate_thermal_trust_metrics(
+    wrapper: EnhancedModelWrapper, 
+    outlet_temp: float, 
+    current_temp: float, 
+    target_temp: float
+) -> Dict:
     """
-    Smart Rounding function - kept for backward compatibility.
+    Calculate thermal trust metrics for HA sensor display.
     
-    Simplified version that just rounds to nearest 0.5°C for heat pump compatibility.
+    These metrics replace legacy MAE/RMSE with physics-based trust indicators
+    that show how well the thermal model is performing.
     """
-    # Simple smart rounding to 0.5°C intervals
-    rounded_temp = round(before_rounding * 2) / 2
-    
-    logging.debug(
-        f"Smart rounding: {before_rounding:.2f}°C → {rounded_temp:.1f}°C"
-    )
-    
-    return rounded_temp
+    try:
+        # Get thermal model parameters
+        thermal_model = wrapper.thermal_model
+        
+        # Calculate thermal stability (how stable are the thermal parameters)
+        time_constant_stability = min(1.0, thermal_model.thermal_time_constant / 48.0)
+        heat_loss_stability = min(1.0, thermal_model.heat_loss_coefficient * 20.0)
+        effectiveness_stability = thermal_model.outlet_effectiveness
+        thermal_stability = (time_constant_stability + heat_loss_stability + effectiveness_stability) / 3.0
+        
+        # Calculate prediction consistency (how reasonable is this prediction)
+        temp_diff = abs(target_temp - current_temp)
+        outlet_indoor_diff = abs(outlet_temp - current_temp)
+        
+        # Reasonable outlet temps should be 5-40°C above indoor temp for heating
+        if temp_diff > 0.1:  # Need heating
+            reasonable_range = outlet_indoor_diff >= 5.0 and outlet_indoor_diff <= 40.0
+        else:  # At target
+            reasonable_range = outlet_indoor_diff >= 0.0 and outlet_indoor_diff <= 20.0
+            
+        prediction_consistency = 1.0 if reasonable_range else 0.5
+        
+        # Calculate physics alignment (how well does prediction align with physics)
+        # Higher outlet temps should be needed for larger temperature differences
+        if temp_diff > 0.1:
+            expected_outlet_range = current_temp + (temp_diff * 8.0)  # Rough physics heuristic
+            physics_error = abs(outlet_temp - expected_outlet_range)
+            physics_alignment = max(0.0, 1.0 - (physics_error / 20.0))
+        else:
+            physics_alignment = 1.0
+            
+        # Model health assessment
+        confidence = thermal_model.learning_confidence
+        if confidence >= 4.0:
+            model_health = "excellent"
+        elif confidence >= 3.0:
+            model_health = "good"
+        elif confidence >= 2.0:
+            model_health = "fair"
+        else:
+            model_health = "poor"
+            
+        # Learning progress (how much has the model learned)
+        cycle_count = wrapper.cycle_count
+        learning_progress = min(1.0, cycle_count / 100.0)  # Fully learned after 100 cycles
+        
+        return {
+            'thermal_stability': thermal_stability,
+            'prediction_consistency': prediction_consistency,
+            'physics_alignment': physics_alignment,
+            'model_health': model_health,
+            'learning_progress': learning_progress
+        }
+        
+    except Exception as e:
+        logging.error(f"Failed to calculate thermal trust metrics: {e}")
+        return {
+            'thermal_stability': 0.0,
+            'prediction_consistency': 0.0,
+            'physics_alignment': 0.0,
+            'model_health': 'error',
+            'learning_progress': 0.0
+        }
 
 
-def get_feature_importances(model: RealisticPhysicsModel) -> Dict[str, float]:
-    """
-    Get simplified feature importances for monitoring.
-    
-    This is kept for dashboard compatibility but simplified.
-    """
-    # Simplified importance calculation for the enhanced system
-    return {
-        'outlet_temp': 0.25,
-        'target_temp': 0.15, 
-        'indoor_temp_lag_30m': 0.15,
-        'outdoor_temp': 0.12,
-        'dhw_heating': 0.08,
-        'fireplace_on': 0.05,
-        'pv_now': 0.04,
-        'defrosting': 0.03,
-        'tv_on': 0.02,
-        'temp_forecast_1h': 0.02,
-        'pv_forecast_1h': 0.02,
-        'other_features': 0.07
-    }
+# Legacy functions completely removed - ThermalEquilibriumModel provides all needed functionality
 
 
 # No backward compatibility functions needed - clean slate approach

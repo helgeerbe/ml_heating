@@ -8,21 +8,27 @@ using historical target temperature data and actual house behavior.
 import logging
 import pandas as pd
 
-from . import config
-from .physics_model import RealisticPhysicsModel
-from .model_wrapper import save_model, MAE, RMSE
-from .influx_service import InfluxService
+# Support both package-relative and direct import for notebooks/scripts
+try:
+    from . import config
+    from .thermal_equilibrium_model import ThermalEquilibriumModel
+    from .state_manager import save_state, load_state
+    from .influx_service import InfluxService
+except ImportError:
+    # Direct import fallback for standalone execution
+    import config
+    from thermal_equilibrium_model import ThermalEquilibriumModel
+    from state_manager import save_state, load_state
+    from influx_service import InfluxService
 
 
-def train_realistic_physics_model():
-    """Train the Realistic Physics Model with target temperature awareness"""
+def train_thermal_equilibrium_model():
+    """Train the Thermal Equilibrium Model with historical data for optimal thermal parameters"""
     
-    logging.info("=== REALISTIC PHYSICS MODEL TRAINING ===")
+    logging.info("=== THERMAL EQUILIBRIUM MODEL TRAINING ===")
     
-    # Initialize components
-    model = RealisticPhysicsModel()
-    mae = MAE()
-    rmse = RMSE()
+    # Initialize thermal model
+    thermal_model = ThermalEquilibriumModel()
     
     influx = InfluxService(
         url=config.INFLUX_URL,
@@ -31,7 +37,7 @@ def train_realistic_physics_model():
     )
     
     logging.info("Fetching historical data with target temperatures...")
-    df = influx.get_training_data(lookback_hours=168)  # 1 week
+    df = influx.get_training_data(lookback_hours=config.TRAINING_LOOKBACK_HOURS)
     
     if df.empty or len(df) < 240:
         logging.error("ERROR: Insufficient training data")
@@ -179,153 +185,271 @@ def train_realistic_physics_model():
         f"Training on {kept_samples} realistic heating scenarios"
     )
     
-    # Training loop
-    logging.info("\n=== TRAINING WITH TARGET AWARENESS ===")
-    for i, (features, target) in enumerate(zip(features_list, labels_list)):
-        # Get the original timestamp of the data point being learned from
-        # We use the original DataFrame df and the current index idx to get
-        # the correct historical timestamp.
-        historical_timestamp = df.iloc[idx]['_time']
-
-        pred = model.predict_one(features)
-        model.learn_one(features, target)
-        
-        # Track metrics after warm-up
-        if i >= 50:
-            mae.update(target, pred)
-            rmse.update(target, pred)
-        
-        if (i + 1) % 200 == 0:
-            logging.info(
-                f"Processed {i+1}/{len(features_list)} - MAE: {mae.get():.4f}°C"
-            )
-        
-        # Export learning metrics to InfluxDB with the historical timestamp
-        learning_metrics = model.export_learning_metrics()
-        influx.write_feature_importances(
-            learning_metrics, 
-            bucket=config.INFLUX_FEATURES_BUCKET,
-            measurement="learning_parameters_calibration", # Use a distinct measurement name
-            timestamp=historical_timestamp
-        )
+    # Training loop - Use thermal equilibrium model for parameter optimization
+    logging.info("\n=== THERMAL PARAMETER OPTIMIZATION ===")
+    logging.info("🔧 PHYSICS-CONSTRAINED LEARNING: Preventing unrealistic parameter drift")
     
-    # Results
-    logging.info("\n=== TRAINING COMPLETED ===")
-    logging.info(f"Final MAE: {mae.get():.4f}°C")
-    logging.info(f"Final RMSE: {rmse.get():.4f}°C")
+    # Store initial parameters from .env config
+    initial_outlet_effectiveness = thermal_model.outlet_effectiveness
+    logging.info(f"Starting outlet effectiveness: {initial_outlet_effectiveness:.3f}")
     
-    logging.info("\n=== LEARNED REALISTIC PHYSICS ===")
-    logging.info(f"Base heating rate: {model.base_heating_rate:.6f}")
-    logging.info(f"Target influence: {model.target_influence:.6f}")
-    logging.info(
-        f"PV warming coeff: {model.pv_warming_coefficient:.6f} per 100W"
-    )
-    logging.info(f"Fireplace heating: {model.fireplace_heating_rate:.6f}")
-    logging.info(f"TV heat contrib: {model.tv_heat_contribution:.6f}")
+    # Track prediction accuracy for optimization
+    prediction_errors = []
     
-    # Test realistic physics
-    logging.info("\n=== PHYSICS VALIDATION ===")
-    test_features = {
-        'outlet_temp': 45.0,
-        'indoor_temp_lag_30m': 21.0,
-        'target_temp': 22.0,  # Target higher than current
-        'outdoor_temp': 5.0,
-        'dhw_heating': 0.0,
-        'defrosting': 0.0,
-        'dhw_disinfection': 0.0,
-        'dhw_boost_heater': 0.0,
-        'fireplace_on': 0.0,
-        'pv_now': 0.0,
-        'tv_on': 0.0,
-        'temp_forecast_1h': 5.0,
-        'temp_forecast_2h': 5.0, 
-        'temp_forecast_3h': 5.0,
-        'temp_forecast_4h': 5.0,
-        'pv_forecast_1h': 0.0,
-        'pv_forecast_2h': 0.0,
-        'pv_forecast_3h': 0.0,
-        'pv_forecast_4h': 0.0,
-    }
-    
-    logging.info("Testing with target=22°C, current=21°C (heating needed):")
-    for temp in [25, 35, 45, 55, 65]:
-        test_features['outlet_temp'] = temp
-        pred = model.predict_one(test_features)
-        logging.info(f"  Outlet {temp}°C → {pred:+.4f}°C change")
-    
-    logging.info("\nTesting with target=21°C, current=21°C (no heating needed):")
-    test_features['target_temp'] = 21.0
-    for temp in [25, 35, 45, 55, 65]:
-        test_features['outlet_temp'] = temp
-        pred = model.predict_one(test_features)
-        logging.info(f"  Outlet {temp}°C → {pred:+.4f}°C change")
-    
-    # Save the trained model
-    logging.info("\n=== SAVING REALISTIC PHYSICS MODEL ===")
-    try:
-        save_model(model, mae, rmse)
-        logging.info(f"✅ Realistic Physics Model saved to {config.MODEL_FILE}")
-        logging.info("🔄 Restart ml_heating service to use trained model:")
-        logging.info("   systemctl restart ml_heating")
-    except Exception as e:
-        logging.error(f"❌ Failed to save model: {e}")
-    
-    return model, mae, rmse
-
-
-def validate_physics_model():
-    """Validate physics model behavior across temperature ranges"""
-    
-    logging.info("=== PHYSICS MODEL VALIDATION ===")
-    
-    try:
-        physics_model = RealisticPhysicsModel()
-        
-        test_features = {
-            'outlet_temp': 45.0,
-            'indoor_temp_lag_30m': 21.0,
-            'target_temp': 22.0,
-            'outdoor_temp': 5.0,
-            'dhw_heating': 0.0,
-            'defrosting': 0.0,
-            'dhw_disinfection': 0.0,
-            'dhw_boost_heater': 0.0,
-            'fireplace_on': 0.0,
-            'pv_now': 0.0,
-            'tv_on': 0.0,
-            'temp_forecast_1h': 5.0,
-            'temp_forecast_2h': 5.0, 
-            'temp_forecast_3h': 5.0,
-            'temp_forecast_4h': 5.0,
-            'pv_forecast_1h': 0.0,
-            'pv_forecast_2h': 0.0,
-            'pv_forecast_3h': 0.0,
-            'pv_forecast_4h': 0.0,
+    for i, (features, actual_delta) in enumerate(zip(features_list, labels_list)):
+        # Extract thermal context from features
+        context = {
+            'outlet_temp': features['outlet_temp'],
+            'outdoor_temp': features['outdoor_temp'],
+            'pv_power': features.get('pv_now', 0.0),
+            'fireplace_on': features.get('fireplace_on', 0.0),
+            'tv_on': features.get('tv_on', 0.0)
         }
         
-        logging.info("Testing physics compliance across temperature range:")
-        print("\nOUTLET TEMP → PREDICTED CHANGE")
+        # Predict equilibrium temperature using thermal model
+        current_indoor = features['indoor_temp_lag_30m']
+        predicted_equilibrium = thermal_model.predict_equilibrium_temperature(
+            outlet_temp=features['outlet_temp'],
+            outdoor_temp=features['outdoor_temp'],
+            pv_power=context['pv_power'],
+            fireplace_on=context['fireplace_on'],
+            tv_on=context['tv_on']
+        )
+        
+        # Convert equilibrium prediction to temperature change prediction
+        predicted_delta = (predicted_equilibrium - current_indoor) * 0.1
+        
+        # Calculate actual final temperature for feedback
+        actual_final = current_indoor + actual_delta
+        
+        # Update thermal model with prediction feedback
+        thermal_model.update_prediction_feedback(
+            predicted_temp=predicted_equilibrium,
+            actual_temp=actual_final,
+            prediction_context=context,
+            timestamp=df.iloc[12 + i]['_time'] if i < len(df) - 12 else None
+        )
+        
+        # PHYSICS CONSTRAINT: Prevent outlet effectiveness from drifting too far from realistic values
+        if i > 0 and (i + 1) % 50 == 0:  # Check every 50 samples
+            # Enforce minimum outlet effectiveness based on .env config
+            min_outlet_effectiveness = max(0.4, initial_outlet_effectiveness - 0.1)  # Allow 10% drift down
+            max_outlet_effectiveness = min(0.8, initial_outlet_effectiveness + 0.1)  # Allow 10% drift up
+            
+            if thermal_model.outlet_effectiveness < min_outlet_effectiveness:
+                logging.info(f"🔧 PHYSICS CONSTRAINT: Outlet effectiveness {thermal_model.outlet_effectiveness:.3f} too low, "
+                           f"correcting to minimum {min_outlet_effectiveness:.3f}")
+                thermal_model.outlet_effectiveness = min_outlet_effectiveness
+                
+            elif thermal_model.outlet_effectiveness > max_outlet_effectiveness:
+                logging.info(f"🔧 PHYSICS CONSTRAINT: Outlet effectiveness {thermal_model.outlet_effectiveness:.3f} too high, "
+                           f"correcting to maximum {max_outlet_effectiveness:.3f}")
+                thermal_model.outlet_effectiveness = max_outlet_effectiveness
+        
+        # Track prediction error
+        prediction_error = abs(predicted_delta - actual_delta)
+        prediction_errors.append(prediction_error)
+        
+        if (i + 1) % 200 == 0:
+            avg_error = sum(prediction_errors[-200:]) / min(200, len(prediction_errors))
+            logging.info(
+                f"Processed {i+1}/{len(features_list)} - "
+                f"Avg Error: {avg_error:.4f}°C - "
+                f"Confidence: {thermal_model.learning_confidence:.3f}"
+            )
+    
+    # Results
+    logging.info("\n=== THERMAL TRAINING COMPLETED ===")
+    avg_error = sum(prediction_errors) / len(prediction_errors) if prediction_errors else 0.0
+    logging.info(f"Final Average Error: {avg_error:.4f}°C")
+    logging.info(f"Total training samples: {len(prediction_errors)}")
+    
+    logging.info("\n=== LEARNED THERMAL PARAMETERS ===")
+    logging.info(f"Thermal time constant: {thermal_model.thermal_time_constant:.2f}h")
+    logging.info(f"Heat loss coefficient: {thermal_model.heat_loss_coefficient:.4f}")
+    logging.info(f"Outlet effectiveness: {thermal_model.outlet_effectiveness:.3f}")
+    logging.info(f"Learning confidence: {thermal_model.learning_confidence:.3f}")
+    
+    # Get adaptive learning metrics
+    learning_metrics = thermal_model.get_adaptive_learning_metrics()
+    if not learning_metrics.get('insufficient_data', False):
+        logging.info(f"Parameter updates: {learning_metrics['parameter_updates']}")
+        logging.info(f"Update percentage: {learning_metrics['update_percentage']:.1f}%")
+    
+    # Test thermal equilibrium physics
+    logging.info("\n=== THERMAL PHYSICS VALIDATION ===")
+    logging.info("Testing equilibrium predictions:")
+    for outlet_temp in [35, 45, 55]:
+        for outdoor_temp in [0, 10, 20]:
+            equilibrium = thermal_model.predict_equilibrium_temperature(
+                outlet_temp=outlet_temp,
+                outdoor_temp=outdoor_temp,
+                pv_power=0,
+                fireplace_on=0,
+                tv_on=0
+            )
+            logging.info(f"  Outlet {outlet_temp}°C, Outdoor {outdoor_temp}°C → "
+                        f"Equilibrium {equilibrium:.2f}°C")
+    
+    # Save thermal learning state
+    logging.info("\n=== SAVING THERMAL LEARNING STATE ===")
+    try:
+        thermal_learning_state = {
+            'thermal_time_constant': thermal_model.thermal_time_constant,
+            'heat_loss_coefficient': thermal_model.heat_loss_coefficient,
+            'outlet_effectiveness': thermal_model.outlet_effectiveness,
+            'learning_confidence': thermal_model.learning_confidence,
+            'parameter_history': thermal_model.parameter_history[-50:],  # Last 50 updates
+            'prediction_history': thermal_model.prediction_history[-100:],  # Last 100 predictions
+        }
+        
+        save_state(thermal_learning_state=thermal_learning_state)
+        logging.info("✅ Thermal learning state saved successfully")
+        logging.info("🔄 Restart ml_heating service to use trained thermal model")
+        
+    except Exception as e:
+        logging.error(f"❌ Failed to save thermal learning state: {e}")
+    
+    return thermal_model
+
+
+def validate_thermal_model():
+    """Validate thermal equilibrium model behavior across temperature ranges"""
+    
+    logging.info("=== THERMAL MODEL VALIDATION ===")
+    
+    try:
+        # Initialize thermal model (will use default parameters or restored state)
+        thermal_model = ThermalEquilibriumModel()
+        
+        logging.info("Testing thermal equilibrium physics compliance:")
+        print("\nOUTLET TEMP → EQUILIBRIUM TEMP")
         print("=" * 35)
         
+        # Test monotonicity - higher outlet should mean higher equilibrium
         monotonic_check = []
-        for temp in [25, 30, 35, 40, 45, 50, 55, 60]:
-            test_features['outlet_temp'] = temp
-            pred = physics_model.predict_one(test_features)
-            monotonic_check.append(pred)
-            print(f"{temp:3d}°C       → {pred:+.6f}°C")
+        for outlet_temp in [25, 30, 35, 40, 45, 50, 55, 60]:
+            equilibrium = thermal_model.predict_equilibrium_temperature(
+                outlet_temp=outlet_temp,
+                outdoor_temp=5.0,
+                pv_power=0,
+                fireplace_on=0,
+                tv_on=0
+            )
+            monotonic_check.append(equilibrium)
+            print(f"{outlet_temp:3d}°C       → {equilibrium:.2f}°C")
         
         # Check monotonicity
         is_monotonic = all(monotonic_check[i] <= monotonic_check[i+1] 
-                         for i in range(len(monotonic_check)-1))
+                          for i in range(len(monotonic_check)-1))
         
-        print(
-            f"\n{'✅' if is_monotonic else '❌'} Physics compliance: "
-            f"{'PASSED' if is_monotonic else 'FAILED'}"
-        )
-        print(f"Range: {min(monotonic_check):.6f} to {max(monotonic_check):.6f}")
+        print(f"\n{'✅' if is_monotonic else '❌'} Physics compliance: "
+              f"{'PASSED' if is_monotonic else 'FAILED'}")
+        print(f"Range: {min(monotonic_check):.2f}°C to "
+              f"{max(monotonic_check):.2f}°C")
         
-        return is_monotonic
+        # Test parameter bounds
+        logging.info("\n=== THERMAL PARAMETER BOUNDS TEST ===")
+        params_ok = True
+        
+        if not (4.0 <= thermal_model.thermal_time_constant <= 96.0):
+            logging.error(f"Thermal time constant out of bounds: "
+                         f"{thermal_model.thermal_time_constant:.2f}h")
+            params_ok = False
+            
+        if not (0.005 <= thermal_model.heat_loss_coefficient <= 0.25):
+            logging.error(f"Heat loss coefficient out of bounds: "
+                         f"{thermal_model.heat_loss_coefficient:.4f}")
+            params_ok = False
+            
+        if not (0.2 <= thermal_model.outlet_effectiveness <= 1.5):
+            logging.error(f"Outlet effectiveness out of bounds: "
+                         f"{thermal_model.outlet_effectiveness:.3f}")
+            params_ok = False
+            
+        if params_ok:
+            logging.info("✅ All thermal parameters within physical bounds")
+        else:
+            logging.error("❌ Some thermal parameters out of bounds")
+        
+        # Test adaptive learning system
+        logging.info("\n=== ADAPTIVE LEARNING SYSTEM TEST ===")
+        
+        # Simulate some prediction feedback
+        test_context = {
+            'outlet_temp': 45.0,
+            'outdoor_temp': 5.0,
+            'pv_power': 0,
+            'fireplace_on': 0,
+            'tv_on': 0
+        }
+        
+        initial_confidence = thermal_model.learning_confidence
+        
+        # Simulate good predictions (should boost confidence)
+        for _ in range(5):
+            predicted = thermal_model.predict_equilibrium_temperature(
+                **test_context
+            )
+            actual = predicted + 0.1  # Small error
+            thermal_model.update_prediction_feedback(
+                predicted_temp=predicted,
+                actual_temp=actual,
+                prediction_context=test_context
+            )
+            
+        final_confidence = thermal_model.learning_confidence
+        learning_works = final_confidence != initial_confidence
+        
+        logging.info(f"Initial confidence: {initial_confidence:.3f}")
+        logging.info(f"Final confidence: {final_confidence:.3f}")
+        logging.info(f"{'✅' if learning_works else '❌'} "
+                    f"Adaptive learning: {'WORKING' if learning_works else 'NOT WORKING'}")
+        
+        overall_success = is_monotonic and params_ok and learning_works
+        logging.info(f"\n{'✅' if overall_success else '❌'} "
+                    f"Overall validation: {'PASSED' if overall_success else 'FAILED'}")
+        
+        return overall_success
         
     except Exception as e:
-        logging.error("Physics validation error: %s", e, exc_info=True)
+        logging.error("Thermal model validation error: %s", e, exc_info=True)
         return False
+
+
+def main():
+    """Main function to run thermal equilibrium model training and validation"""
+    # Set up logging
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
+    
+    try:
+        # Train thermal model with real data
+        print("🚀 Starting thermal equilibrium model training...")
+        thermal_model = train_thermal_equilibrium_model()
+        
+        if thermal_model:
+            print("✅ Thermal training completed successfully!")
+            
+            # Validate the trained model
+            print("\n🧪 Running thermal model validation...")
+            validation_passed = validate_thermal_model()
+            
+            if validation_passed:
+                print("✅ Thermal model validation PASSED!")
+            else:
+                print("❌ Thermal model validation FAILED!")
+                
+        else:
+            print("❌ Thermal training failed!")
+            return False
+            
+        return True
+        
+    except Exception as e:
+        logging.error(f"Main execution error: {e}", exc_info=True)
+        return False
+
+
+if __name__ == "__main__":
+    success = main()
+    exit(0 if success else 1)

@@ -1,5 +1,84 @@
 # ML Heating System - Development Progress
 
+## 🔄 PHASE 17: ADAPTIVE LEARNING MASTER PLAN - IN PROGRESS
+
+**Status: 🔄 IN PROGRESS - Deep Analysis Complete, Implementation Ready**
+**Start Date: December 4, 2025**
+**Priority: CRITICAL - Core Project Objective**
+
+### Phase 17 Objective - "Rock Solid Indoor Temperature"
+
+**Goal**: Transform the ML Heating System from fixed-parameter physics model to fully adaptive, intelligent heating controller that achieves ±0.1°C temperature stability.
+
+### Deep Analysis Results (December 4, 2025)
+
+#### 🔴 **Critical Issues Identified**
+| Issue | Location | Impact |
+|-------|----------|--------|
+| Adaptive learning DISABLED | `thermal_equilibrium_model.py:43` | No learning happening |
+| Trajectory methods EMPTY | `thermal_equilibrium_model.py:430-442` | No prediction capability |
+| Enhanced trajectory uses wrong model | `enhanced_trajectory.py:13` | Code unusable |
+| No MAE/RMSE tracking | Removed during migration | No accuracy monitoring |
+
+#### ✅ **Working Components Confirmed**
+- Binary search outlet optimization (model_wrapper.py)
+- Physics equilibrium calculation (predict_equilibrium_temperature)
+- State persistence (save_state/load_state)
+- HA integration (sensors being updated)
+- Multi-heat source physics (multi_heat_source_physics.py)
+- Fireplace adaptive learning (adaptive_fireplace_learning.py)
+
+### Master Plan Created
+
+**Documentation**: `memory-bank/ADAPTIVE_LEARNING_MASTER_PLAN.md`
+
+#### Phase 1: Foundation & Monitoring (Current Priority)
+- [ ] **Task 1.1**: MAE/RMSE Tracking System with rolling windows
+- [ ] **Task 1.2**: Enhanced HA Metrics Export (MAE, RMSE, learned parameters)
+- [ ] **Task 1.3**: Implement predict_thermal_trajectory() properly
+- [ ] **Task 1.4**: Re-enable adaptive learning with CORRECTION-based approach
+
+#### Phase 2: Intelligent Control
+- [ ] Weather Forecast Integration into trajectory
+- [ ] PV Forecast Integration into trajectory
+- [ ] Multi-Heat Source Effectiveness Learning
+- [ ] Overshoot Prevention System
+
+#### Phase 3: Optimization & Polish
+- [ ] Seasonal Adaptation
+- [ ] Advanced Monitoring Dashboard
+- [ ] Documentation & Testing
+
+### Key Technical Insight
+
+> **Why Original Learning Failed**: The adaptive learning learned **absolute parameters** from **transient data**. When it saw "outlet 45°C + indoor 21°C", it learned "effectiveness = 0.2" (WRONG!) because the system was in transition, not equilibrium.
+
+> **The Fix**: Learn **corrections** around **known-good base values**, only from **stable periods**.
+
+### HA Metrics Enhancement Plan
+
+**Current Metrics** (sensor.ml_heating_state):
+- confidence, thermal_stability, prediction_consistency, physics_alignment, model_health, learning_progress
+
+**New Metrics to Add**:
+- `mae_1h`, `mae_24h`, `rmse_1h` - Prediction accuracy tracking
+- `prediction_accuracy_pct` - User-friendly accuracy
+- `outlet_effectiveness`, `heat_loss_coefficient`, `thermal_time_constant` - Learned parameters
+- `adaptive_learning_active`, `learning_updates_24h`, `parameter_drift_rate` - Learning status
+
+### Progress Tracking
+- [x] Deep codebase analysis complete
+- [x] Critical issues identified
+- [x] Master plan documentation created
+- [x] HA metrics enhancement designed
+- [x] Implementation architecture designed
+- [ ] Phase 1 implementation started
+- [ ] MAE/RMSE tracking implemented
+- [ ] Trajectory prediction implemented
+- [ ] Adaptive learning re-enabled with constraints
+
+---
+
 ## ✅ PHASE 10: HEAT BALANCE CONTROLLER - COMPLETED!
 
 **Status: Production Ready with Heat Balance Controller ✅**

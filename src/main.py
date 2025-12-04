@@ -26,13 +26,10 @@ from .ha_client import create_ha_client, get_sensor_attributes
 from .influx_service import create_influx_service
 from .model_wrapper import (
     simplified_outlet_prediction,
-    get_feature_importances,
-    load_model,
-    save_model,
 )
 from .physics_calibration import (
-    train_realistic_physics_model,
-    validate_physics_model,
+    train_thermal_equilibrium_model,
+    validate_thermal_model,
 )
 from .state_manager import load_state, save_state
 
@@ -120,16 +117,11 @@ def main(args):
     logging.getLogger("urllib3").setLevel(logging.INFO)
 
     # --- Initialization ---
-    # Load the persisted physics model, metrics, and application state from files.
-    # If they don't exist, create new instances.
-    model, mae, rmse = load_model()
-    
-    # Shadow mode metrics to compare ML vs heat curve performance
-    from .utils_metrics import MAE, RMSE
-    shadow_ml_mae = MAE()
-    shadow_ml_rmse = RMSE()
-    shadow_hc_mae = MAE()
-    shadow_hc_rmse = RMSE()
+    # ThermalEquilibriumModel is now loaded directly in model_wrapper.py
+    # Shadow mode comparison metrics (no longer tracking MAE/RMSE)
+    shadow_ml_error_sum = 0.0
+    shadow_hc_error_sum = 0.0
+    shadow_comparison_count = 0
     
     influx_service = create_influx_service()
 
@@ -143,31 +135,30 @@ def main(args):
     else:
         logging.info("🎯 ACTIVE MODE: ML actively controls heating system")
 
-    # --- Physics Model Calibration ---
+    # --- Thermal Model Calibration ---
     if args.calibrate_physics:
         try:
-            logging.info("=== CALIBRATING PHYSICS MODEL ===")
-            result = train_realistic_physics_model()
+            logging.info("=== CALIBRATING THERMAL EQUILIBRIUM MODEL ===")
+            result = train_thermal_equilibrium_model()
             if result:
-                logging.info("✅ Physics model calibrated successfully!")
-                logging.info("🔄 Restart ml_heating service to use new model:")
-                logging.info("   systemctl restart ml_heating")
+                logging.info("✅ Thermal model calibrated successfully!")
+                logging.info("🔄 Restart ml_heating service to use trained thermal model")
             else:
-                logging.error("❌ Physics calibration failed")
+                logging.error("❌ Thermal model calibration failed")
         except Exception as e:
-            logging.error("Physics calibration error: %s", e, exc_info=True)
+            logging.error("Thermal model calibration error: %s", e, exc_info=True)
         return
     
-    # --- Physics Validation ---
+    # --- Thermal Model Validation ---
     if args.validate_physics:
         try:
-            result = validate_physics_model()
+            result = validate_thermal_model()
             if result:
-                logging.info("✅ Physics validation passed!")
+                logging.info("✅ Thermal model validation passed!")
             else:
-                logging.error("❌ Physics validation failed!")
+                logging.error("❌ Thermal model validation failed!")
         except Exception as e:
-            logging.error("Physics validation error: %s", e, exc_info=True)
+            logging.error("Thermal model validation error: %s", e, exc_info=True)
         return
 
     # --- Main Control Loop ---
@@ -175,6 +166,12 @@ def main(args):
     # prediction every 5 minutes.
     while True:
         try:
+            # Initialize shadow mode tracking for this cycle
+            shadow_mode_active = (
+                config.TARGET_OUTLET_TEMP_ENTITY_ID !=
+                config.ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID
+            )
+            
             # Load the application state at the beginning of each cycle.
             state = load_state()
             # Create a new Home Assistant client for each cycle.
@@ -268,32 +265,13 @@ def main(args):
                         actual_applied_temp ** 3
                     )
 
-                    # Learn from the actual result
+                    # Online learning is now handled by ThermalEquilibriumModel in model_wrapper
                     try:
-                        # Get model's prediction for this cycle to track prediction error
-                        predicted_change = model.predict_one(learning_features)
-                        
-                        # Update MAE/RMSE with actual vs predicted
-                        mae.update(actual_indoor_change, predicted_change)
-                        rmse.update(actual_indoor_change, predicted_change)
-                        
-                        # Track prediction error for real-time confidence
-                        model.track_prediction_error(predicted_change, actual_indoor_change)
-                        
-                        # Now learn from the result
-                        model.learn_one(
-                            learning_features, actual_indoor_change
-                        )
-                        
-                        prediction_error = abs(predicted_change - actual_indoor_change)
                         logging.debug(
                             "Online learning: applied_temp=%.1f°C, "
-                            "predicted_change=%.3f°C, actual_change=%.3f°C, "
-                            "error=%.3f°C",
+                            "actual_change=%.3f°C (handled by thermal model)",
                             actual_applied_temp,
-                            predicted_change,
-                            actual_indoor_change,
-                            prediction_error
+                            actual_indoor_change
                         )
                     except Exception as e:
                         logging.warning(
@@ -307,28 +285,11 @@ def main(args):
                         config.ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID
                     )
                     
+                    # Shadow mode error tracking removed - handled by ThermalEquilibriumModel
                     if shadow_mode_active and actual_applied_temp != last_final_temp_stored:
-                        # ML's hypothetical error (what it would have made)
-                        ml_features = last_run_features.copy()
-                        if isinstance(ml_features, pd.DataFrame):
-                            ml_features = ml_features.to_dict(orient="records")[0]
-                        ml_features["outlet_temp"] = last_final_temp_stored
-                        ml_predicted_change = model.predict_one(ml_features)
-                        ml_error = abs(ml_predicted_change - actual_indoor_change)
-                        
-                        # Heat curve's actual error
-                        hc_predicted_change = model.predict_one(learning_features)
-                        hc_error = abs(hc_predicted_change - actual_indoor_change)
-                        
-                        # Update shadow metrics
-                        shadow_ml_mae.update(0, ml_error)
-                        shadow_ml_rmse.update(0, ml_error)
-                        shadow_hc_mae.update(0, hc_error)
-                        shadow_hc_rmse.update(0, hc_error)
-                        
                         logging.debug(
-                            "Shadow tracking: ML_error=%.3f, HC_error=%.3f",
-                            ml_error, hc_error
+                            "Shadow mode: ML would have set %.1f°C, HC set %.1f°C",
+                            last_final_temp_stored, actual_applied_temp
                         )
                 else:
                     logging.debug(
@@ -811,29 +772,9 @@ def main(args):
                         final_temp,
                     )
 
-            # To provide a "predicted indoor temp" sensor in Home Assistant,
-            # we run a final prediction using the chosen `final_temp`. This shows
-            # what the model expects the indoor temperature to be at the end of
-            # the next cycle, given the chosen outlet temperature.
-            final_features = features.copy()
-            final_features["outlet_temp"] = final_temp
-            final_features["outlet_temp_sq"] = final_temp**2
-            final_features["outlet_temp_cub"] = final_temp**3
-            final_features["outlet_temp_change_from_last"] = (
-                final_temp - outlet_history[-1]
-            )
-            final_features["outlet_indoor_diff"] = (
-                final_temp - prediction_indoor_temp
-            )
-            # Update interaction features so the final prediction uses the same
-            # feature construction as the candidate evaluations in the search.
-            final_features["outdoor_temp_x_outlet_temp"] = final_features.get(
-                "outdoor_temp", outdoor_temp
-            ) * final_temp
-            predicted_delta = model.predict_one(
-                final_features.to_dict(orient="records")[0]
-            )
-            predicted_indoor = prediction_indoor_temp + predicted_delta
+            # Final prediction is now handled by ThermalEquilibriumModel in model_wrapper
+            # Use confidence metadata for predicted indoor temp if available
+            predicted_indoor = metadata.get("predicted_indoor", prediction_indoor_temp)
 
             # --- Step 4: Update Home Assistant and Log ---
             # The calculated `final_temp` is sent to Home Assistant to control
@@ -853,49 +794,20 @@ def main(args):
                 )
 
             # --- Log Metrics ---
-            # In shadow mode, skip HA sensor updates but still log to console and InfluxDB
+            # Metrics logging now handled by ThermalEquilibriumModel in model_wrapper
             if not config.SHADOW_MODE:
-                logging.debug("Logging model metrics")
-                ha_client.log_model_metrics(confidence, mae.get(), rmse.get())
-            
-            importances = get_feature_importances(model)
-            if importances:
-                logging.info("Feature Importances:")
-                try:
-                    fvals = features.to_dict(orient="records")[0]
-                except Exception:
-                    fvals = {}
-                for feature, importance in sorted(
-                    importances.items(),
-                    key=lambda item: item[1],
-                    reverse=True,
-                ):
-                    logging.info(
-                        "  - %s: %.4f (value: %s)",
-                        feature,
-                        importance,
-                        fvals.get(feature),
-                    )
-            
-            # Log to HA and InfluxDB only in active mode
-            if not config.SHADOW_MODE:
-                ha_client.log_feature_importance(importances)
-                
-            influx_service.write_feature_importances(
-                importances, bucket=config.INFLUX_FEATURES_BUCKET
-            )
-            
-            # Export learning metrics to InfluxDB
-            learning_metrics = model.export_learning_metrics()
-            influx_service.write_feature_importances(
-                learning_metrics, bucket=config.INFLUX_FEATURES_BUCKET,
-                measurement="learning_parameters"
-            )
+                logging.debug("Logging thermal model metrics")
+                # Confidence is logged via simplified_outlet_prediction metadata
+                # Feature importances are handled by ThermalEquilibriumModel
+                # Learning metrics are exported by ThermalEquilibriumModel
 
             # --- Update ML State sensor ---
             # Skip ML state sensor updates in shadow mode
             if not config.SHADOW_MODE:
                 try:
+                    # Get thermal model trust metrics from ThermalEquilibriumModel
+                    thermal_trust_metrics = metadata.get("thermal_trust_metrics", {})
+                    
                     attributes_state = get_sensor_attributes(
                         "sensor.ml_heating_state"
                     )
@@ -905,8 +817,6 @@ def main(args):
                             if confidence < config.CONFIDENCE_THRESHOLD
                             else "OK - Prediction done",
                             "confidence": round(confidence, 4),
-                            "mae": round(mae.get(), 4),
-                            "rmse": round(rmse.get(), 4),
                             "suggested_temp": round(suggested_temp, 2),
                             "final_temp": round(final_temp, 2),
                             "predicted_indoor": round(predicted_indoor, 2),
@@ -916,6 +826,12 @@ def main(args):
                             "temperature_error": round(
                                 abs(error_target_vs_actual), 3
                             ),
+                            # ThermalEquilibriumModel trust metrics
+                            "thermal_stability": round(thermal_trust_metrics.get("thermal_stability", 0.0), 4),
+                            "prediction_consistency": round(thermal_trust_metrics.get("prediction_consistency", 0.0), 4),
+                            "physics_alignment": round(thermal_trust_metrics.get("physics_alignment", 0.0), 4),
+                            "model_health": thermal_trust_metrics.get("model_health", "unknown"),
+                            "learning_progress": round(thermal_trust_metrics.get("learning_progress", 0.0), 4),
                         }
                     )
                     ha_client.set_state(
@@ -972,46 +888,20 @@ def main(args):
                 )
                 
                 if heat_curve_temp is not None and heat_curve_temp != final_temp:
-                    # Predict what indoor temp the heat curve will achieve
-                    heat_curve_features = features.copy()
-                    heat_curve_features["outlet_temp"] = heat_curve_temp
-                    heat_curve_predicted = model.predict_one(
-                        heat_curve_features.to_dict(orient="records")[0]
-                    )
-                    heat_curve_indoor = actual_indoor + heat_curve_predicted
-                    
-                    # Calculate errors from target
-                    ml_error = abs(predicted_indoor - target_indoor_temp)
-                    heat_curve_error = abs(heat_curve_indoor - target_indoor_temp)
-                    
+                    # Simple comparison without model prediction
                     logging.info(
-                        "SHADOW MODE COMPARISON: ML: %.1f°C→%.2f°C [err=%.2f] "
-                        "vs HeatCurve: %.1f°C→%.2f°C [err=%.2f] | "
-                        "Target: %.1f°C",
+                        "SHADOW MODE: ML would set %.1f°C, HC set %.1f°C | Target: %.1f°C",
                         final_temp,
-                        predicted_indoor,
-                        ml_error,
                         heat_curve_temp,
-                        heat_curve_indoor,
-                        heat_curve_error,
                         target_indoor_temp,
                     )
 
-            # Log shadow metrics if in shadow mode
-            if shadow_mode_active:
-                logging.info(
-                    "SHADOW METRICS: ML: MAE=%.3f RMSE=%.3f | "
-                    "HeatCurve: MAE=%.3f RMSE=%.3f",
-                    shadow_ml_mae.get(),
-                    shadow_ml_rmse.get(),
-                    shadow_hc_mae.get(),
-                    shadow_hc_rmse.get(),
-                )
-
+            # Shadow metrics now handled by ThermalEquilibriumModel
+            
             log_message = (
                 "Target: %.1f°C | Suggested: %.1f°C | Final: %.1f°C | "
                 "Actual Indoor: %.2f°C | Predicted Indoor: %.2f°C | "
-                "Confidence: %.3f | MAE: %.3f | RMSE: %.3f"
+                "Confidence: %.3f"
             )
             logging.info(
                 log_message,
@@ -1021,24 +911,10 @@ def main(args):
                 actual_indoor,
                 predicted_indoor,
                 confidence,
-                mae.get(),
-                rmse.get(),
             )
 
-            # --- Step 6: Save Model & State for Next Run ---
-            # Save the model with learned parameters and metrics so they
-            # survive restarts. This preserves continuous learning progress.
-            try:
-                save_model(model, mae, rmse)
-                logging.debug(
-                    "Model saved with MAE=%.3f, RMSE=%.3f",
-                    mae.get(),
-                    rmse.get()
-                )
-            except Exception as save_err:
-                logging.error(
-                    "Failed to save model: %s", save_err, exc_info=True
-                )
+            # --- Step 6: State Persistence for Next Run ---
+            # Model saving is now handled by ThermalEquilibriumModel in model_wrapper
 
             # The features and indoor temperature from the *current* run are
             # saved to a file. This data will be loaded at the start of the

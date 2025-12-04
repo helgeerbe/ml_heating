@@ -35,10 +35,13 @@ class ThermalEquilibriumModel:
         self.thermal_mass_factor = 1.0         # building thermal inertia multiplier
         self.heat_loss_coefficient = config.HEAT_LOSS_COEFFICIENT
         
-        # Heat transfer effectiveness
+        # Heat transfer effectiveness - FIXED: Use config values, disable problematic adaptive learning
         self.outlet_effectiveness = config.OUTLET_EFFECTIVENESS
         self.outdoor_coupling = config.OUTDOOR_COUPLING
         self.thermal_bridge_factor = config.THERMAL_BRIDGE_FACTOR
+        
+        # FIXED: Re-enable adaptive learning with corrected gradient calculations
+        self.adaptive_learning_enabled = True  # RE-ENABLED with fixed gradients
         
         # External heat source weights (now configurable via config.py)
         # Only includes heat sources with actual sensors in the system
@@ -70,8 +73,7 @@ class ThermalEquilibriumModel:
         self.mode_switch_history = []
         self.overshoot_prevention_count = 0
         
-        # Real-time adaptive learning - configurable settings
-        self.adaptive_learning_enabled = True
+        # Real-time adaptive learning - DISABLED to prevent unrealistic parameter drift
         self.prediction_history = []  # Store recent predictions vs actual
         self.parameter_history = []   # Track parameter changes over time
         self.learning_confidence = config.LEARNING_CONFIDENCE
@@ -122,14 +124,17 @@ class ThermalEquilibriumModel:
         # Outdoor temperature coupling (outdoor affects indoor equilibrium)
         outdoor_contribution = outdoor_temp * self.outdoor_coupling
         
-        # Thermal bridging and building envelope losses
+        # Thermal bridging and building envelope losses (applied as heat loss, not denominator multiplier)
         thermal_bridge_loss = self.thermal_bridge_factor * abs(outdoor_temp - 20)
         
-        # Heat balance equation: equilibrium when input = loss
-        # indoor_temp = (total_heat_input + outdoor_contribution) / (1 + heat_loss_rate + thermal_losses)
+        # FIXED: Heat balance equation with correct thermal bridge application
+        # Heat loss should be: base_heat_loss + thermal_bridge_loss (not in denominator)
+        total_heat_loss = heat_loss_rate + (thermal_bridge_loss * 0.01)  # Convert bridge loss to rate
+        
+        # Corrected equilibrium calculation
         equilibrium_temp = (
             heat_input + external_heating + outdoor_contribution
-        ) / (1 + heat_loss_rate + thermal_bridge_loss)
+        ) / (1 + total_heat_loss)
         
         # Sanity bounds for physical realism
         equilibrium_temp = max(outdoor_temp, min(equilibrium_temp, outlet_temp))
@@ -175,10 +180,11 @@ class ThermalEquilibriumModel:
             if len(recent_errors) >= 5:
                 older_errors = recent_errors[:5]
                 newer_errors = recent_errors[5:]
-                if np.mean(newer_errors) < np.mean(older_errors):
-                    self.learning_confidence *= self.confidence_boost_rate
-                else:
-                    self.learning_confidence *= self.confidence_decay_rate
+                if newer_errors and older_errors:  # Prevent empty slice warnings
+                    if np.mean(newer_errors) < np.mean(older_errors):
+                        self.learning_confidence *= self.confidence_boost_rate
+                    else:
+                        self.learning_confidence *= self.confidence_decay_rate
                     
             # Bound confidence
             self.learning_confidence = max(0.1, min(5.0, self.learning_confidence))  # FIXED: Higher upper bound
@@ -456,16 +462,249 @@ class ThermalEquilibriumModel:
         # FIXED: Respect the aggressive bounds properly
         return np.clip(base_rate, self.min_learning_rate, self.max_learning_rate)
 
-    # Include all the other original methods unchanged...
-    def predict_thermal_trajectory(self, current_indoor, target_indoor, outlet_temp, outdoor_temp, time_horizon_hours=None, **external_sources):
-        """Keep original trajectory prediction method unchanged"""
-        # [Original implementation from your thermal_equilibrium_model.py]
-        pass
+    # Physics-based trajectory prediction implementation
+    def predict_thermal_trajectory(self, current_indoor, target_indoor, outlet_temp, outdoor_temp, 
+                                 time_horizon_hours=None, weather_forecasts=None, pv_forecasts=None, 
+                                 **external_sources):
+        """
+        Predict temperature trajectory over time horizon using physics-based thermal dynamics.
+        
+        Uses exponential approach to equilibrium based on thermal time constant and heat balance.
+        
+        Args:
+            current_indoor: Current indoor temperature (°C)
+            target_indoor: Target indoor temperature (°C) 
+            outlet_temp: Heat pump outlet temperature (°C)
+            outdoor_temp: Current outdoor temperature (°C)
+            time_horizon_hours: Prediction horizon in hours (default: 4)
+            weather_forecasts: List of forecast outdoor temps [1h, 2h, 3h, 4h]
+            pv_forecasts: List of forecast PV power [1h, 2h, 3h, 4h]
+            **external_sources: fireplace_on, tv_on, etc.
+            
+        Returns:
+            Dict with trajectory, times, reaches_target_at, overshoot_predicted, etc.
+        """
+        if time_horizon_hours is None:
+            time_horizon_hours = int(self.prediction_horizon_hours)
+            
+        trajectory = []
+        current_temp = current_indoor
+        
+        # Extract external heat sources
+        pv_power = external_sources.get('pv_power', 0)
+        fireplace_on = external_sources.get('fireplace_on', 0)
+        tv_on = external_sources.get('tv_on', 0)
+        
+        # Use forecasts if available, otherwise use current values
+        outdoor_forecasts = weather_forecasts if weather_forecasts else [outdoor_temp] * time_horizon_hours
+        pv_power_forecasts = pv_forecasts if pv_forecasts else [pv_power] * time_horizon_hours
+        
+        for hour in range(time_horizon_hours):
+            # Use forecast values for this hour if available
+            future_outdoor = outdoor_forecasts[hour] if hour < len(outdoor_forecasts) else outdoor_temp
+            future_pv = pv_power_forecasts[hour] if hour < len(pv_power_forecasts) else pv_power
+            
+            # Calculate equilibrium temperature for this future point
+            equilibrium_temp = self.predict_equilibrium_temperature(
+                outlet_temp=outlet_temp,
+                outdoor_temp=future_outdoor,
+                pv_power=future_pv,
+                fireplace_on=fireplace_on,
+                tv_on=tv_on
+            )
+            
+            # Apply thermal dynamics - exponential approach to equilibrium
+            # Based on first-order thermal system: dT/dt = (T_eq - T) / τ
+            time_constant_hours = self.thermal_time_constant
+            
+            # Calculate temperature change over 1 hour
+            approach_factor = 1 - np.exp(-1.0 / time_constant_hours)
+            temp_change = (equilibrium_temp - current_temp) * approach_factor
+            
+            # Apply thermal momentum decay for more realistic predictions
+            if hour > 0:
+                # Reduce sudden changes based on momentum decay
+                momentum_factor = np.exp(-hour * self.momentum_decay_rate)
+                temp_change *= (1.0 - momentum_factor * 0.2)  # Up to 20% reduction
+            
+            # Update current temperature
+            current_temp = current_temp + temp_change
+            trajectory.append(current_temp)
+        
+        # Analyze trajectory for key metrics
+        reaches_target_at = None
+        for i, temp in enumerate(trajectory):
+            if abs(temp - target_indoor) < self.safety_margin:
+                reaches_target_at = i + 1  # Hours from now
+                break
+        
+        # Check for overshoot prediction
+        overshoot_predicted = False
+        max_predicted = max(trajectory) if trajectory else current_indoor
+        
+        if target_indoor > current_indoor:  # Heating scenario
+            overshoot_predicted = max_predicted > (target_indoor + self.safety_margin)
+        else:  # Cooling scenario
+            min_predicted = min(trajectory) if trajectory else current_indoor
+            overshoot_predicted = min_predicted < (target_indoor - self.safety_margin)
+        
+        return {
+            'trajectory': trajectory,
+            'times': list(range(1, time_horizon_hours + 1)),
+            'reaches_target_at': reaches_target_at,
+            'overshoot_predicted': overshoot_predicted,
+            'max_predicted': max(trajectory) if trajectory else current_indoor,
+            'min_predicted': min(trajectory) if trajectory else current_indoor,
+            'equilibrium_temp': trajectory[-1] if trajectory else current_indoor,
+            'final_error': abs(trajectory[-1] - target_indoor) if trajectory else abs(current_indoor - target_indoor)
+        }
 
-    def calculate_optimal_outlet_temperature(self, *args, **kwargs):
-        """Keep original outlet calculation method unchanged"""
-        # [Original implementation from your thermal_equilibrium_model.py]
-        pass
+    def calculate_optimal_outlet_temperature(self, target_indoor, current_indoor, outdoor_temp, 
+                                           time_available_hours=1.0, **external_sources):
+        """
+        Calculate optimal outlet temperature to reach target indoor temperature.
+        
+        Uses heat balance equations and thermal dynamics to determine the outlet
+        temperature needed to reach the target in the specified time.
+        
+        Args:
+            target_indoor: Desired indoor temperature (°C)
+            current_indoor: Current indoor temperature (°C)
+            outdoor_temp: Current outdoor temperature (°C)
+            time_available_hours: Time available to reach target (default: 1 hour)
+            **external_sources: pv_power, fireplace_on, tv_on, etc.
+            
+        Returns:
+            Dict with optimal_outlet_temp and metadata, or None if target unreachable
+        """
+        # Extract external heat sources
+        pv_power = external_sources.get('pv_power', external_sources.get('pv_now', 0))
+        fireplace_on = external_sources.get('fireplace_on', 0)
+        tv_on = external_sources.get('tv_on', 0)
+        
+        # Calculate required temperature change
+        temp_change_required = target_indoor - current_indoor
+        
+        # If already at target, use minimal heating
+        if abs(temp_change_required) < 0.1:
+            # Calculate equilibrium outlet temp for maintenance
+            outlet_temp = self._calculate_equilibrium_outlet_temperature(
+                target_indoor, outdoor_temp, pv_power, fireplace_on, tv_on
+            )
+            return {
+                'optimal_outlet_temp': outlet_temp,
+                'method': 'equilibrium_maintenance',
+                'temp_change_required': temp_change_required,
+                'time_available': time_available_hours
+            }
+        
+        # For thermal dynamics: we need to reach target in specified time
+        # Using exponential approach: T(t) = T_eq + (T_0 - T_eq) * exp(-t/τ)
+        # Rearranging: T_eq = (T(t) - T_0 * exp(-t/τ)) / (1 - exp(-t/τ))
+        
+        time_constant_hours = self.thermal_time_constant
+        exp_factor = np.exp(-time_available_hours / time_constant_hours)
+        
+        # Required equilibrium temperature to reach target in time
+        if abs(1 - exp_factor) < 0.001:  # Avoid division by zero
+            # For very small time constants, use linear approximation
+            required_equilibrium = target_indoor + temp_change_required / time_available_hours * time_constant_hours
+            method = 'linear_approximation'
+        else:
+            required_equilibrium = (target_indoor - current_indoor * exp_factor) / (1 - exp_factor)
+            method = 'exponential_dynamics'
+        
+        # Calculate external heating contribution (needed for calculation)
+        external_heating = (
+            pv_power * self.external_source_weights['pv'] +
+            fireplace_on * self.external_source_weights['fireplace'] +
+            tv_on * self.external_source_weights['tv']
+        )
+        
+        # Calculate outdoor contribution and heat loss
+        outdoor_contribution = outdoor_temp * self.outdoor_coupling
+        normalized_outdoor = outdoor_temp / 20.0
+        heat_loss_rate = self.heat_loss_coefficient * (1 - self.outdoor_coupling * normalized_outdoor)
+        thermal_bridge_loss = self.thermal_bridge_factor * abs(outdoor_temp - 20)
+        total_heat_loss = heat_loss_rate + (thermal_bridge_loss * 0.01)
+        
+        # Solve for outlet temperature:
+        required_heat_input = (required_equilibrium * (1 + total_heat_loss) - 
+                             external_heating - outdoor_contribution)
+        
+        if self.outlet_effectiveness <= 0:
+            return None  # Cannot calculate with zero effectiveness
+            
+        optimal_outlet = required_heat_input / self.outlet_effectiveness
+        
+        # Apply safety bounds for physical realism
+        min_outlet = max(outdoor_temp + 5, 25.0)  # At least 5°C above outdoor, minimum 25°C
+        max_outlet = 70.0  # Maximum safe heat pump outlet temperature
+        
+        optimal_outlet_bounded = max(min_outlet, min(optimal_outlet, max_outlet))
+        
+        # Verify the solution makes sense
+        if optimal_outlet_bounded < outdoor_temp:
+            # Cannot heat indoor above outdoor with outlet below outdoor
+            fallback_outlet = self._calculate_equilibrium_outlet_temperature(
+                target_indoor, outdoor_temp, pv_power, fireplace_on, tv_on
+            )
+            return {
+                'optimal_outlet_temp': fallback_outlet,
+                'method': 'fallback_equilibrium',
+                'reason': 'unrealistic_outlet_temp',
+                'original_calculation': optimal_outlet,
+                'temp_change_required': temp_change_required,
+                'time_available': time_available_hours
+            }
+        
+        # Return comprehensive result dictionary
+        return {
+            'optimal_outlet_temp': optimal_outlet_bounded,
+            'method': method,
+            'required_equilibrium': required_equilibrium,
+            'temp_change_required': temp_change_required,
+            'time_available': time_available_hours,
+            'external_heating': external_heating,
+            'heat_loss_rate': heat_loss_rate,
+            'bounded': optimal_outlet != optimal_outlet_bounded,
+            'original_calculation': optimal_outlet
+        }
+    
+    def _calculate_equilibrium_outlet_temperature(self, target_temp, outdoor_temp, 
+                                                pv_power=0, fireplace_on=0, tv_on=0):
+        """
+        Calculate outlet temperature needed for equilibrium at target temperature.
+        
+        This is a helper method for steady-state calculations.
+        """
+        # Calculate external heating and thermal factors
+        external_heating = (
+            pv_power * self.external_source_weights['pv'] +
+            fireplace_on * self.external_source_weights['fireplace'] +
+            tv_on * self.external_source_weights['tv']
+        )
+        
+        outdoor_contribution = outdoor_temp * self.outdoor_coupling
+        normalized_outdoor = outdoor_temp / 20.0
+        heat_loss_rate = self.heat_loss_coefficient * (1 - self.outdoor_coupling * normalized_outdoor)
+        thermal_bridge_loss = self.thermal_bridge_factor * abs(outdoor_temp - 20)
+        total_heat_loss = heat_loss_rate + (thermal_bridge_loss * 0.01)
+        
+        # Solve equilibrium equation for outlet temperature
+        required_heat_input = (target_temp * (1 + total_heat_loss) - 
+                             external_heating - outdoor_contribution)
+        
+        if self.outlet_effectiveness <= 0:
+            return 35.0  # Default fallback
+            
+        equilibrium_outlet = required_heat_input / self.outlet_effectiveness
+        
+        # Apply reasonable bounds
+        min_outlet = max(outdoor_temp + 5, 25.0)
+        max_outlet = 65.0
+        
+        return max(min_outlet, min(equilibrium_outlet, max_outlet))
 
     def calculate_physics_aware_thresholds(self, *args, **kwargs):
         """Keep original threshold calculation method unchanged"""

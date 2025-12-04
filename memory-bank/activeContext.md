@@ -1,10 +1,35 @@
 # Active Context - Current Work & Decision State
 
-## Current Work Focus - December 3, 2025
+## Current Work Focus - December 4, 2025
 
-### 🎯 **SYSTEM STATUS: WEEK 2 MULTI-HEAT-SOURCE INTEGRATION COMPLETED - READY FOR COMMIT**
+### 🎯 **SYSTEM STATUS: ADAPTIVE LEARNING MASTER PLAN IN PROGRESS**
 
-**WEEK 2 MULTI-HEAT-SOURCE INTEGRATION COMPLETED**: Successfully delivered all Week 2 features with 100% implementation success rate. System now includes thermal equilibrium model with adaptive learning, enhanced physics features (34 total), multi-heat-source physics engine, adaptive fireplace learning, and PV forecast integration. Ready for milestone commit and next phase planning.
+**ADAPTIVE LEARNING ENHANCEMENT**: Deep analysis completed, comprehensive implementation plan created. Critical issues identified:
+1. Adaptive learning was DISABLED in thermal_equilibrium_model.py
+2. Trajectory prediction methods are EMPTY (placeholders only)
+3. No MAE/RMSE tracking for online monitoring
+4. Enhanced trajectory uses deprecated RealisticPhysicsModel
+
+**Master Plan Created**: `memory-bank/ADAPTIVE_LEARNING_MASTER_PLAN.md` contains full 3-phase implementation roadmap.
+
+### 📋 **PHASE 1 PRIORITY - Foundation & Monitoring**
+
+#### Current Tasks:
+- [ ] **Task 1.1**: Create PredictionMetrics class with rolling MAE/RMSE windows
+- [ ] **Task 1.2**: Enhanced HA metrics export (MAE, RMSE, learned parameters)
+- [ ] **Task 1.3**: Implement predict_thermal_trajectory() properly
+- [ ] **Task 1.4**: Re-enable adaptive learning with CORRECTION-based approach
+
+#### Key Insight:
+> The original adaptive learning failed because it learned **absolute parameters** from **transient data**. The fix is to learn **corrections** around **known-good base values**, only from **stable periods**.
+
+---
+
+## Previous Milestone - December 3, 2025
+
+### ✅ **WEEK 2 MULTI-HEAT-SOURCE INTEGRATION COMPLETED**
+
+Successfully delivered all Week 2 features with 100% implementation success rate. System now includes thermal equilibrium model with adaptive learning, enhanced physics features (34 total), multi-heat-source physics engine, adaptive fireplace learning, and PV forecast integration.
 
 ### 📋 **WEEK 2 COMPLETION STATUS - December 3, 2025**
 
