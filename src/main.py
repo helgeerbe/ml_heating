@@ -895,27 +895,29 @@ def main(args):
                             tv_on=test_context_ceiling['tv_on']
                         )
                         
-                        # Calculate errors from target
-                        floor_error = abs(floor_predicted - target_indoor_temp)
-                        ceiling_error = abs(ceiling_predicted - target_indoor_temp)
-                        
-                        if floor_error <= ceiling_error:
-                            smart_rounded_temp = int(floor_temp)
-                            chosen = "floor"
-                            chosen_predicted = floor_predicted
-                            chosen_error = floor_error
+                        # PHASE 5 FIX: Handle None returns from predict_indoor_temp
+                        if floor_predicted is None or ceiling_predicted is None:
+                            logging.warning("Smart rounding: predict_indoor_temp returned None, using fallback")
+                            smart_rounded_temp = round(final_temp)
+                            logging.info(f"Smart rounding fallback: {final_temp:.2f}°C → {smart_rounded_temp}°C")
                         else:
-                            smart_rounded_temp = int(ceiling_temp)
-                            chosen = "ceiling"
-                            chosen_predicted = ceiling_predicted
-                            chosen_error = ceiling_error
-                        
-                        logging.info(
-                            f"Smart rounding: {final_temp:.2f}°C → {smart_rounded_temp}°C "
-                            f"(chose {chosen}: floor→{floor_predicted:.2f}°C [err={floor_error:.3f}], "
-                            f"ceiling→{ceiling_predicted:.2f}°C [err={ceiling_error:.3f}], "
-                            f"target={target_indoor_temp:.1f}°C)"
-                        )
+                            # Calculate errors from target
+                            floor_error = abs(floor_predicted - target_indoor_temp)
+                            ceiling_error = abs(ceiling_predicted - target_indoor_temp)
+                            
+                            if floor_error <= ceiling_error:
+                                smart_rounded_temp = int(floor_temp)
+                                chosen = "floor"
+                            else:
+                                smart_rounded_temp = int(ceiling_temp)
+                                chosen = "ceiling"
+                            
+                            logging.info(
+                                f"Smart rounding: {final_temp:.2f}°C → {smart_rounded_temp}°C "
+                                f"(chose {chosen}: floor→{floor_predicted:.2f}°C [err={floor_error:.3f}], "
+                                f"ceiling→{ceiling_predicted:.2f}°C [err={ceiling_error:.3f}], "
+                                f"target={target_indoor_temp:.1f}°C)"
+                            )
                     except Exception as e:
                         # Fallback to regular rounding if smart rounding fails
                         smart_rounded_temp = round(final_temp)

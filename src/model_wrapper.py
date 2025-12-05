@@ -174,6 +174,7 @@ class EnhancedModelWrapper:
         """Calculate the outlet temperature required to reach target indoor temperature using learned thermal model."""
         # If we're already at target, use moderate heating
         if abs(current_indoor - target_indoor) < 0.1:
+            logging.debug(f"Already at target ({current_indoor:.1f}°C ≈ {target_indoor:.1f}°C), using 35.0°C")
             return 35.0
             
         # Use the calibrated thermal model to find required outlet temperature
@@ -187,43 +188,83 @@ class EnhancedModelWrapper:
         tolerance = 0.1  # °C
         outlet_min, outlet_max = 25.0, 65.0
         
+        logging.debug(f"🔍 PHASE 5 Binary search start: {current_indoor:.1f}°C → {target_indoor:.1f}°C")
+        logging.debug(f"   Search parameters: outdoor={outdoor_temp:.1f}°C, pv={pv_power:.1f}W, "
+                     f"fireplace={fireplace_on}, tv={tv_on}")
+        
         # Binary search for optimal outlet temperature
         for iteration in range(20):  # Max 20 iterations for efficiency
             outlet_mid = (outlet_min + outlet_max) / 2.0
             
             # Predict indoor temperature with this outlet temperature
-            predicted_indoor = self.thermal_model.predict_equilibrium_temperature(
-                outlet_temp=outlet_mid,
-                outdoor_temp=outdoor_temp,
-                pv_power=pv_power,
-                fireplace_on=fireplace_on,
-                tv_on=tv_on
-            )
+            try:
+                predicted_indoor = self.thermal_model.predict_equilibrium_temperature(
+                    outlet_temp=outlet_mid,
+                    outdoor_temp=outdoor_temp,
+                    pv_power=pv_power,
+                    fireplace_on=fireplace_on,
+                    tv_on=tv_on
+                )
+                
+                # PHASE 5 FIX: Handle None returns from predict_equilibrium_temperature
+                if predicted_indoor is None:
+                    logging.warning(f"   Iteration {iteration+1}: predict_equilibrium_temperature returned None "
+                                  f"for outlet={outlet_mid:.1f}°C - using fallback")
+                    return 35.0  # Safe fallback
+                
+            except Exception as e:
+                logging.error(f"   Iteration {iteration+1}: predict_equilibrium_temperature failed: {e}")
+                return 35.0  # Safe fallback
+            
+            # Calculate error from target
+            error = predicted_indoor - target_indoor
+            
+            # PHASE 5 ENHANCEMENT: Detailed logging at each iteration
+            logging.debug(f"   Iteration {iteration+1}: outlet={outlet_mid:.1f}°C → "
+                         f"predicted={predicted_indoor:.2f}°C, error={error:.3f}°C "
+                         f"(range: {outlet_min:.1f}-{outlet_max:.1f}°C)")
             
             # Check if we're close enough
-            error = predicted_indoor - target_indoor
             if abs(error) < tolerance:
-                logging.debug(f"Converged after {iteration+1} iterations: {outlet_mid:.1f}°C → {predicted_indoor:.1f}°C (target: {target_indoor:.1f}°C)")
+                logging.info(f"✅ Binary search converged after {iteration+1} iterations: "
+                           f"{outlet_mid:.1f}°C → {predicted_indoor:.2f}°C "
+                           f"(target: {target_indoor:.1f}°C, error: {error:.3f}°C)")
                 return outlet_mid
             
             # Adjust search range based on error
             if predicted_indoor < target_indoor:
                 # Need higher outlet temperature
                 outlet_min = outlet_mid
+                logging.debug(f"     → Predicted too low, raising minimum to {outlet_min:.1f}°C")
             else:
                 # Need lower outlet temperature
                 outlet_max = outlet_mid
+                logging.debug(f"     → Predicted too high, lowering maximum to {outlet_max:.1f}°C")
         
         # Return best guess if didn't converge
         final_outlet = (outlet_min + outlet_max) / 2.0
-        final_predicted = self.thermal_model.predict_equilibrium_temperature(
-            outlet_temp=final_outlet,
-            outdoor_temp=outdoor_temp,
-            pv_power=pv_power,
-            fireplace_on=fireplace_on,
-            tv_on=tv_on
-        )
-        logging.debug(f"Binary search completed: {final_outlet:.1f}°C → {final_predicted:.1f}°C (target: {target_indoor:.1f}°C)")
+        try:
+            final_predicted = self.thermal_model.predict_equilibrium_temperature(
+                outlet_temp=final_outlet,
+                outdoor_temp=outdoor_temp,
+                pv_power=pv_power,
+                fireplace_on=fireplace_on,
+                tv_on=tv_on
+            )
+            
+            # PHASE 5 FIX: Handle None return for final prediction
+            if final_predicted is None:
+                logging.warning(f"⚠️ Final prediction returned None, using fallback 35.0°C")
+                return 35.0
+                
+        except Exception as e:
+            logging.error(f"Final prediction failed: {e}")
+            return 35.0
+        
+        final_error = final_predicted - target_indoor
+        logging.warning(f"⚠️ Binary search didn't converge after 20 iterations: "
+                       f"{final_outlet:.1f}°C → {final_predicted:.2f}°C "
+                       f"(target: {target_indoor:.1f}°C, error: {final_error:.3f}°C)")
         
         return final_outlet
     
