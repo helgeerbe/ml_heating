@@ -1,9 +1,26 @@
-influxdb-client
-pandas
-numpy
-requests
-python-dotenv
-lightgbm
-streamlit
-streamlit-option-menu
-plotly
+# Core ML and Data Processing
+pandas>=1.5.0
+numpy>=1.21.0
+
+# Machine Learning (currently not used but may be needed for future ML models)
+# lightgbm
+
+# Database and API Communication
+influxdb-client>=1.36.0
+requests>=2.28.0
+
+# Configuration Management
+python-dotenv>=0.19.0
+
+# Dashboard Dependencies (Streamlit-based)
+streamlit>=1.24.0
+streamlit-option-menu>=0.3.0
+plotly>=5.0.0
+
+# Testing Framework
+pytest>=7.0.0
+
+# Additional Standard Library modules used:
+# - json, os, sys, logging, datetime, time, math, typing, collections, dataclasses
+# - tempfile, shutil, zipfile, hashlib, pathlib, subprocess, argparse, warnings
+# These are part of Python standard library and don't need to be listed

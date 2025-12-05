@@ -7,22 +7,22 @@ This directory contains validation and testing scripts for the ML Heating system
 ```
 validation/
 ├── README.md                          # This file
-├── test_user_scenario.py              # Test specific user problem scenarios
-├── test_model_validation.py           # Comprehensive model validation with train/test split
-├── test_filtered_model_comparison.py  # Test filtered model comparison
-├── debug_physics_prediction.py        # Debug physics prediction components
-├── debug_production_model.py          # Debug production model behavior
-└── analyze_log_discrepancy.py         # Analyze log discrepancies
+├── validate_equilibrium_scenarios.py  # Phase 4: Equilibrium equation validation
+├── validate_trajectory_prediction.py  # Phase 4: Trajectory prediction validation
+├── demo_multi_heat_source.py         # Multi-heat source demonstration
+├── debug_physics_prediction.py       # Debug physics prediction components
+├── debug_production_model.py         # Debug production model behavior
+└── analyze_log_discrepancy.py        # Analyze log discrepancies
 ```
 
 ## Script Categories
 
-### 🧪 Scenario Testing
-- **`test_user_scenario.py`** - Tests specific user problem scenarios with exact conditions
+### 🔬 Phase 4 Physics Validation (NEW)
+- **`validate_equilibrium_scenarios.py`** - Validates corrected equilibrium equation physics
+- **`validate_trajectory_prediction.py`** - Tests trajectory prediction with thermal dynamics
 
-### 📊 Model Validation  
-- **`test_model_validation.py`** - Comprehensive model validation with train/test split from InfluxDB
-- **`test_filtered_model_comparison.py`** - Compares filtered vs unfiltered model performance
+### 🧪 Scenario Testing
+- **`demo_multi_heat_source.py`** - Multi-heat source demonstration and testing
 
 ### 🔍 Debug & Analysis
 - **`debug_physics_prediction.py`** - Traces physics prediction components step-by-step
@@ -84,6 +84,49 @@ Comprehensive validation using real InfluxDB data:
 - RMSE (Root Mean Squared Error)
 - Prediction accuracy distribution
 - Physics behavior compliance
+
+### 🔬 Phase 4 Equilibrium Validation (NEW)
+**File:** `validate_equilibrium_scenarios.py`
+
+Validates the corrected thermal equilibrium equation after Phase 1-3 physics fixes:
+- Tests equilibrium calculation without thermal_time_constant interference
+- Validates PV, fireplace, and TV heat source contributions
+- Verifies energy conservation principles
+- Tests multiple heat sources working additively
+
+**Test Scenarios:**
+1. No external heat sources (baseline)
+2. PV solar contribution (1kW test case)
+3. Fireplace active contribution
+4. Multiple heat sources combined
+5. Energy conservation verification
+
+**Success Criteria:**
+- Equilibrium temperatures within physical bounds (outdoor < indoor < outlet)
+- External heat sources increase temperature additively
+- Energy balance equation satisfied
+- Physics checks pass for all scenarios
+
+### 🔮 Phase 4 Trajectory Validation (NEW)
+**File:** `validate_trajectory_prediction.py`
+
+Tests thermal trajectory prediction functionality after physics corrections:
+- Validates heating scenarios with thermal dynamics
+- Tests PV solar contribution to trajectory
+- Verifies cooling scenario behavior
+- Tests weather forecast integration
+
+**Test Scenarios:**
+1. Heating scenario (18°C → 22°C)
+2. Trajectory with PV contribution (500W)
+3. Cooling scenario (25°C → 22°C)
+4. Weather forecast integration
+
+**Success Criteria:**
+- Temperature increases in heating scenarios
+- PV power increases final temperatures
+- Weather forecasts affect trajectory calculations
+- Thermal time constant influences trajectory shape
 
 ### 🔍 Physics Debug
 **File:** `debug_physics_prediction.py`
