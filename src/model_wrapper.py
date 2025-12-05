@@ -357,7 +357,11 @@ class EnhancedModelWrapper:
             # Export metrics to InfluxDB every 5 cycles (approximately every 25 minutes)
             if self.cycle_count % 5 == 0:
                 self._export_metrics_to_influxdb()
+                
+            # Export metrics to Home Assistant every cycle for real-time monitoring
+            self._export_metrics_to_ha()
             
+            # Log learning cycle completion
             prediction_error = abs(predicted_temp - actual_temp)
             logging.info(
                 f"✅ Learning cycle {self.cycle_count}: error={prediction_error:.3f}°C, "
@@ -367,6 +371,39 @@ class EnhancedModelWrapper:
             
         except Exception as e:
             logging.error(f"Learning from feedback failed: {e}", exc_info=True)
+    
+    def _export_metrics_to_ha(self):
+        """Export metrics to Home Assistant sensors."""
+        try:
+            # Import here to avoid circular imports
+            from .ha_client import create_ha_client
+            
+            ha_client = create_ha_client()
+            
+            # Get comprehensive metrics
+            ha_metrics = self.get_comprehensive_metrics_for_ha()
+            
+            # Export model confidence
+            confidence = ha_metrics.get('learning_confidence', 3.0)
+            ha_client.log_model_metrics(
+                confidence=confidence,
+                mae=ha_metrics.get('mae_all_time', 0.0),
+                rmse=ha_metrics.get('rmse_all_time', 0.0)
+            )
+            
+            # Export adaptive learning metrics
+            ha_client.log_adaptive_learning_metrics(ha_metrics)
+            
+            # Export feature importance (if available)
+            if hasattr(self.thermal_model, 'get_feature_importance'):
+                importances = self.thermal_model.get_feature_importance()
+                if importances:
+                    ha_client.log_feature_importance(importances)
+            
+            logging.debug("✅ Exported metrics to Home Assistant sensors")
+            
+        except Exception as e:
+            logging.warning(f"Failed to export metrics to HA: {e}")
     
     def get_prediction_confidence(self) -> float:
         """Get current prediction confidence from thermal model."""
