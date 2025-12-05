@@ -260,16 +260,19 @@ ML_HEATING_CONTROL_ENTITY_ID: str = os.getenv(
 
 # Core Thermal Properties (Priority 1 - Critical for Model Behavior)
 THERMAL_TIME_CONSTANT: float = float(os.getenv("THERMAL_TIME_CONSTANT", "4.0"))  # Building thermal response time (hours)
-HEAT_LOSS_COEFFICIENT: float = float(os.getenv("HEAT_LOSS_COEFFICIENT", "0.08"))  # Heat loss rate per degree difference
-OUTLET_EFFECTIVENESS: float = float(os.getenv("OUTLET_EFFECTIVENESS", "0.6"))     # Heat pump outlet efficiency
+HEAT_LOSS_COEFFICIENT: float = float(os.getenv("HEAT_LOSS_COEFFICIENT", "0.2"))  # Heat loss rate per degree difference
+OUTLET_EFFECTIVENESS: float = float(os.getenv("OUTLET_EFFECTIVENESS", "0.04"))     # Heat pump outlet efficiency
 OUTDOOR_COUPLING: float = float(os.getenv("OUTDOOR_COUPLING", "0.3"))            # Outdoor temperature influence factor
 THERMAL_BRIDGE_FACTOR: float = float(os.getenv("THERMAL_BRIDGE_FACTOR", "0.1"))  # Thermal bridging losses
 
-# External Heat Source Weights (Priority 2 - Multi-Source Testing)
-# Only includes heat sources with actual sensors in the system
-PV_HEAT_WEIGHT: float = float(os.getenv("PV_HEAT_WEIGHT", "0.001"))              # Solar heating per 100W
-FIREPLACE_HEAT_WEIGHT: float = float(os.getenv("FIREPLACE_HEAT_WEIGHT", "0.02")) # Fireplace heating per unit time
-TV_HEAT_WEIGHT: float = float(os.getenv("TV_HEAT_WEIGHT", "0.005"))              # Electronics heating per unit
+# External Heat Source Weights (Priority 2 - Multi-Source Testing) - FIXED FOR TDD
+# Updated to physically reasonable ranges as defined by TDD tests:
+# - PV: 0.001-0.01 °C/W (1-10°C per kW)
+# - Fireplace: 2-10°C (significant heating)  
+# - TV: 0.1-2°C (small but measurable)
+PV_HEAT_WEIGHT: float = float(os.getenv("PV_HEAT_WEIGHT", "0.002"))              # 2°C per kW solar heating
+FIREPLACE_HEAT_WEIGHT: float = float(os.getenv("FIREPLACE_HEAT_WEIGHT", "5.0"))  # 5°C direct contribution
+TV_HEAT_WEIGHT: float = float(os.getenv("TV_HEAT_WEIGHT", "0.2"))                # 0.2°C electronics heating
 
 # Adaptive Learning Parameters (Priority 3 - Advanced Tuning)
 ADAPTIVE_LEARNING_RATE: float = float(os.getenv("ADAPTIVE_LEARNING_RATE", "0.05"))  # Base learning rate

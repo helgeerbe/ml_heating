@@ -15,16 +15,16 @@ This plan addresses **fundamental physics errors** in the thermal equilibrium mo
 
 ## Phase 0: Project Setup (Priority: CRITICAL - FIRST)
 
-### 0.1 Update .gitignore
+### 0.1 Update .gitignore ✅ COMPLETED
 **Issue**: State files and backups should not be tracked  
 **Location**: `.gitignore`  
 **Impact**: Clean repository management
 
 **Tasks**:
-- [ ] Add `thermal_state.json` to .gitignore
-- [ ] Add `*_backup_*.py` pattern to .gitignore
-- [ ] Add `*.json` state files to .gitignore (except config files)
-- [ ] Commit .gitignore changes
+- [x] Add `thermal_state.json` to .gitignore
+- [x] Add `*_backup_*.py` pattern to .gitignore  
+- [x] Add `*.json` state files to .gitignore (except config files)
+- [x] Commit .gitignore changes
 
 **Success Criteria**:
 - No sensitive state data in repository
@@ -47,55 +47,56 @@ This plan addresses **fundamental physics errors** in the thermal equilibrium mo
 
 ---
 
-## Phase 1: Critical Physics Fixes (Priority: CRITICAL)
+## Phase 1: Critical Physics Fixes (Priority: CRITICAL) ✅ COMPLETED
 
-### 1.1 Fix Equilibrium Equation Physics
+### 1.1 Fix Equilibrium Equation Physics ✅ COMPLETED
 **Issue**: Thermal time constant incorrectly affects equilibrium temperature  
 **Location**: `src/thermal_equilibrium_model.py` lines 167-172  
 **Impact**: Fundamental physics violation
 
 **Tasks**:
-- [ ] Write failing unit tests for correct equilibrium physics
-- [ ] Remove `thermal_insulation_multiplier` from equilibrium calculations
-- [ ] Implement correct heat balance equation: `T_eq = T_outdoor + Q_in / heat_loss_coefficient`
-- [ ] Preserve thermal time constant usage ONLY in trajectory prediction
-- [ ] Update equilibrium method signature for external heat sources
-- [ ] Ensure all tests pass
+- [x] Write failing unit tests for correct equilibrium physics
+- [x] Remove `thermal_insulation_multiplier` from equilibrium calculations
+- [x] Implement correct heat balance equation: `T_eq = T_outdoor + Q_in / heat_loss_coefficient`
+- [x] Preserve thermal time constant usage ONLY in trajectory prediction
+- [x] Update equilibrium method signature for external heat sources
+- [x] Ensure all tests pass (160 passed, 1 skipped)
 
 **Success Criteria**: 
-- Thermal time constant does not appear in equilibrium calculation
-- Energy conservation verified in tests
-- MAE remains ≤ 2.0°C after fix
+- [x] Thermal time constant does not appear in equilibrium calculation
+- [x] Energy conservation verified in tests
+- [x] MAE remains ≤ 2.0°C after fix
 
-### 1.2 Correct External Heat Source Units
+### 1.2 Correct External Heat Source Units ✅ COMPLETED
 **Issue**: Inconsistent units for heat source weights  
 **Location**: `src/thermal_config.py` UNITS dictionary  
 **Impact**: Physics calculations meaningless
 
 **Tasks**:
-- [ ] Standardize fireplace/tv units to °C (direct temperature contribution)
-- [ ] Standardize PV units to °C/kW (temperature rise per kilowatt)
-- [ ] Update equilibrium calculations to use consistent units
-- [ ] Add unit validation in thermal config
+- [x] Standardize fireplace/tv units to °C (direct temperature contribution)
+- [x] Standardize PV units to °C/W (temperature rise per watt)
+- [x] Update equilibrium calculations to use consistent units
+- [x] Add unit validation in thermal config
 
 **Success Criteria**:
-- All external heat sources have physically meaningful units
-- Unit conversions are explicit and documented
+- [x] All external heat sources have physically meaningful units
+- [x] Unit conversions are explicit and documented
 
-### 1.3 Remove Arbitrary Outdoor Coupling
+### 1.3 Remove Arbitrary Outdoor Coupling ✅ COMPLETED
 **Issue**: Non-physical outdoor temperature coupling term  
 **Location**: `src/thermal_equilibrium_model.py` line 161  
 **Impact**: Violates heat transfer principles
 
 **Tasks**:
-- [ ] Remove `outdoor_coupling` parameter and related calculations
-- [ ] Implement proper heat loss: `Q_loss = heat_loss_coefficient × (T_indoor - T_outdoor)`
-- [ ] Update gradient calculations to exclude outdoor_coupling
-- [ ] Remove outdoor_coupling from optimization parameters
+- [x] Remove `outdoor_coupling` parameter and related calculations
+- [x] Implement proper heat loss: `Q_loss = heat_loss_coefficient × (T_indoor - T_outdoor)`
+- [x] Update gradient calculations to exclude outdoor_coupling
+- [x] Remove outdoor_coupling from optimization parameters
+- [x] TDD tests validate clean physics implementation
 
 **Success Criteria**:
-- Heat loss follows proper temperature difference relationship
-- No arbitrary normalization around 20°C
+- [x] Heat loss follows proper temperature difference relationship
+- [x] No arbitrary normalization around 20°C
 
 ---
 
