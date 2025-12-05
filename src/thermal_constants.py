@@ -46,6 +46,53 @@ class PhysicsConstants:
     # Effectiveness bounds
     MIN_EFFECTIVENESS = 0.01   # Minimum outlet effectiveness (1%)
     MAX_EFFECTIVENESS = 1.0    # Maximum outlet effectiveness (100%)
+    
+    # Gradient calculation epsilon values (Phase 3.2 addition)
+    THERMAL_TIME_CONSTANT_EPSILON = 2.0    # Hours - step size for thermal time constant gradients
+    HEAT_LOSS_COEFFICIENT_EPSILON = 0.005  # Step size for heat loss coefficient gradients  
+    OUTLET_EFFECTIVENESS_EPSILON = 0.05    # Step size for outlet effectiveness gradients
+    
+    # Learning rate bounds and factors (Phase 3.2 addition)
+    CONFIDENCE_DECAY_RATE = 0.99          # Learning confidence decay per cycle
+    CONFIDENCE_BOOST_RATE = 1.1           # Learning confidence boost when improving
+    STABILITY_REDUCTION_FACTOR = 0.8      # Learning rate reduction for stable parameters
+    ERROR_BOOST_FACTOR_HIGH = 3.0         # Learning rate boost for very large errors (>2°C)
+    ERROR_BOOST_FACTOR_MEDIUM = 2.0       # Learning rate boost for large errors (>1°C)  
+    ERROR_BOOST_FACTOR_LOW = 1.5          # Learning rate boost for medium errors (>0.5°C)
+    
+    # Error thresholds for learning rate scaling (Phase 3.2 addition)
+    ERROR_THRESHOLD_VERY_HIGH = 2.0       # °C - threshold for very large errors
+    ERROR_THRESHOLD_HIGH = 1.0            # °C - threshold for large errors
+    ERROR_THRESHOLD_MEDIUM = 0.5          # °C - threshold for medium errors
+    
+    # Parameter stability thresholds (Phase 3.2 addition)
+    THERMAL_STABILITY_THRESHOLD = 0.05     # Thermal time constant stability (hours)
+    HEAT_LOSS_STABILITY_THRESHOLD = 0.0005 # Heat loss coefficient stability
+    EFFECTIVENESS_STABILITY_THRESHOLD = 0.005  # Outlet effectiveness stability
+    
+    # Default safety and operational values (Phase 3.2 addition)
+    DEFAULT_SAFETY_MARGIN = 0.2           # °C - default safety margin for predictions
+    DEFAULT_PREDICTION_HORIZON = 4.0      # Hours - default prediction time horizon
+    MOMENTUM_DECAY_RATE = 0.1             # Thermal momentum decay rate
+    MOMENTUM_REDUCTION_FACTOR = 0.2       # Maximum momentum reduction (20%)
+    
+    # History management constants (Phase 3.2 addition)
+    MAX_PREDICTION_HISTORY = 200          # Maximum stored prediction records
+    TRIM_PREDICTION_HISTORY = 100         # Trim history to this size when max reached
+    MAX_PARAMETER_HISTORY = 500           # Maximum stored parameter change records
+    TRIM_PARAMETER_HISTORY = 250          # Trim history to this size when max reached
+    
+    # Parameter bounds validation constants (Phase 3.2 addition)
+    MINIMUM_OUTLET_ABOVE_OUTDOOR = 5.0    # °C - minimum outlet temp above outdoor
+    MAXIMUM_SAFE_OUTLET_TEMP = 70.0       # °C - maximum safe heat pump outlet
+    DEFAULT_FALLBACK_OUTLET = 35.0        # °C - fallback outlet temperature
+    EQUILIBRIUM_OUTLET_MIN = 25.0         # °C - minimum equilibrium outlet temp
+    EQUILIBRIUM_OUTLET_MAX = 65.0         # °C - maximum equilibrium outlet temp
+    
+    # Significant change thresholds for logging (Phase 3.2 addition)
+    SIGNIFICANT_THERMAL_CHANGE = 0.01      # Hours - log thermal time constant changes
+    SIGNIFICANT_HEAT_LOSS_CHANGE = 0.0001  # Log heat loss coefficient changes
+    SIGNIFICANT_EFFECTIVENESS_CHANGE = 0.001  # Log outlet effectiveness changes
 
 
 class ThermalUnits:

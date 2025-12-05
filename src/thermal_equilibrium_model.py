@@ -14,8 +14,10 @@ from typing import Dict, List
 # Support both package-relative and direct import for notebooks
 try:
     from . import config  # Package-relative import
+    from .thermal_constants import PhysicsConstants
 except ImportError:
     import config  # Direct import fallback for notebooks
+    from thermal_constants import PhysicsConstants
 
 # Copy all the original class content but with fixed gradient methods
 class ThermalEquilibriumModel:
@@ -39,15 +41,13 @@ class ThermalEquilibriumModel:
         }
         
         self.adaptive_learning_enabled = True
-        self.safety_margin = 0.2
-        self.prediction_horizon_hours = 4.0
-        self.momentum_decay_rate = 0.1
+        self.safety_margin = PhysicsConstants.DEFAULT_SAFETY_MARGIN
+        self.prediction_horizon_hours = PhysicsConstants.DEFAULT_PREDICTION_HORIZON
+        self.momentum_decay_rate = PhysicsConstants.MOMENTUM_DECAY_RATE
         
         # Dynamic threshold bounds for safety (legacy - may be removed)
-        self.minimum_charging_threshold = 0.3   # deprecated - no longer used
-        self.maximum_charging_threshold = 1.0   # deprecated - no longer used
-        self.minimum_balancing_threshold = 0.1  # deprecated - no longer used
-        self.maximum_balancing_threshold = 0.5  # deprecated - no longer used
+        # Deprecated charging/balancing thresholds removed in Phase 3 cleanup
+        # These were replaced by the heat balance controller in model_wrapper.py
         
         # Learning and adaptation (now configurable via config.py)
         self.learning_rate = config.ADAPTIVE_LEARNING_RATE
@@ -66,8 +66,8 @@ class ThermalEquilibriumModel:
         self.learning_confidence = config.LEARNING_CONFIDENCE
         self.min_learning_rate = config.MIN_LEARNING_RATE
         self.max_learning_rate = config.MAX_LEARNING_RATE
-        self.confidence_decay_rate = 0.99  # Slower decay (was 0.98)
-        self.confidence_boost_rate = 1.1   # Faster boost (was 1.05)
+        self.confidence_decay_rate = PhysicsConstants.CONFIDENCE_DECAY_RATE
+        self.confidence_boost_rate = PhysicsConstants.CONFIDENCE_BOOST_RATE
         self.recent_errors_window = config.RECENT_ERRORS_WINDOW
         
         # Parameter bounds for stability
@@ -255,161 +255,94 @@ class ThermalEquilibriumModel:
             # CRITICAL FIX: Save learned parameter adjustments to unified thermal state
             self._save_learning_to_thermal_state()
 
-    def _calculate_thermal_time_constant_gradient_FIXED(self, recent_predictions: List[Dict]) -> float:
+    def _calculate_parameter_gradient(self, parameter_name: str, epsilon: float, recent_predictions: List[Dict]) -> float:
         """
-        FIXED VERSION: Calculate thermal time constant gradient with proper finite differences.
+        Generic finite-difference gradient calculation for any parameter.
         
-        Key fixes:
-        1. Larger epsilon for meaningful gradients
-        2. Proper error handling for missing context
-        3. Consistent prediction method (equilibrium for all)
+        This refactored method eliminates code duplication by providing a unified
+        approach to gradient calculation for all thermal parameters.
+        
+        Args:
+            parameter_name: Name of the parameter to calculate gradient for
+            epsilon: Step size for finite difference calculation
+            recent_predictions: List of recent prediction records
+            
+        Returns:
+            Average gradient across all valid predictions
         """
         gradient_sum = 0.0
         count = 0
         
-        # FIXED: Larger epsilon for thermal time constant
-        epsilon = 2.0  # 2 hours change
+        # Get current parameter value
+        original_value = getattr(self, parameter_name)
         
         for pred in recent_predictions:
             context = pred['context']
             
-            # FIXED: Better error handling for context
+            # Validate required context data
             if not all(key in context for key in ['outlet_temp', 'outdoor_temp']):
                 continue
                 
-            # Calculate finite difference gradient
-            original_value = self.thermal_time_constant
-            
             # Forward difference
-            self.thermal_time_constant = original_value + epsilon
+            setattr(self, parameter_name, original_value + epsilon)
             pred_plus = self.predict_equilibrium_temperature(
-                context['outlet_temp'], 
+                context['outlet_temp'],
                 context['outdoor_temp'],
                 pv_power=context.get('pv_power', 0),
                 fireplace_on=context.get('fireplace_on', 0),
                 tv_on=context.get('tv_on', 0)
             )
             
-            # Backward difference  
-            self.thermal_time_constant = original_value - epsilon
+            # Backward difference
+            setattr(self, parameter_name, original_value - epsilon)
             pred_minus = self.predict_equilibrium_temperature(
                 context['outlet_temp'],
-                context['outdoor_temp'], 
+                context['outdoor_temp'],
                 pv_power=context.get('pv_power', 0),
                 fireplace_on=context.get('fireplace_on', 0),
                 tv_on=context.get('tv_on', 0)
             )
             
             # Restore original parameter
-            self.thermal_time_constant = original_value
+            setattr(self, parameter_name, original_value)
             
-            # Calculate gradient: how parameter change affects prediction error
+            # Calculate gradient using chain rule for error minimization
             finite_diff = (pred_plus - pred_minus) / (2 * epsilon)
-            
-            # FIXED: Proper gradient calculation for minimizing squared error
-            gradient = finite_diff * pred['error']  # Chain rule application
+            gradient = finite_diff * pred['error']
             gradient_sum += gradient
             count += 1
             
         return gradient_sum / count if count > 0 else 0.0
+
+    def _calculate_thermal_time_constant_gradient_FIXED(self, recent_predictions: List[Dict]) -> float:
+        """
+        Calculate thermal time constant gradient using refactored generic method.
+        """
+        return self._calculate_parameter_gradient(
+            'thermal_time_constant', 
+            PhysicsConstants.THERMAL_TIME_CONSTANT_EPSILON, 
+            recent_predictions
+        )
 
     def _calculate_heat_loss_coefficient_gradient_FIXED(self, recent_predictions: List[Dict]) -> float:
         """
-        FIXED VERSION: Calculate heat loss coefficient gradient with proper finite differences.
+        Calculate heat loss coefficient gradient using refactored generic method.
         """
-        gradient_sum = 0.0
-        count = 0
-        
-        # FIXED: Larger epsilon 
-        epsilon = 0.005  # Larger than original 0.001
-        
-        for pred in recent_predictions:
-            context = pred['context']
-            
-            if not all(key in context for key in ['outlet_temp', 'outdoor_temp']):
-                continue
-                
-            original_value = self.heat_loss_coefficient
-            
-            # Forward difference
-            self.heat_loss_coefficient = original_value + epsilon
-            pred_plus = self.predict_equilibrium_temperature(
-                context['outlet_temp'],
-                context['outdoor_temp'],
-                pv_power=context.get('pv_power', 0),
-                fireplace_on=context.get('fireplace_on', 0),
-                tv_on=context.get('tv_on', 0)
-            )
-            
-            # Backward difference
-            self.heat_loss_coefficient = original_value - epsilon
-            pred_minus = self.predict_equilibrium_temperature(
-                context['outlet_temp'],
-                context['outdoor_temp'],
-                pv_power=context.get('pv_power', 0),
-                fireplace_on=context.get('fireplace_on', 0),
-                tv_on=context.get('tv_on', 0)
-            )
-            
-            # Restore original parameter
-            self.heat_loss_coefficient = original_value
-            
-            # Calculate gradient
-            finite_diff = (pred_plus - pred_minus) / (2 * epsilon)
-            gradient = finite_diff * pred['error']
-            gradient_sum += gradient
-            count += 1
-            
-        return gradient_sum / count if count > 0 else 0.0
+        return self._calculate_parameter_gradient(
+            'heat_loss_coefficient', 
+            PhysicsConstants.HEAT_LOSS_COEFFICIENT_EPSILON, 
+            recent_predictions
+        )
 
     def _calculate_outlet_effectiveness_gradient_FIXED(self, recent_predictions: List[Dict]) -> float:
         """
-        FIXED VERSION: Calculate outlet effectiveness gradient with proper finite differences.
+        Calculate outlet effectiveness gradient using refactored generic method.
         """
-        gradient_sum = 0.0
-        count = 0
-        
-        # FIXED: Larger epsilon
-        epsilon = 0.05  # Larger than original 0.01
-        
-        for pred in recent_predictions:
-            context = pred['context']
-            
-            if not all(key in context for key in ['outlet_temp', 'outdoor_temp']):
-                continue
-                
-            original_value = self.outlet_effectiveness
-            
-            # Forward difference
-            self.outlet_effectiveness = original_value + epsilon
-            pred_plus = self.predict_equilibrium_temperature(
-                context['outlet_temp'],
-                context['outdoor_temp'],
-                pv_power=context.get('pv_power', 0),
-                fireplace_on=context.get('fireplace_on', 0),
-                tv_on=context.get('tv_on', 0)
-            )
-            
-            # Backward difference
-            self.outlet_effectiveness = original_value - epsilon
-            pred_minus = self.predict_equilibrium_temperature(
-                context['outlet_temp'],
-                context['outdoor_temp'],
-                pv_power=context.get('pv_power', 0),
-                fireplace_on=context.get('fireplace_on', 0),
-                tv_on=context.get('tv_on', 0)
-            )
-            
-            # Restore original parameter
-            self.outlet_effectiveness = original_value
-            
-            # Calculate gradient
-            finite_diff = (pred_plus - pred_minus) / (2 * epsilon)
-            gradient = finite_diff * pred['error']
-            gradient_sum += gradient
-            count += 1
-            
-        return gradient_sum / count if count > 0 else 0.0
+        return self._calculate_parameter_gradient(
+            'outlet_effectiveness', 
+            PhysicsConstants.OUTLET_EFFECTIVENESS_EPSILON, 
+            recent_predictions
+        )
 
     def _calculate_adaptive_learning_rate_FIXED(self) -> float:
         """
