@@ -124,7 +124,7 @@ options:
   
   # Performance Tuning - ML model optimization parameters
   # The model uses a normalized confidence in the range (0..1]. This threshold determines when the model's confidence is considered sufficient
-  confidence_threshold: 0.3
+  confidence_threshold: 2.0
   # Enable physics-based validation of model predictions
   physics_validation_enabled: true
   # Enable automatic seasonal learning using cosine/sine modulation
@@ -294,7 +294,7 @@ schema:
   dev_api_key: "str"
   log_level: "list(DEBUG|INFO|WARNING|ERROR)"
   # Performance Tuning - Float and boolean types
-  confidence_threshold: "float(0.1,0.95)"
+  confidence_threshold: "float(0.1,10.0)"
   physics_validation_enabled: "bool"
   seasonal_learning_enabled: "bool"
   # Trajectory Prediction - Integer type
