@@ -155,10 +155,11 @@ def validate_thermal_model():
         for outlet_temp in [25, 30, 35, 40, 45, 50, 55, 60]:
             equilibrium = thermal_model.predict_equilibrium_temperature(
                 outlet_temp=outlet_temp,
-                outdoor_temp=5.0,
-                pv_power=0,
-                fireplace_on=0,
-                tv_on=0
+                outdoor_temp=outdoor_temp,
+                current_indoor=period.get('indoor_temp', outdoor_temp + 10.0),
+                pv_power=pv_power,
+                fireplace_on=fireplace_on,
+                tv_on=tv_on
             )
             monotonic_check.append(equilibrium)
             print(f"{outlet_temp:3d}°C       → {equilibrium:.2f}°C")
@@ -217,6 +218,7 @@ def validate_thermal_model():
         # Simulate good predictions (should boost confidence)
         for _ in range(5):
             predicted = thermal_model.predict_equilibrium_temperature(
+                current_indoor=21.0,  # Default indoor temp for test
                 **test_context
             )
             actual = predicted + 0.1  # Small error
@@ -526,6 +528,7 @@ def debug_thermal_predictions(stable_periods, sample_size=5):
         predicted_temp = test_model.predict_equilibrium_temperature(
             outlet_temp=period['outlet_temp'],
             outdoor_temp=period['outdoor_temp'],
+            current_indoor=period.get('indoor_temp', period['outdoor_temp'] + 10.0),
             pv_power=period['pv_power'],
             fireplace_on=period['fireplace_on'],
             tv_on=period['tv_on']
@@ -691,6 +694,7 @@ def optimize_thermal_parameters(stable_periods):
                 predicted_temp = test_model.predict_equilibrium_temperature(
                     outlet_temp=period['outlet_temp'],
                     outdoor_temp=period['outdoor_temp'],
+                    current_indoor=period.get('indoor_temp', period['outdoor_temp'] + 10.0),
                     pv_power=period['pv_power'],
                     fireplace_on=period['fireplace_on'],
                     tv_on=period['tv_on']
@@ -905,7 +909,8 @@ def validate_calibrated_baseline(baseline_path, stable_periods):
         for period in validation_periods:
             predicted_temp = test_model.predict_equilibrium_temperature(
                 outlet_temp=period['outlet_temp'],
-                outdoor_temp=period['outdoor_temp'], 
+                outdoor_temp=period['outdoor_temp'],
+                current_indoor=period.get('indoor_temp', period['outdoor_temp'] + 10.0),
                 pv_power=period['pv_power'],
                 fireplace_on=period['fireplace_on'],
                 tv_on=period['tv_on']

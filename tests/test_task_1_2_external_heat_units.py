@@ -46,18 +46,15 @@ class TestTask12ExternalHeatUnits(unittest.TestCase):
         outdoor_temp = 10.0
         
         # Test with 1kW PV
-        equilibrium_1kw = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, pv_power=1000, fireplace_on=0, tv_on=0
+        equilibrium_1kw = self.model.predict_equilibrium_temperature(outlet_temp=outlet_temp, outdoor_temp=outdoor_temp, current_indoor=20.0, pv_power=1000, fireplace_on=0, tv_on=0
         )
         
         # Test with 2kW PV
-        equilibrium_2kw = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, pv_power=2000, fireplace_on=0, tv_on=0
+        equilibrium_2kw = self.model.predict_equilibrium_temperature(outlet_temp=outlet_temp, outdoor_temp=outdoor_temp, current_indoor=20.0, pv_power=2000, fireplace_on=0, tv_on=0
         )
         
         # Test without PV
-        equilibrium_no_pv = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, pv_power=0, fireplace_on=0, tv_on=0
+        equilibrium_no_pv = self.model.predict_equilibrium_temperature(outlet_temp=outlet_temp, outdoor_temp=outdoor_temp, current_indoor=20.0, pv_power=0, fireplace_on=0, tv_on=0
         )
         
         # Calculate actual contributions
@@ -72,7 +69,12 @@ class TestTask12ExternalHeatUnits(unittest.TestCase):
         
         # Test that PV weight is in reasonable °C/kW range (0.001-0.01 °C/W)
         pv_weight = self.model.external_source_weights['pv']
-        expected_contribution_per_kw = (1000 * pv_weight) / self.model.heat_loss_coefficient
+        eff = self.model.outlet_effectiveness
+        loss = self.model.heat_loss_coefficient
+        
+        # CORRECTED PHYSICS: PV heat contributes as thermal power in heat balance
+        # Contribution = (1000W * pv_weight) / (eff + loss)
+        expected_contribution_per_kw = (1000 * pv_weight) / (eff + loss)
         
         self.assertAlmostEqual(
             pv_contribution_1kw, expected_contribution_per_kw, places=1,
@@ -92,18 +94,15 @@ class TestTask12ExternalHeatUnits(unittest.TestCase):
         outdoor_temp = 5.0
         
         # Test with fireplace on level 1
-        equilibrium_fire_1 = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, pv_power=0, fireplace_on=1, tv_on=0
+        equilibrium_fire_1 = self.model.predict_equilibrium_temperature(outlet_temp=outlet_temp, outdoor_temp=outdoor_temp, current_indoor=20.0, pv_power=0, fireplace_on=1, tv_on=0
         )
         
         # Test with fireplace on level 2
-        equilibrium_fire_2 = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, pv_power=0, fireplace_on=2, tv_on=0
+        equilibrium_fire_2 = self.model.predict_equilibrium_temperature(outlet_temp=outlet_temp, outdoor_temp=outdoor_temp, current_indoor=20.0, pv_power=0, fireplace_on=2, tv_on=0
         )
         
         # Test without fireplace
-        equilibrium_no_fire = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, pv_power=0, fireplace_on=0, tv_on=0
+        equilibrium_no_fire = self.model.predict_equilibrium_temperature(outlet_temp=outlet_temp, outdoor_temp=outdoor_temp, current_indoor=20.0, pv_power=0, fireplace_on=0, tv_on=0
         )
         
         # Calculate contributions
@@ -116,9 +115,15 @@ class TestTask12ExternalHeatUnits(unittest.TestCase):
             msg=f"Fireplace units not linear: level_1={fire_contribution_1:.3f}°C, level_2={fire_contribution_2:.3f}°C"
         )
         
-        # Test direct contribution calculation
+        # Test direct contribution calculation using CORRECTED PHYSICS
+        # The corrected heat balance equation properly handles external thermal power
         fire_weight = self.model.external_source_weights['fireplace']
-        expected_contribution = fire_weight / self.model.heat_loss_coefficient
+        eff = self.model.outlet_effectiveness
+        loss = self.model.heat_loss_coefficient
+        
+        # CORRECTED PHYSICS: External heat contributes as thermal power in heat balance
+        # Contribution = fire_weight / (eff + loss) 
+        expected_contribution = fire_weight / (eff + loss)
         
         self.assertAlmostEqual(
             fire_contribution_1, expected_contribution, places=1,
@@ -137,13 +142,11 @@ class TestTask12ExternalHeatUnits(unittest.TestCase):
         outdoor_temp = 15.0
         
         # Test with TV on
-        equilibrium_tv_on = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, pv_power=0, fireplace_on=0, tv_on=1
+        equilibrium_tv_on = self.model.predict_equilibrium_temperature(outlet_temp=outlet_temp, outdoor_temp=outdoor_temp, current_indoor=20.0, pv_power=0, fireplace_on=0, tv_on=1
         )
         
         # Test without TV
-        equilibrium_tv_off = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, pv_power=0, fireplace_on=0, tv_on=0
+        equilibrium_tv_off = self.model.predict_equilibrium_temperature(outlet_temp=outlet_temp, outdoor_temp=outdoor_temp, current_indoor=20.0, pv_power=0, fireplace_on=0, tv_on=0
         )
         
         # Calculate TV contribution
@@ -153,9 +156,14 @@ class TestTask12ExternalHeatUnits(unittest.TestCase):
         self.assertGreater(tv_contribution, 0.05, msg="TV contribution too small")
         self.assertLess(tv_contribution, 5.0, msg="TV contribution too large")
         
-        # Test direct contribution calculation
+        # Test direct contribution calculation using CORRECTED PHYSICS
         tv_weight = self.model.external_source_weights['tv']
-        expected_contribution = tv_weight / self.model.heat_loss_coefficient
+        eff = self.model.outlet_effectiveness
+        loss = self.model.heat_loss_coefficient
+        
+        # CORRECTED PHYSICS: TV heat contributes as thermal power in heat balance
+        # Contribution = tv_weight / (eff + loss)
+        expected_contribution = tv_weight / (eff + loss)
         
         self.assertAlmostEqual(
             tv_contribution, expected_contribution, places=2,
@@ -177,25 +185,20 @@ class TestTask12ExternalHeatUnits(unittest.TestCase):
         tv_count = 1
         
         # Test individual contributions
-        equilibrium_baseline = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, pv_power=0, fireplace_on=0, tv_on=0
+        equilibrium_baseline = self.model.predict_equilibrium_temperature(outlet_temp=outlet_temp, outdoor_temp=outdoor_temp, current_indoor=20.0, pv_power=0, fireplace_on=0, tv_on=0
         )
         
-        equilibrium_pv_only = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, pv_power=pv_power, fireplace_on=0, tv_on=0
+        equilibrium_pv_only = self.model.predict_equilibrium_temperature(outlet_temp=outlet_temp, outdoor_temp=outdoor_temp, current_indoor=20.0, pv_power=pv_power, fireplace_on=0, tv_on=0
         )
         
-        equilibrium_fire_only = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, pv_power=0, fireplace_on=fireplace_level, tv_on=0
+        equilibrium_fire_only = self.model.predict_equilibrium_temperature(outlet_temp=outlet_temp, outdoor_temp=outdoor_temp, current_indoor=20.0, pv_power=0, fireplace_on=fireplace_level, tv_on=0
         )
         
-        equilibrium_tv_only = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, pv_power=0, fireplace_on=0, tv_on=tv_count
+        equilibrium_tv_only = self.model.predict_equilibrium_temperature(outlet_temp=outlet_temp, outdoor_temp=outdoor_temp, current_indoor=20.0, pv_power=0, fireplace_on=0, tv_on=tv_count
         )
         
         # Test all combined
-        equilibrium_all = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, pv_power=pv_power, fireplace_on=fireplace_level, tv_on=tv_count
+        equilibrium_all = self.model.predict_equilibrium_temperature(outlet_temp=outlet_temp, outdoor_temp=outdoor_temp, current_indoor=20.0, pv_power=pv_power, fireplace_on=fireplace_level, tv_on=tv_count
         )
         
         # Calculate individual contributions
@@ -224,21 +227,22 @@ class TestTask12ExternalHeatUnits(unittest.TestCase):
         outlet_temp = 50.0
         outdoor_temp = 0.0  # Use 0°C for easy math
         
-        equilibrium_temp = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, 
-            pv_power=1000,  # 1kW
+        equilibrium_temp = self.model.predict_equilibrium_temperature(outlet_temp=outlet_temp, outdoor_temp=outdoor_temp, current_indoor=20.0, pv_power=1000,  # 1kW
             fireplace_on=1, # Level 1
             tv_on=1         # 1 TV
         )
         
-        # Calculate expected using heat balance
-        heat_from_outlet = outlet_temp * self.model.outlet_effectiveness
+        # Calculate expected using CORRECTED PHYSICS (Phase 5 fix)
+        # T_eq = (eff * outlet_temp + loss * outdoor_temp + external_thermal_power) / (eff + loss)
         heat_from_pv = 1000 * self.model.external_source_weights['pv']
         heat_from_fireplace = 1 * self.model.external_source_weights['fireplace']
         heat_from_tv = 1 * self.model.external_source_weights['tv']
+        external_thermal_power = heat_from_pv + heat_from_fireplace + heat_from_tv
         
-        total_heat_input = heat_from_outlet + heat_from_pv + heat_from_fireplace + heat_from_tv
-        expected_equilibrium = outdoor_temp + (total_heat_input / self.model.heat_loss_coefficient)
+        eff = self.model.outlet_effectiveness
+        loss = self.model.heat_loss_coefficient
+        
+        expected_equilibrium = (eff * outlet_temp + loss * outdoor_temp + external_thermal_power) / (eff + loss)
         
         self.assertAlmostEqual(
             equilibrium_temp, expected_equilibrium, places=1,

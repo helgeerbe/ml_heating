@@ -329,8 +329,7 @@ class TestAdaptiveLearningThermalModel(unittest.TestCase):
         # Provide feedback that suggests current parameters are poor
         for i in range(25):
             # Simulate that our predictions are consistently high
-            predicted_temp = self.model.predict_equilibrium_temperature(
-                initial_result['optimal_outlet_temp'], 10.0, pv_power=1000.0
+            predicted_temp = self.model.predict_equilibrium_temperature(outlet_temp=initial_result['optimal_outlet_temp'], outdoor_temp=10.0, current_indoor=20.0, pv_power=1000.0
             )
             
             self.model.update_prediction_feedback(
@@ -462,8 +461,7 @@ class TestAdaptiveLearningIntegration(unittest.TestCase):
         
         # Process historical scenarios with adaptive learning
         for i, scenario in enumerate(historical_scenarios * 5):  # Repeat for learning
-            predicted_temp = self.model.predict_equilibrium_temperature(
-                scenario['outlet'], scenario['outdoor'], pv_power=500
+            predicted_temp = self.model.predict_equilibrium_temperature(outlet_temp=scenario['outlet'], outdoor_temp=scenario['outdoor'], current_indoor=20.0, pv_power=500
             )
             
             self.model.update_prediction_feedback(
@@ -483,8 +481,7 @@ class TestAdaptiveLearningIntegration(unittest.TestCase):
         self.assertGreater(final_metrics['total_predictions'], 20)
         
         # Test final performance
-        test_prediction = self.model.predict_equilibrium_temperature(
-            40.0, 10.0, pv_power=500
+        test_prediction = self.model.predict_equilibrium_temperature(outlet_temp=40.0, outdoor_temp=10.0, current_indoor=20.0, pv_power=500
         )
         self.assertIsInstance(test_prediction, float)
         self.assertGreaterEqual(test_prediction, 10.0)  # Reasonable temperature range

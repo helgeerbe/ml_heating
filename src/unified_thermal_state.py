@@ -227,7 +227,12 @@ class ThermalStateManager:
         logging.info(f"🎯 Set calibrated baseline parameters (cycles: {calibration_cycles})")
         self.save_state()
     
-    def get_current_parameters(self) -> Dict[str, float]:
+    def get_current_parameters(self) -> Dict[str, Any]:
+        """Get complete thermal state structure including baseline_parameters section."""
+        # Return the complete state structure that thermal_equilibrium_model expects
+        return self.state.copy()
+    
+    def get_computed_parameters(self) -> Dict[str, float]:
         """Get current thermal parameters (baseline + learning adjustments)."""
         baseline = self.state["baseline_parameters"]
         adjustments = self.state["learning_state"]["parameter_adjustments"]

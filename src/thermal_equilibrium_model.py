@@ -27,12 +27,75 @@ class ThermalEquilibriumModel:
     """
     
     def __init__(self):
-        # TDD-COMPLIANT REFACTOR: Load all parameters directly from config
+        # FIXED: Load calibrated parameters first, fallback to config defaults
+        self._load_thermal_parameters()
+        
+        self.outdoor_coupling = config.OUTDOOR_COUPLING
+        # thermal_bridge_factor removed in Phase 2: was not used in calculations
+    def _load_thermal_parameters(self):
+        """
+        Load thermal parameters with priority: calibrated > config defaults.
+        This ensures calibrated parameters from physics optimization are used.
+        """
+        try:
+            # Try to load calibrated parameters from unified thermal state
+            try:
+                from .unified_thermal_state import get_thermal_state_manager
+            except ImportError:
+                from unified_thermal_state import get_thermal_state_manager
+            
+            state_manager = get_thermal_state_manager()
+            thermal_state = state_manager.get_current_parameters()
+            
+            # FIXED: Check for calibrated parameters in baseline_parameters section
+            baseline_params = thermal_state.get('baseline_parameters', {})
+            if baseline_params.get('source') == 'calibrated':
+                # Load calibrated parameters from baseline_parameters
+                self.thermal_time_constant = baseline_params['thermal_time_constant']
+                self.heat_loss_coefficient = baseline_params['heat_loss_coefficient']
+                self.outlet_effectiveness = baseline_params['outlet_effectiveness']
+                
+                self.external_source_weights = {
+                    'pv': baseline_params.get('pv_heat_weight', config.PV_HEAT_WEIGHT),
+                    'fireplace': baseline_params.get('fireplace_heat_weight', config.FIREPLACE_HEAT_WEIGHT),
+                    'tv': baseline_params.get('tv_heat_weight', config.TV_HEAT_WEIGHT)
+                }
+                
+                logging.info("🎯 Loading CALIBRATED thermal parameters:")
+                logging.info(f"   thermal_time_constant: {self.thermal_time_constant:.2f}h")
+                logging.info(f"   heat_loss_coefficient: {self.heat_loss_coefficient:.4f}")
+                logging.info(f"   outlet_effectiveness: {self.outlet_effectiveness:.3f}")
+                logging.info(f"   pv_heat_weight: {self.external_source_weights['pv']:.4f}")
+                
+                # Validate parameters using schema validator
+                try:
+                    from .thermal_state_validator import validate_thermal_state_safely
+                    if not validate_thermal_state_safely(thermal_state):
+                        logging.warning("⚠️ Thermal state validation failed, using config defaults")
+                        self._load_config_defaults()
+                        return
+                except ImportError:
+                    logging.debug("Schema validation not available")
+                
+                # Initialize learning attributes for calibrated parameters too
+                self._initialize_learning_attributes()
+                
+            else:
+                # Use config defaults
+                self._load_config_defaults()
+                logging.info("⚙️ Loading DEFAULT config parameters (no calibration found)")
+                
+        except Exception as e:
+            # Fallback to config defaults if thermal state unavailable
+            logging.warning(f"⚠️ Failed to load calibrated parameters: {e}")
+            self._load_config_defaults()
+            logging.info("⚙️ Using config defaults as fallback")
+    
+    def _load_config_defaults(self):
+        """Load thermal parameters from config.py defaults."""
         self.thermal_time_constant = config.THERMAL_TIME_CONSTANT
         self.heat_loss_coefficient = config.HEAT_LOSS_COEFFICIENT
         self.outlet_effectiveness = config.OUTLET_EFFECTIVENESS
-        self.outdoor_coupling = config.OUTDOOR_COUPLING
-        # thermal_bridge_factor removed in Phase 2: was not used in calculations
 
         self.external_source_weights = {
             'pv': config.PV_HEAT_WEIGHT,
@@ -40,6 +103,11 @@ class ThermalEquilibriumModel:
             'tv': config.TV_HEAT_WEIGHT
         }
         
+        # Initialize remaining attributes
+        self._initialize_learning_attributes()
+        
+    def _initialize_learning_attributes(self):
+        """Initialize adaptive learning and other attributes (called from both parameter loading paths)."""
         self.adaptive_learning_enabled = True
         self.safety_margin = PhysicsConstants.DEFAULT_SAFETY_MARGIN
         self.prediction_horizon_hours = PhysicsConstants.DEFAULT_PREDICTION_HORIZON
@@ -86,37 +154,58 @@ class ThermalEquilibriumModel:
         self.error_improvement_threshold = 0.05   # When to increase learning rate
 
     def predict_equilibrium_temperature(self, outlet_temp: float, outdoor_temp: float,
-                                       pv_power: float = 0, fireplace_on: float = 0,
+                                       current_indoor: float, pv_power: float = 0, fireplace_on: float = 0,
                                        tv_on: float = 0) -> float:
         """
-        TDD-COMPLIANT: Predict equilibrium temperature with clean physics.
+        FIXED PHYSICS: Predict equilibrium using proper heat balance equation.
         
-        Equation: T_eq = T_out + (Q_in / heat_loss_coefficient)
+        Heat Balance at equilibrium:
+        Heat from outlet + External heat sources = Heat loss to outdoor
+        
+        eff × (outlet_temp - T_eq) + external_thermal_power = loss × (T_eq - outdoor_temp)
+        
+        Where external_thermal_power is converted to thermal units, not temperature units.
+        
+        Solving for T_eq:
+        eff × outlet_temp - eff × T_eq + external_thermal_power = loss × T_eq - loss × outdoor_temp
+        eff × outlet_temp + external_thermal_power + loss × outdoor_temp = (eff + loss) × T_eq
+        T_eq = (eff × outlet_temp + loss × outdoor_temp + external_thermal_power) / (eff + loss)
         """
-        # Heat input from the heat pump
-        heat_from_outlet = outlet_temp * self.outlet_effectiveness
-
-        # Heat from external sources, converted to consistent thermal units
-        # FIX: PV weight is in °C/W, so multiply directly by power in Watts.
+        # External heat sources - these are thermal power contributions
+        # They need to be converted to equivalent temperature effects
         heat_from_pv = pv_power * self.external_source_weights.get('pv', 0.0)
-        heat_from_fireplace = fireplace_on * self.external_source_weights.get('fireplace', 0.0)
+        heat_from_fireplace = fireplace_on * self.external_source_weights.get('fireplace', 0.0) 
         heat_from_tv = tv_on * self.external_source_weights.get('tv', 0.0)
-
-        # Total heat input into the system
-        total_heat_input = heat_from_outlet + heat_from_pv + heat_from_fireplace + heat_from_tv
-
-        # Clean heat balance equation (TDD-compliant)
-        if self.heat_loss_coefficient <= 0:
-            return outdoor_temp # Avoid division by zero
-
-        equilibrium_temp = outdoor_temp + (total_heat_input / self.heat_loss_coefficient)
-
-        # Safety bounds for realistic predictions
-        if total_heat_input > 0:
+        
+        # Total external thermal power (in thermal units, not temperature)
+        external_thermal_power = heat_from_pv + heat_from_fireplace + heat_from_tv
+        
+        # Physics parameters
+        eff = self.outlet_effectiveness
+        loss = self.heat_loss_coefficient
+        
+        # Prevent division by zero
+        denominator = eff + loss
+        if denominator <= 0:
+            return outdoor_temp  # Fallback to outdoor temperature
+        
+        # FIXED PHYSICS: Heat balance equation solved for equilibrium temperature
+        # The external thermal power is additive to the heat inputs
+        equilibrium_temp = (eff * outlet_temp + loss * outdoor_temp + external_thermal_power) / denominator
+        
+        # FIXED: Physical constraints that don't override correct physics calculations
+        # Only apply constraints for obviously impossible scenarios, not normal operation
+        if outlet_temp > outdoor_temp:  # Heating mode (normal case)
+            # In heating mode, equilibrium should be at least outdoor temp
+            # but allow for external heat sources to push temperature higher
+            # Removed overly restrictive 80% efficiency cap that was breaking tests
             equilibrium_temp = max(outdoor_temp, equilibrium_temp)
-            # REMOVED: The min() cap was interfering with TDD tests using extreme values.
-        else:
-            equilibrium_temp = outdoor_temp
+        elif outlet_temp < outdoor_temp:  # Cooling mode (rare for heat pumps)
+            # In cooling mode, equilibrium should be at most outdoor temp
+            equilibrium_temp = min(outdoor_temp, equilibrium_temp)
+        else:  # outlet_temp == outdoor_temp
+            # No temperature difference from outlet, only external heat contributes
+            equilibrium_temp = outdoor_temp + external_thermal_power / loss if loss > 0 else outdoor_temp
             
         return equilibrium_temp
 
@@ -280,7 +369,7 @@ class ThermalEquilibriumModel:
             context = pred['context']
             
             # Validate required context data
-            if not all(key in context for key in ['outlet_temp', 'outdoor_temp']):
+            if not all(key in context for key in ['outlet_temp', 'outdoor_temp', 'current_indoor']):
                 continue
                 
             # Forward difference
@@ -288,6 +377,7 @@ class ThermalEquilibriumModel:
             pred_plus = self.predict_equilibrium_temperature(
                 context['outlet_temp'],
                 context['outdoor_temp'],
+                context['current_indoor'],
                 pv_power=context.get('pv_power', 0),
                 fireplace_on=context.get('fireplace_on', 0),
                 tv_on=context.get('tv_on', 0)
@@ -298,6 +388,7 @@ class ThermalEquilibriumModel:
             pred_minus = self.predict_equilibrium_temperature(
                 context['outlet_temp'],
                 context['outdoor_temp'],
+                context['current_indoor'],
                 pv_power=context.get('pv_power', 0),
                 fireplace_on=context.get('fireplace_on', 0),
                 tv_on=context.get('tv_on', 0)
@@ -423,6 +514,7 @@ class ThermalEquilibriumModel:
             equilibrium_temp = self.predict_equilibrium_temperature(
                 outlet_temp=outlet_temp,
                 outdoor_temp=future_outdoor,
+                current_indoor=current_temp,
                 pv_power=future_pv,
                 fireplace_on=fireplace_on,
                 tv_on=tv_on

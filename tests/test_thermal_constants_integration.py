@@ -179,8 +179,9 @@ class TestThermalConstantsIntegration(unittest.TestCase):
         
         # Calculate equilibrium
         equilibrium = self.model.predict_equilibrium_temperature(
-            outlet_temp=outlet_temp,
-            outdoor_temp=outdoor_temp,
+            outlet_temp=outlet_temp, 
+            outdoor_temp=outdoor_temp, 
+            current_indoor=20.0, 
             pv_power=pv_power
         )
         

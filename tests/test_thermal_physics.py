@@ -48,17 +48,26 @@ class TestThermalPhysics(unittest.TestCase):
         
         # Calculate equilibrium temperature
         equilibrium_temp = self.model.predict_equilibrium_temperature(
-            self.outlet_temp, self.outdoor_temp, pv_power=pv_power
+            outlet_temp=self.outlet_temp, 
+            outdoor_temp=self.outdoor_temp, 
+            current_indoor=self.target_indoor,
+            pv_power=pv_power
         )
         
-        # Calculate heat input
-        heat_from_outlet = self.outlet_temp * self.model.outlet_effectiveness
+        # CORRECTED PHYSICS: Use the actual heat balance equation
+        # T_eq = (eff * outlet_temp + loss * outdoor_temp + external_thermal_power) / (eff + loss)
+        # Rearranging: (eff + loss) * T_eq = eff * outlet_temp + loss * outdoor_temp + external_thermal_power
+        # Heat balance: eff * (outlet_temp - T_eq) + external_thermal_power = loss * (T_eq - outdoor_temp)
+
         heat_from_pv = pv_power * self.model.external_source_weights['pv']
-        total_heat_input = heat_from_outlet + heat_from_pv
+        
+        # Calculate heat flows at equilibrium using corrected formula
+        heat_input_from_outlet = self.model.outlet_effectiveness * (self.outlet_temp - equilibrium_temp)
+        total_heat_input = heat_input_from_outlet + heat_from_pv
         
         # Calculate heat loss at equilibrium
         heat_loss = self.model.heat_loss_coefficient * (equilibrium_temp - self.outdoor_temp)
-        
+
         # Energy conservation: heat input should equal heat loss
         self.assertAlmostEqual(
             total_heat_input, heat_loss, places=2,
@@ -73,7 +82,10 @@ class TestThermalPhysics(unittest.TestCase):
         """
         # Test with positive heat input
         equilibrium_temp = self.model.predict_equilibrium_temperature(
-            self.outlet_temp, self.outdoor_temp, pv_power=0
+            outlet_temp=self.outlet_temp, 
+            outdoor_temp=self.outdoor_temp, 
+            current_indoor=self.target_indoor,
+            pv_power=0
         )
         
         # Indoor should be warmer than outdoor when heating
@@ -82,15 +94,18 @@ class TestThermalPhysics(unittest.TestCase):
             msg="Indoor temperature below outdoor despite heat input"
         )
         
-        # Test with no heat input (outlet temp = 0)
+        # Test with no heat input (outlet temp = outdoor temp)
         equilibrium_no_heat = self.model.predict_equilibrium_temperature(
-            0.0, self.outdoor_temp, pv_power=0
+            outlet_temp=self.outdoor_temp, 
+            outdoor_temp=self.outdoor_temp, 
+            current_indoor=self.target_indoor,
+            pv_power=0
         )
         
-        # With no heat, indoor should equal outdoor
+        # With outlet = outdoor, indoor should equal outdoor (corrected physics)
         self.assertAlmostEqual(
             equilibrium_no_heat, self.outdoor_temp, places=1,
-            msg="Indoor temperature differs from outdoor with no heat input"
+            msg="Indoor temperature differs from outdoor with no net heat input"
         )
 
     def test_unit_consistency_across_calculations(self):
@@ -106,7 +121,10 @@ class TestThermalPhysics(unittest.TestCase):
         pv_power = 2000  # 2kW in watts
         
         equilibrium_temp = self.model.predict_equilibrium_temperature(
-            self.outlet_temp, self.outdoor_temp, pv_power=pv_power
+            outlet_temp=self.outlet_temp, 
+            outdoor_temp=self.outdoor_temp, 
+            current_indoor=self.target_indoor,
+            pv_power=pv_power
         )
         
         # Result should be a reasonable temperature in °C
@@ -125,7 +143,10 @@ class TestThermalPhysics(unittest.TestCase):
         """
         # Test normal heating scenario
         equilibrium_temp = self.model.predict_equilibrium_temperature(
-            self.outlet_temp, self.outdoor_temp, pv_power=0
+            outlet_temp=self.outlet_temp, 
+            outdoor_temp=self.outdoor_temp, 
+            current_indoor=self.target_indoor,
+            pv_power=0
         )
         
         # Indoor should be between outdoor and a reasonable upper bound
@@ -140,29 +161,38 @@ class TestThermalPhysics(unittest.TestCase):
         """
         Test that heat loss is linear with temperature difference.
         
-        Q_loss = k * (T_indoor - T_outdoor) should be linear in ΔT
+        CORRECTED: The corrected physics formula creates equilibrium temperatures
+        that follow: T_eq = (eff * outlet + loss * outdoor) / (eff + loss)
+        This means equilibrium should change proportionally with outdoor temperature.
         """
         outdoor_temps = [0, 5, 10, 15, 20]
         equilibrium_temps = []
         
         for outdoor_temp in outdoor_temps:
             eq_temp = self.model.predict_equilibrium_temperature(
-                self.outlet_temp, outdoor_temp, pv_power=0
+                outlet_temp=self.outlet_temp, 
+                outdoor_temp=outdoor_temp, 
+                current_indoor=self.target_indoor,
+                pv_power=0
             )
             equilibrium_temps.append(eq_temp)
         
-        # Calculate temperature differences
-        temp_differences = [eq - out for eq, out in zip(equilibrium_temps, outdoor_temps)]
-        
-        # All temperature differences should be approximately equal
-        # (since heat input is constant)
-        expected_diff = temp_differences[0]
-        for i, diff in enumerate(temp_differences[1:], 1):
-            self.assertAlmostEqual(
-                diff, expected_diff, places=1,
-                msg=f"Non-linear heat loss detected at outdoor={outdoor_temps[i]}°C: "
-                    f"expected_diff={expected_diff:.2f}, actual_diff={diff:.2f}"
-            )
+        # With corrected physics, equilibrium should change linearly with outdoor temp
+        # Calculate the slope of equilibrium vs outdoor temperature
+        outdoor_step = 5  # 5°C steps
+        for i in range(1, len(equilibrium_temps)):
+            eq_change = equilibrium_temps[i] - equilibrium_temps[i-1]
+            outdoor_change = outdoor_temps[i] - outdoor_temps[i-1]
+            
+            # The ratio should be consistent (related to loss/(eff+loss))
+            if i == 1:
+                expected_slope = eq_change / outdoor_change
+            else:
+                actual_slope = eq_change / outdoor_change
+                self.assertAlmostEqual(
+                    actual_slope, expected_slope, places=2,
+                    msg=f"Non-linear equilibrium response at outdoor={outdoor_temps[i]}°C"
+                )
 
     def test_external_heat_source_contribution_additivity(self):
         """
@@ -172,19 +202,23 @@ class TestThermalPhysics(unittest.TestCase):
         """
         # Test individual contributions
         eq_baseline = self.model.predict_equilibrium_temperature(
-            self.outlet_temp, self.outdoor_temp, pv_power=0, fireplace_on=0, tv_on=0
+            outlet_temp=self.outlet_temp, outdoor_temp=self.outdoor_temp, 
+            current_indoor=self.target_indoor, pv_power=0, fireplace_on=0, tv_on=0
         )
         
         eq_with_pv = self.model.predict_equilibrium_temperature(
-            self.outlet_temp, self.outdoor_temp, pv_power=1000, fireplace_on=0, tv_on=0
+            outlet_temp=self.outlet_temp, outdoor_temp=self.outdoor_temp, 
+            current_indoor=self.target_indoor, pv_power=1000, fireplace_on=0, tv_on=0
         )
         
         eq_with_fireplace = self.model.predict_equilibrium_temperature(
-            self.outlet_temp, self.outdoor_temp, pv_power=0, fireplace_on=1, tv_on=0
+            outlet_temp=self.outlet_temp, outdoor_temp=self.outdoor_temp, 
+            current_indoor=self.target_indoor, pv_power=0, fireplace_on=1, tv_on=0
         )
         
         eq_with_both = self.model.predict_equilibrium_temperature(
-            self.outlet_temp, self.outdoor_temp, pv_power=1000, fireplace_on=1, tv_on=0
+            outlet_temp=self.outlet_temp, outdoor_temp=self.outdoor_temp, 
+            current_indoor=self.target_indoor, pv_power=1000, fireplace_on=1, tv_on=0
         )
         
         # Calculate individual contributions
@@ -214,12 +248,17 @@ class TestThermalPhysics(unittest.TestCase):
         # Calculate required heat input to maintain this difference
         required_heat_loss = self.model.heat_loss_coefficient * (target_indoor - outdoor_temp)
         
-        # Calculate what outlet temperature would be needed
-        required_outlet_temp = required_heat_loss / self.model.outlet_effectiveness
+        # Calculate what outlet temperature would be needed using corrected formula
+        # heat_from_outlet = max(0, outlet_temp - current_indoor) * effectiveness = required_heat_loss
+        # So: outlet_temp = (required_heat_loss / effectiveness) + current_indoor
+        required_outlet_temp = (required_heat_loss / self.model.outlet_effectiveness) + target_indoor
         
         # Verify that this outlet temperature actually produces the target indoor
         actual_equilibrium = self.model.predict_equilibrium_temperature(
-            required_outlet_temp, outdoor_temp, pv_power=0
+            outlet_temp=required_outlet_temp, 
+            outdoor_temp=outdoor_temp, 
+            current_indoor=target_indoor,
+            pv_power=0
         )
         
         self.assertAlmostEqual(
@@ -239,14 +278,20 @@ class TestThermalPhysics(unittest.TestCase):
         
         # Calculate equilibrium with original time constant
         eq_original = self.model.predict_equilibrium_temperature(
-            self.outlet_temp, self.outdoor_temp, pv_power=0
+            outlet_temp=self.outlet_temp, 
+            outdoor_temp=self.outdoor_temp, 
+            current_indoor=self.target_indoor,
+            pv_power=0
         )
         
         # Change time constant dramatically
         self.model.thermal_time_constant = 10.0  # Much slower system
         
         eq_different_time = self.model.predict_equilibrium_temperature(
-            self.outlet_temp, self.outdoor_temp, pv_power=0
+            outlet_temp=self.outlet_temp, 
+            outdoor_temp=self.outdoor_temp, 
+            current_indoor=self.target_indoor,
+            pv_power=0
         )
         
         # Restore original
@@ -270,24 +315,42 @@ class TestThermalPhysicsEdgeCases(unittest.TestCase):
         """Test behavior with zero or very small heat loss coefficient."""
         self.model.heat_loss_coefficient = 0.0
         
-        # Should return outdoor temperature (no heat retention)
-        equilibrium = self.model.predict_equilibrium_temperature(45.0, 10.0)
-        self.assertEqual(equilibrium, 10.0, "Zero heat loss should equal outdoor temp")
+        # With zero heat loss, corrected formula: T_eq = (eff * outlet + 0 * outdoor) / (eff + 0) = outlet
+        # System becomes infinitely efficient, approaches outlet temperature
+        equilibrium = self.model.predict_equilibrium_temperature(
+            outlet_temp=45.0, 
+            outdoor_temp=10.0, 
+            current_indoor=20.0
+        )
+        # Should approach outlet temperature (perfect insulation scenario)
+        self.assertAlmostEqual(equilibrium, 45.0, places=1, 
+                             msg="Zero heat loss should approach outlet temp")
         
     def test_extreme_temperatures(self):
         """Test behavior with extreme temperature inputs."""
         # Very cold outdoor
-        eq_cold = self.model.predict_equilibrium_temperature(45.0, -30.0)
+        eq_cold = self.model.predict_equilibrium_temperature(
+            outlet_temp=45.0, 
+            outdoor_temp=-30.0, 
+            current_indoor=20.0
+        )
         self.assertIsInstance(eq_cold, float, "Failed with extreme cold")
         
         # Very hot outdoor  
-        eq_hot = self.model.predict_equilibrium_temperature(45.0, 40.0)
+        eq_hot = self.model.predict_equilibrium_temperature(
+            outlet_temp=45.0, 
+            outdoor_temp=40.0, 
+            current_indoor=20.0
+        )
         self.assertIsInstance(eq_hot, float, "Failed with extreme heat")
         
     def test_high_pv_power(self):
         """Test behavior with very high PV power input."""
         eq_high_pv = self.model.predict_equilibrium_temperature(
-            45.0, 10.0, pv_power=10000  # 10kW
+            outlet_temp=45.0, 
+            outdoor_temp=10.0, 
+            current_indoor=20.0,
+            pv_power=10000  # 10kW
         )
         
         # Should handle gracefully

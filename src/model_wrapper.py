@@ -72,36 +72,79 @@ class EnhancedModelWrapper:
     def predict_indoor_temp(self, outlet_temp: float, 
                            outdoor_temp: float, **kwargs) -> float:
         """
-        MISSING METHOD ADDED: Predict indoor temperature for smart rounding.
+        FIXED METHOD: Predict indoor temperature for smart rounding.
         
         This method was missing and causing smart rounding to fail.
-        Uses the thermal model's equilibrium prediction.
+        Uses the thermal model's equilibrium prediction with proper parameter handling.
         """
         try:
-            # Extract heat source parameters from kwargs
+            # Extract heat source parameters from kwargs with safe defaults
             pv_power = kwargs.get('pv_power', 0.0)
-            fireplace_on = kwargs.get('fireplace_on', 0.0)
+            fireplace_on = kwargs.get('fireplace_on', 0.0) 
             tv_on = kwargs.get('tv_on', 0.0)
+            current_indoor = kwargs.get('current_indoor', outdoor_temp + 15.0)
+            
+            # CRITICAL FIX: Convert pandas Series to scalar values
+            def to_scalar(value):
+                """Convert pandas Series or any value to scalar."""
+                if value is None:
+                    return 0.0
+                # Handle pandas Series
+                if hasattr(value, 'iloc'):
+                    return float(value.iloc[0]) if len(value) > 0 else 0.0
+                # Handle pandas scalar
+                if hasattr(value, 'item'):
+                    return float(value.item())
+                # Handle regular values
+                try:
+                    return float(value)
+                except (ValueError, TypeError):
+                    return 0.0
+            
+            # Convert all parameters to scalars
+            pv_power = to_scalar(pv_power)
+            fireplace_on = to_scalar(fireplace_on)
+            tv_on = to_scalar(tv_on)
+            current_indoor = to_scalar(current_indoor)
+            outdoor_temp = to_scalar(outdoor_temp)
+            outlet_temp = to_scalar(outlet_temp)
+            
+            # Additional safety checks
+            if outdoor_temp == 0.0:
+                logging.error("predict_indoor_temp: outdoor_temp is invalid")
+                return 21.0  # Safe fallback temperature
+            if outlet_temp == 0.0:
+                logging.error("predict_indoor_temp: outlet_temp is invalid") 
+                return outdoor_temp + 10.0
+            if current_indoor == 0.0:
+                current_indoor = outdoor_temp + 15.0
             
             # Use thermal model to predict equilibrium temperature
             predicted_temp = self.thermal_model.predict_equilibrium_temperature(
                 outlet_temp=outlet_temp,
                 outdoor_temp=outdoor_temp,
+                current_indoor=current_indoor,
                 pv_power=pv_power,
                 fireplace_on=fireplace_on,
                 tv_on=tv_on
             )
             
+            # CRITICAL FIX: Handle None return from predict_equilibrium_temperature
+            if predicted_temp is None:
+                logging.warning(f"predict_equilibrium_temperature returned None for "
+                               f"outlet={outlet_temp}, outdoor={outdoor_temp}")
+                return outdoor_temp + 10.0  # Safe fallback
+            
             logging.debug(f"🎯 Smart rounding prediction: "
                          f"{outlet_temp:.1f}°C outlet → "
                          f"{predicted_temp:.2f}°C indoor")
             
-            return predicted_temp
+            return float(predicted_temp)  # Ensure we return a float
             
         except Exception as e:
             logging.error(f"predict_indoor_temp failed: {e}")
             # Safe fallback - assume minimal heating effect
-            return outdoor_temp + 10.0
+            return outdoor_temp + 10.0 if outdoor_temp is not None else 21.0
     
     def calculate_optimal_outlet_temp(self, features: Dict) -> Tuple[float, Dict]:
         """Calculate optimal outlet temperature using direct thermal physics prediction."""
@@ -201,6 +244,7 @@ class EnhancedModelWrapper:
                 predicted_indoor = self.thermal_model.predict_equilibrium_temperature(
                     outlet_temp=outlet_mid,
                     outdoor_temp=outdoor_temp,
+                    current_indoor=current_indoor,
                     pv_power=pv_power,
                     fireplace_on=fireplace_on,
                     tv_on=tv_on
@@ -247,6 +291,7 @@ class EnhancedModelWrapper:
             final_predicted = self.thermal_model.predict_equilibrium_temperature(
                 outlet_temp=final_outlet,
                 outdoor_temp=outdoor_temp,
+                current_indoor=current_indoor,
                 pv_power=pv_power,
                 fireplace_on=fireplace_on,
                 tv_on=tv_on

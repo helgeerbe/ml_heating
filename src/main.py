@@ -1036,8 +1036,11 @@ def main(args):
 
             # Shadow metrics now handled by ThermalEquilibriumModel
             
+            # Use the actual rounded temperature that was applied to HA
+            applied_temp = smart_rounded_temp if not config.SHADOW_MODE else final_temp
+            
             log_message = (
-                "Target: %.1f°C | Suggested: %.1f°C | Final: %.1f°C | "
+                "Target: %.1f°C | Suggested: %.1f°C | Applied: %.1f°C | "
                 "Actual Indoor: %.2f°C | Predicted Indoor: %.2f°C | "
                 "Confidence: %.3f"
             )
@@ -1045,7 +1048,7 @@ def main(args):
                 log_message,
                 target_indoor_temp,
                 suggested_temp,
-                final_temp,
+                applied_temp,
                 actual_indoor,
                 predicted_indoor,
                 confidence,

@@ -259,9 +259,10 @@ ML_HEATING_CONTROL_ENTITY_ID: str = os.getenv(
 # for different building characteristics and testing scenarios.
 
 # Core Thermal Properties (Priority 1 - Critical for Model Behavior)
+# UPDATED FOR CORRECTED PHYSICS - Previous values were calibrated for broken formula
 THERMAL_TIME_CONSTANT: float = float(os.getenv("THERMAL_TIME_CONSTANT", "4.0"))  # Building thermal response time (hours)
-HEAT_LOSS_COEFFICIENT: float = float(os.getenv("HEAT_LOSS_COEFFICIENT", "0.2"))  # Heat loss rate per degree difference
-OUTLET_EFFECTIVENESS: float = float(os.getenv("OUTLET_EFFECTIVENESS", "0.04"))     # Heat pump outlet efficiency
+HEAT_LOSS_COEFFICIENT: float = float(os.getenv("HEAT_LOSS_COEFFICIENT", "0.10"))  # Heat loss rate per degree difference (CORRECTED)
+OUTLET_EFFECTIVENESS: float = float(os.getenv("OUTLET_EFFECTIVENESS", "0.10"))     # Heat pump outlet efficiency (CORRECTED)
 OUTDOOR_COUPLING: float = float(os.getenv("OUTDOOR_COUPLING", "0.3"))            # Outdoor temperature influence factor
 # THERMAL_BRIDGE_FACTOR removed in Phase 2: was not used in calculations
 
