@@ -263,7 +263,7 @@ THERMAL_TIME_CONSTANT: float = float(os.getenv("THERMAL_TIME_CONSTANT", "4.0")) 
 HEAT_LOSS_COEFFICIENT: float = float(os.getenv("HEAT_LOSS_COEFFICIENT", "0.2"))  # Heat loss rate per degree difference
 OUTLET_EFFECTIVENESS: float = float(os.getenv("OUTLET_EFFECTIVENESS", "0.04"))     # Heat pump outlet efficiency
 OUTDOOR_COUPLING: float = float(os.getenv("OUTDOOR_COUPLING", "0.3"))            # Outdoor temperature influence factor
-THERMAL_BRIDGE_FACTOR: float = float(os.getenv("THERMAL_BRIDGE_FACTOR", "0.1"))  # Thermal bridging losses
+# THERMAL_BRIDGE_FACTOR removed in Phase 2: was not used in calculations
 
 # External Heat Source Weights (Priority 2 - Multi-Source Testing) - FIXED FOR TDD
 # Updated to physically reasonable ranges as defined by TDD tests:

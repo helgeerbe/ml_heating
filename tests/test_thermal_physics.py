@@ -1,15 +1,16 @@
 """
-Unit tests for correct thermal physics behavior.
+Physics Validation Tests for Thermal Equilibrium Model.
 
-These tests define the CORRECT physics behavior that the thermal equilibrium model
-should follow, based on fundamental thermodynamics principles.
+These tests validate that the thermal model follows fundamental physics principles:
+- Energy conservation
+- Second Law of Thermodynamics  
+- Unit consistency
+- Physical bounds and realistic behavior
 
-Written following TDD - these tests SHOULD FAIL initially, then we fix the code
-to make them pass.
+Created as part of Phase 2: Implementation Quality Fixes
 """
 
 import unittest
-import numpy as np
 import sys
 import os
 
@@ -20,306 +21,280 @@ from thermal_equilibrium_model import ThermalEquilibriumModel
 
 
 class TestThermalPhysics(unittest.TestCase):
-    """Test fundamental physics correctness of thermal equilibrium model."""
+    """Physics validation tests for thermal equilibrium model."""
     
     def setUp(self):
-        """Set up test model with known parameters."""
+        """Set up test model with realistic parameters."""
         self.model = ThermalEquilibriumModel()
         
-        # Set known parameters for predictable testing
-        self.model.thermal_time_constant = 4.0  # hours
-        self.model.heat_loss_coefficient = 0.05  # per °C
-        self.model.outlet_effectiveness = 0.8    # efficiency
-        self.model.outdoor_coupling = 0.0        # Remove for clean physics
-        self.model.thermal_bridge_factor = 0.0   # Remove for clean physics
+        # Set realistic test parameters
+        self.model.thermal_time_constant = 4.0  # 4 hours
+        self.model.heat_loss_coefficient = 1.2  # °C per unit heat input
+        self.model.outlet_effectiveness = 0.75  # 75% heat transfer efficiency
         
-        # Set external source weights to zero for clean physics testing
-        self.model.external_source_weights = {
-            'pv': 0.0,
-            'fireplace': 0.0, 
-            'tv': 0.0
-        }
+        # Test scenarios
+        self.outdoor_temp = 5.0
+        self.target_indoor = 21.0
+        self.outlet_temp = 45.0
 
     def test_energy_conservation_at_equilibrium(self):
         """
-        Test that energy conservation holds at equilibrium.
+        Test that energy is conserved at equilibrium.
         
         At equilibrium: Heat Input = Heat Loss
-        Heat Input = outlet_temp * outlet_effectiveness  
-        Heat Loss = heat_loss_coefficient * (T_indoor - T_outdoor)
-        
-        CRITICAL: thermal_time_constant should NOT appear in equilibrium equation!
+        Q_in = Q_out = heat_loss_coefficient * (T_indoor - T_outdoor)
         """
-        outlet_temp = 50.0
-        outdoor_temp = 5.0
+        pv_power = 1000  # 1kW PV
         
         # Calculate equilibrium temperature
         equilibrium_temp = self.model.predict_equilibrium_temperature(
-            outlet_temp=outlet_temp,
-            outdoor_temp=outdoor_temp,
-            pv_power=0,
-            fireplace_on=0,
-            tv_on=0
+            self.outlet_temp, self.outdoor_temp, pv_power=pv_power
         )
         
-        # Verify energy conservation
-        heat_input = outlet_temp * self.model.outlet_effectiveness
-        heat_loss = self.model.heat_loss_coefficient * (equilibrium_temp - outdoor_temp)
+        # Calculate heat input
+        heat_from_outlet = self.outlet_temp * self.model.outlet_effectiveness
+        heat_from_pv = pv_power * self.model.external_source_weights['pv']
+        total_heat_input = heat_from_outlet + heat_from_pv
         
-        # At equilibrium, these should be equal (within numerical precision)
+        # Calculate heat loss at equilibrium
+        heat_loss = self.model.heat_loss_coefficient * (equilibrium_temp - self.outdoor_temp)
+        
+        # Energy conservation: heat input should equal heat loss
         self.assertAlmostEqual(
-            heat_input, heat_loss, places=2,
-            msg=f"Energy conservation violated: heat_input={heat_input:.3f}, heat_loss={heat_loss:.3f}"
+            total_heat_input, heat_loss, places=2,
+            msg=f"Energy not conserved: input={total_heat_input:.3f}, "
+                f"loss={heat_loss:.3f}"
+        )
+
+    def test_second_law_thermodynamics_indoor_outdoor_relationship(self):
+        """
+        Test Second Law: Indoor temperature cannot be below outdoor
+        when heat is being added to the system.
+        """
+        # Test with positive heat input
+        equilibrium_temp = self.model.predict_equilibrium_temperature(
+            self.outlet_temp, self.outdoor_temp, pv_power=0
+        )
+        
+        # Indoor should be warmer than outdoor when heating
+        self.assertGreater(
+            equilibrium_temp, self.outdoor_temp,
+            msg="Indoor temperature below outdoor despite heat input"
+        )
+        
+        # Test with no heat input (outlet temp = 0)
+        equilibrium_no_heat = self.model.predict_equilibrium_temperature(
+            0.0, self.outdoor_temp, pv_power=0
+        )
+        
+        # With no heat, indoor should equal outdoor
+        self.assertAlmostEqual(
+            equilibrium_no_heat, self.outdoor_temp, places=1,
+            msg="Indoor temperature differs from outdoor with no heat input"
+        )
+
+    def test_unit_consistency_across_calculations(self):
+        """
+        Test that all calculations use consistent units.
+        
+        Expected units:
+        - Temperatures: °C
+        - Heat coefficients: °C per unit heat
+        - PV power: W (watts)
+        - PV weight: °C/W
+        """
+        pv_power = 2000  # 2kW in watts
+        
+        equilibrium_temp = self.model.predict_equilibrium_temperature(
+            self.outlet_temp, self.outdoor_temp, pv_power=pv_power
+        )
+        
+        # Result should be a reasonable temperature in °C
+        self.assertGreater(equilibrium_temp, -50, "Temperature unrealistically low")
+        self.assertLess(equilibrium_temp, 100, "Temperature unrealistically high")
+        self.assertIsInstance(equilibrium_temp, float, "Temperature not a float")
+
+    def test_physical_bounds_indoor_between_outdoor_and_source(self):
+        """
+        Test that indoor temperature is physically bounded.
+        
+        Indoor temperature should be:
+        - Above outdoor temperature (when heating)
+        - Below the effective heat source temperature
+        - Realistic for building environments
+        """
+        # Test normal heating scenario
+        equilibrium_temp = self.model.predict_equilibrium_temperature(
+            self.outlet_temp, self.outdoor_temp, pv_power=0
+        )
+        
+        # Indoor should be between outdoor and a reasonable upper bound
+        self.assertGreater(equilibrium_temp, self.outdoor_temp)
+        self.assertLess(equilibrium_temp, self.outlet_temp)
+        
+        # Should be in realistic building temperature range
+        self.assertGreater(equilibrium_temp, -20, "Temperature too cold for buildings")
+        self.assertLess(equilibrium_temp, 50, "Temperature too hot for buildings")
+
+    def test_linearity_of_heat_loss_with_temperature_difference(self):
+        """
+        Test that heat loss is linear with temperature difference.
+        
+        Q_loss = k * (T_indoor - T_outdoor) should be linear in ΔT
+        """
+        outdoor_temps = [0, 5, 10, 15, 20]
+        equilibrium_temps = []
+        
+        for outdoor_temp in outdoor_temps:
+            eq_temp = self.model.predict_equilibrium_temperature(
+                self.outlet_temp, outdoor_temp, pv_power=0
+            )
+            equilibrium_temps.append(eq_temp)
+        
+        # Calculate temperature differences
+        temp_differences = [eq - out for eq, out in zip(equilibrium_temps, outdoor_temps)]
+        
+        # All temperature differences should be approximately equal
+        # (since heat input is constant)
+        expected_diff = temp_differences[0]
+        for i, diff in enumerate(temp_differences[1:], 1):
+            self.assertAlmostEqual(
+                diff, expected_diff, places=1,
+                msg=f"Non-linear heat loss detected at outdoor={outdoor_temps[i]}°C: "
+                    f"expected_diff={expected_diff:.2f}, actual_diff={diff:.2f}"
+            )
+
+    def test_external_heat_source_contribution_additivity(self):
+        """
+        Test that external heat sources contribute additively.
+        
+        Total heat = outlet_heat + pv_heat + fireplace_heat + tv_heat
+        """
+        # Test individual contributions
+        eq_baseline = self.model.predict_equilibrium_temperature(
+            self.outlet_temp, self.outdoor_temp, pv_power=0, fireplace_on=0, tv_on=0
+        )
+        
+        eq_with_pv = self.model.predict_equilibrium_temperature(
+            self.outlet_temp, self.outdoor_temp, pv_power=1000, fireplace_on=0, tv_on=0
+        )
+        
+        eq_with_fireplace = self.model.predict_equilibrium_temperature(
+            self.outlet_temp, self.outdoor_temp, pv_power=0, fireplace_on=1, tv_on=0
+        )
+        
+        eq_with_both = self.model.predict_equilibrium_temperature(
+            self.outlet_temp, self.outdoor_temp, pv_power=1000, fireplace_on=1, tv_on=0
+        )
+        
+        # Calculate individual contributions
+        pv_contribution = eq_with_pv - eq_baseline
+        fireplace_contribution = eq_with_fireplace - eq_baseline
+        
+        # Combined effect should equal sum of individual effects
+        expected_combined = eq_baseline + pv_contribution + fireplace_contribution
+        
+        self.assertAlmostEqual(
+            eq_with_both, expected_combined, places=2,
+            msg=f"Heat sources not additive: expected={expected_combined:.3f}, "
+                f"actual={eq_with_both:.3f}"
+        )
+
+    def test_heat_loss_coefficient_physical_meaning(self):
+        """
+        Test that heat loss coefficient has correct physical meaning.
+        
+        Coefficient should represent the heat loss rate per degree
+        temperature difference.
+        """
+        # Test with known temperature difference
+        outdoor_temp = 10.0
+        target_indoor = 20.0  # 10°C difference
+        
+        # Calculate required heat input to maintain this difference
+        required_heat_loss = self.model.heat_loss_coefficient * (target_indoor - outdoor_temp)
+        
+        # Calculate what outlet temperature would be needed
+        required_outlet_temp = required_heat_loss / self.model.outlet_effectiveness
+        
+        # Verify that this outlet temperature actually produces the target indoor
+        actual_equilibrium = self.model.predict_equilibrium_temperature(
+            required_outlet_temp, outdoor_temp, pv_power=0
+        )
+        
+        self.assertAlmostEqual(
+            actual_equilibrium, target_indoor, places=1,
+            msg=f"Heat loss coefficient incorrect: expected={target_indoor}°C, "
+                f"actual={actual_equilibrium:.3f}°C"
         )
 
     def test_thermal_time_constant_not_in_equilibrium(self):
         """
-        Test that thermal time constant does NOT affect equilibrium temperature.
+        Test that thermal time constant does not affect equilibrium calculations.
         
-        Thermal time constant affects HOW FAST equilibrium is reached, 
-        NOT the final equilibrium temperature itself.
+        Equilibrium temperature should be independent of time constants.
         """
-        outlet_temp = 45.0
-        outdoor_temp = 10.0
-        
-        # Calculate equilibrium with different time constants
+        # Save original time constant
         original_time_constant = self.model.thermal_time_constant
         
-        self.model.thermal_time_constant = 2.0  # Fast building
-        equilibrium_fast = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, 0, 0, 0
+        # Calculate equilibrium with original time constant
+        eq_original = self.model.predict_equilibrium_temperature(
+            self.outlet_temp, self.outdoor_temp, pv_power=0
         )
         
-        self.model.thermal_time_constant = 8.0  # Slow building  
-        equilibrium_slow = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, 0, 0, 0
+        # Change time constant dramatically
+        self.model.thermal_time_constant = 10.0  # Much slower system
+        
+        eq_different_time = self.model.predict_equilibrium_temperature(
+            self.outlet_temp, self.outdoor_temp, pv_power=0
         )
         
         # Restore original
         self.model.thermal_time_constant = original_time_constant
         
-        # Equilibrium temperatures should be identical
+        # Equilibrium should be identical
         self.assertAlmostEqual(
-            equilibrium_fast, equilibrium_slow, places=2,
-            msg=f"Thermal time constant incorrectly affects equilibrium: "
-                f"fast={equilibrium_fast:.3f}, slow={equilibrium_slow:.3f}"
+            eq_original, eq_different_time, places=3,
+            msg="Thermal time constant affects equilibrium calculation"
         )
 
-    def test_correct_heat_balance_equation(self):
-        """
-        Test the correct heat balance equation implementation.
-        
-        Correct physics: T_equilibrium = T_outdoor + Q_in / heat_loss_coefficient
-        Where Q_in = net heat input to building
-        """
-        outlet_temp = 55.0
-        outdoor_temp = 0.0  # Use 0°C for simple math
-        
-        equilibrium_temp = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, 0, 0, 0
-        )
-        
-        # Calculate expected equilibrium using correct physics
-        heat_input = outlet_temp * self.model.outlet_effectiveness
-        expected_equilibrium = outdoor_temp + (heat_input / self.model.heat_loss_coefficient)
-        
-        self.assertAlmostEqual(
-            equilibrium_temp, expected_equilibrium, places=1,
-            msg=f"Heat balance equation incorrect: "
-                f"actual={equilibrium_temp:.3f}, expected={expected_equilibrium:.3f}"
-        )
 
-    def test_external_heat_sources_additive(self):
-        """
-        Test that external heat sources are properly additive.
+class TestThermalPhysicsEdgeCases(unittest.TestCase):
+    """Test edge cases and boundary conditions."""
+    
+    def setUp(self):
+        """Set up test model."""
+        self.model = ThermalEquilibriumModel()
         
-        Total heat input = heat_pump_input + external_sources
-        """
-        outlet_temp = 40.0
-        outdoor_temp = 5.0
+    def test_zero_heat_loss_coefficient(self):
+        """Test behavior with zero or very small heat loss coefficient."""
+        self.model.heat_loss_coefficient = 0.0
         
-        # Set known external source weights
-        self.model.external_source_weights = {
-            'pv': 0.002,      # °C per W
-            'fireplace': 5.0, # °C per unit
-            'tv': 0.5        # °C per unit
-        }
+        # Should return outdoor temperature (no heat retention)
+        equilibrium = self.model.predict_equilibrium_temperature(45.0, 10.0)
+        self.assertEqual(equilibrium, 10.0, "Zero heat loss should equal outdoor temp")
         
-        # Test with external sources
-        pv_power = 1000.0  # W
-        fireplace_on = 1.0
-        tv_on = 1.0
+    def test_extreme_temperatures(self):
+        """Test behavior with extreme temperature inputs."""
+        # Very cold outdoor
+        eq_cold = self.model.predict_equilibrium_temperature(45.0, -30.0)
+        self.assertIsInstance(eq_cold, float, "Failed with extreme cold")
         
-        equilibrium_with_sources = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, pv_power, fireplace_on, tv_on
+        # Very hot outdoor  
+        eq_hot = self.model.predict_equilibrium_temperature(45.0, 40.0)
+        self.assertIsInstance(eq_hot, float, "Failed with extreme heat")
+        
+    def test_high_pv_power(self):
+        """Test behavior with very high PV power input."""
+        eq_high_pv = self.model.predict_equilibrium_temperature(
+            45.0, 10.0, pv_power=10000  # 10kW
         )
         
-        # Test without external sources
-        equilibrium_without_sources = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, 0, 0, 0
-        )
-        
-        # Calculate expected external contribution
-        expected_external_contribution = (
-            pv_power * 0.002 + fireplace_on * 5.0 + tv_on * 0.5
-        ) / self.model.heat_loss_coefficient
-        
-        actual_external_contribution = equilibrium_with_sources - equilibrium_without_sources
-        
-        self.assertAlmostEqual(
-            actual_external_contribution, expected_external_contribution, places=1,
-            msg=f"External heat sources not properly additive: "
-                f"actual={actual_external_contribution:.3f}, expected={expected_external_contribution:.3f}"
-        )
-
-    def test_second_law_of_thermodynamics(self):
-        """
-        Test that Second Law of Thermodynamics is respected.
-        
-        UPDATED: For calibrated systems with high heat loss, equilibrium can be
-        higher than outlet temp due to effectiveness < 1.0 and heat balance physics.
-        The key is that we're not violating conservation of energy.
-        """
-        outlet_temp = 60.0
-        outdoor_temp = 10.0
-        
-        equilibrium_temp = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, 0, 0, 0
-        )
-        
-        # Key physics check: indoor should be above outdoor when heating
-        self.assertGreaterEqual(
-            equilibrium_temp, outdoor_temp,
-            msg=f"Equilibrium temp {equilibrium_temp:.3f}°C lower than outdoor {outdoor_temp}°C without cooling"
-        )
-        
-        # For calibrated systems: equilibrium can exceed outlet due to effectiveness factor
-        # The physics is: T_eq = T_out + (outlet_temp * effectiveness) / heat_loss_coeff
-        # This is physically valid - just means building needs very high outlet temps
-        heat_input = outlet_temp * self.model.outlet_effectiveness
-        heat_loss = self.model.heat_loss_coefficient * (equilibrium_temp - outdoor_temp)
-        
-        # Verify energy conservation (the real physics constraint)
-        self.assertAlmostEqual(
-            heat_input, heat_loss, places=1,
-            msg=f"Energy conservation violated: heat_input={heat_input:.3f}, heat_loss={heat_loss:.3f}"
-        )
-
-    def test_unit_consistency(self):
-        """
-        Test that all units are physically consistent.
-        
-        Heat input: W (or equivalent temperature * effectiveness)
-        Heat loss: W (or equivalent coefficient * temperature_difference)
-        """
-        # This test ensures dimensional analysis is correct
-        outlet_temp = 45.0  # °C
-        outdoor_temp = 5.0   # °C
-        
-        equilibrium_temp = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, 0, 0, 0
-        )
-        
-        # Verify equilibrium is reasonable (not extreme values)
-        self.assertGreater(equilibrium_temp, outdoor_temp)
-        # For calibrated systems: equilibrium can exceed outlet due to effectiveness
-        # The key is that energy conservation holds (tested elsewhere)
-        self.assertGreater(equilibrium_temp, -50)   # Not physically impossible
-        self.assertLess(equilibrium_temp, 2000)     # Reasonable upper bound for calibrated system
-
-    def test_no_arbitrary_normalization(self):
-        """
-        Test that there's no arbitrary normalization around 20°C.
-        
-        Physics should work the same at all temperature ranges.
-        """
-        # Test at different outdoor temperature ranges
-        outlet_temp = 50.0
-        
-        # Test around 0°C
-        equilibrium_0 = self.model.predict_equilibrium_temperature(
-            outlet_temp, 0.0, 0, 0, 0
-        )
-        
-        # Test around 20°C  
-        equilibrium_20 = self.model.predict_equilibrium_temperature(
-            outlet_temp, 20.0, 0, 0, 0
-        )
-        
-        # Test around 40°C
-        equilibrium_40 = self.model.predict_equilibrium_temperature(
-            outlet_temp, 40.0, 0, 0, 0
-        )
-        
-        # Temperature differences should be consistent (no magic 20°C bias)
-        delta_0_to_20 = equilibrium_20 - equilibrium_0
-        delta_20_to_40 = equilibrium_40 - equilibrium_20
-        
-        # Should be approximately equal (within 5% tolerance)
-        self.assertAlmostEqual(
-            delta_0_to_20, delta_20_to_40, delta=abs(delta_0_to_20 * 0.05),
-            msg=f"Arbitrary 20°C normalization detected: "
-                f"delta_0_to_20={delta_0_to_20:.3f}, delta_20_to_40={delta_20_to_40:.3f}"
-        )
-
-    def test_physical_bounds_enforcement(self):
-        """
-        Test that physical bounds are enforced but not overly restrictive.
-        """
-        # Test extreme but physically possible scenario
-        outlet_temp = 25.0   # Just above outdoor
-        outdoor_temp = 20.0   # Mild outdoor
-        
-        equilibrium_temp = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, 0, 0, 0
-        )
-        
-        # Should be bounded but reasonable
-        self.assertGreaterEqual(equilibrium_temp, outdoor_temp)
-        
-        # For calibrated systems with high heat loss: equilibrium can exceed outlet
-        # This is mathematically correct per heat balance equation
-        # Just verify it's not completely unreasonable (below 500°C)
-        self.assertLess(equilibrium_temp, 500.0)
-
-    def test_external_heat_source_units_consistent(self):
-        """
-        Test that external heat source units are physically meaningful.
-        
-        PV should be in °C/kW (temperature rise per kilowatt)
-        Fireplace should be in °C (direct temperature contribution)
-        TV should be in °C (direct temperature contribution)
-        """
-        # Reset to meaningful units
-        self.model.external_source_weights = {
-            'pv': 0.002,     # 0.002°C/W = 2°C/kW (reasonable solar heating)
-            'fireplace': 5.0, # 5°C direct contribution (reasonable fireplace)
-            'tv': 0.5        # 0.5°C (reasonable electronics heating)
-        }
-        
-        outlet_temp = 40.0
-        outdoor_temp = 10.0
-        
-        # Test PV contribution
-        equilibrium_with_pv = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, pv_power=1000, fireplace_on=0, tv_on=0
-        )
-        
-        equilibrium_without_pv = self.model.predict_equilibrium_temperature(
-            outlet_temp, outdoor_temp, pv_power=0, fireplace_on=0, tv_on=0
-        )
-        
-        pv_contribution = equilibrium_with_pv - equilibrium_without_pv
-        
-        # 1kW PV should contribute approximately 2°C / heat_loss_coefficient
-        expected_pv_contribution = (1000 * 0.002) / self.model.heat_loss_coefficient
-        
-        self.assertAlmostEqual(
-            pv_contribution, expected_pv_contribution, places=1,
-            msg=f"PV units inconsistent: actual={pv_contribution:.3f}°C, expected={expected_pv_contribution:.3f}°C"
-        )
+        # Should handle gracefully
+        self.assertIsInstance(eq_high_pv, float, "Failed with high PV power")
+        self.assertGreater(eq_high_pv, 10.0, "High PV should increase temperature")
 
 
 if __name__ == '__main__':
-    # Run with verbose output to see which tests fail
+    # Run with verbose output
     unittest.main(verbosity=2)

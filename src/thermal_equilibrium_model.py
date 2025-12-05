@@ -30,7 +30,7 @@ class ThermalEquilibriumModel:
         self.heat_loss_coefficient = config.HEAT_LOSS_COEFFICIENT
         self.outlet_effectiveness = config.OUTLET_EFFECTIVENESS
         self.outdoor_coupling = config.OUTDOOR_COUPLING
-        self.thermal_bridge_factor = config.THERMAL_BRIDGE_FACTOR
+        # thermal_bridge_factor removed in Phase 2: was not used in calculations
 
         self.external_source_weights = {
             'pv': config.PV_HEAT_WEIGHT,
