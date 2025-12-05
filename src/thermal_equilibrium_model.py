@@ -30,26 +30,17 @@ class ThermalEquilibriumModel:
     """
     
     def __init__(self):
-        # Core thermal properties (now configurable via config.py)
-        self.thermal_time_constant = config.THERMAL_TIME_CONSTANT
-        self.thermal_mass_factor = 1.0         # building thermal inertia multiplier
-        self.heat_loss_coefficient = config.HEAT_LOSS_COEFFICIENT
+        # LOAD CALIBRATED PARAMETERS FIRST - FIX FOR ISSUE
+        # Try to load from calibrated_baseline.json, fallback to config.py defaults
+        self._load_calibrated_parameters()
         
-        # Heat transfer effectiveness - FIXED: Use config values, disable problematic adaptive learning
-        self.outlet_effectiveness = config.OUTLET_EFFECTIVENESS
+        # Other thermal properties that aren't calibrated
+        self.thermal_mass_factor = 1.0         # building thermal inertia multiplier
         self.outdoor_coupling = config.OUTDOOR_COUPLING
         self.thermal_bridge_factor = config.THERMAL_BRIDGE_FACTOR
         
         # FIXED: Re-enable adaptive learning with corrected gradient calculations
         self.adaptive_learning_enabled = True  # RE-ENABLED with fixed gradients
-        
-        # External heat source weights (now configurable via config.py)
-        # Only includes heat sources with actual sensors in the system
-        self.external_source_weights = {
-            'pv': config.PV_HEAT_WEIGHT,
-            'fireplace': config.FIREPLACE_HEAT_WEIGHT,
-            'tv': config.TV_HEAT_WEIGHT
-        }
         
         # Overshoot prevention parameters
         self.safety_margin = 0.2               # temperature margin for overshoot prevention
@@ -84,13 +75,80 @@ class ThermalEquilibriumModel:
         self.recent_errors_window = config.RECENT_ERRORS_WINDOW
         
         # Parameter bounds for stability
-        self.thermal_time_constant_bounds = (4.0, 96.0)  # 4-96 hours
-        self.heat_loss_coefficient_bounds = (0.005, 0.25)  # Physical limits
+        # Import centralized thermal configuration for bounds
+        from .thermal_config import ThermalParameterConfig
+        
+        self.thermal_time_constant_bounds = ThermalParameterConfig.get_bounds('thermal_time_constant')
+        self.heat_loss_coefficient_bounds = ThermalParameterConfig.get_bounds('heat_loss_coefficient')
         self.outlet_effectiveness_bounds = (0.2, 1.5)     # Physical limits
         
         # Learning rate scheduling
         self.parameter_stability_threshold = 0.1  # When to reduce learning rate
         self.error_improvement_threshold = 0.05   # When to increase learning rate
+
+    def _load_calibrated_parameters(self):
+        """Load parameters from unified thermal state JSON."""
+        try:
+            from .unified_thermal_state import get_thermal_state_manager
+        except ImportError:
+            from unified_thermal_state import get_thermal_state_manager
+        
+        try:
+            # Get thermal state manager
+            state_manager = get_thermal_state_manager()
+            
+            # Get current parameters (baseline + any learning adjustments)
+            params = state_manager.get_current_parameters()
+            
+            # Load thermal parameters
+            self.thermal_time_constant = params['thermal_time_constant']
+            self.heat_loss_coefficient = params['heat_loss_coefficient']
+            self.outlet_effectiveness = params['outlet_effectiveness']
+            
+            # Load heat source weights
+            self.external_source_weights = {
+                'pv': params['pv_heat_weight'],
+                'fireplace': params['fireplace_heat_weight'],
+                'tv': params['tv_heat_weight']
+            }
+            
+            # Get parameter source info
+            metrics = state_manager.get_learning_metrics()
+            source = metrics['baseline_source']
+            
+            if source == "calibrated":
+                logging.info(f"🎯 LOADED CALIBRATED PARAMETERS:")
+                logging.info(f"   - thermal_time_constant: {self.thermal_time_constant:.2f}h (calibrated)")
+                logging.info(f"   - heat_loss_coefficient: {self.heat_loss_coefficient:.4f} (calibrated)")
+                logging.info(f"   - outlet_effectiveness: {self.outlet_effectiveness:.3f} (calibrated)")
+                if metrics['calibration_date']:
+                    logging.info(f"   - calibration_date: {metrics['calibration_date']}")
+            else:
+                logging.info(f"📋 LOADED DEFAULT PARAMETERS:")
+                logging.info(f"   - thermal_time_constant: {self.thermal_time_constant:.2f}h")
+                logging.info(f"   - heat_loss_coefficient: {self.heat_loss_coefficient:.4f}")
+                logging.info(f"   - outlet_effectiveness: {self.outlet_effectiveness:.3f}")
+            
+        except Exception as e:
+            logging.warning(f"Failed to load unified thermal state: {e}")
+            self._load_config_defaults()
+    
+    def _load_config_defaults(self):
+        """Load default parameters from config.py."""
+        self.thermal_time_constant = config.THERMAL_TIME_CONSTANT
+        self.heat_loss_coefficient = config.HEAT_LOSS_COEFFICIENT
+        self.outlet_effectiveness = config.OUTLET_EFFECTIVENESS
+        
+        self.external_source_weights = {
+            'pv': config.PV_HEAT_WEIGHT,
+            'fireplace': config.FIREPLACE_HEAT_WEIGHT,
+            'tv': config.TV_HEAT_WEIGHT
+        }
+        
+        logging.info(f"📋 LOADED CONFIG DEFAULTS (fallback):")
+        logging.info(f"   - thermal_time_constant: {self.thermal_time_constant:.2f}h")
+        logging.info(f"   - heat_loss_coefficient: {self.heat_loss_coefficient:.4f}")
+        logging.info(f"   - outlet_effectiveness: {self.outlet_effectiveness:.3f}")
 
     def predict_equilibrium_temperature(self, outlet_temp: float, outdoor_temp: float,
                                        pv_power: float = 0, fireplace_on: float = 0,
@@ -112,7 +170,14 @@ class ThermalEquilibriumModel:
         # Heat loss rate varies with outdoor temperature
         # Colder outdoor = higher heat loss rate
         normalized_outdoor = outdoor_temp / 20.0  # normalize around 20°C
-        heat_loss_rate = self.heat_loss_coefficient * (1 - self.outdoor_coupling * normalized_outdoor)
+        base_heat_loss_rate = self.heat_loss_coefficient * (1 - self.outdoor_coupling * normalized_outdoor)
+        
+        # CRITICAL FIX: Thermal time constant affects heat loss (building insulation quality)
+        # Longer time constants = better insulation = LOWER heat loss rates
+        # EXTREME EFFECT: Very aggressive relationship to force true convergence
+        thermal_insulation_multiplier = 1.0 / (1.0 + self.thermal_time_constant)
+        # This gives: 3h->0.25x, 4h->0.20x, 6h->0.14x, 8h->0.11x heat loss (EXTREME effect)
+        heat_loss_rate = base_heat_loss_rate * thermal_insulation_multiplier
         
         # External heat sources contributions (only actual sensors)
         external_heating = (
@@ -127,11 +192,10 @@ class ThermalEquilibriumModel:
         # Thermal bridging and building envelope losses (applied as heat loss, not denominator multiplier)
         thermal_bridge_loss = self.thermal_bridge_factor * abs(outdoor_temp - 20)
         
-        # FIXED: Heat balance equation with correct thermal bridge application
-        # Heat loss should be: base_heat_loss + thermal_bridge_loss (not in denominator)
+        # Total heat loss with thermal time constant effect
         total_heat_loss = heat_loss_rate + (thermal_bridge_loss * 0.01)  # Convert bridge loss to rate
         
-        # Corrected equilibrium calculation
+        # Equilibrium calculation with thermal time constant properly affecting heat loss
         equilibrium_temp = (
             heat_input + external_heating + outdoor_contribution
         ) / (1 + total_heat_loss)
@@ -272,6 +336,9 @@ class ThermalEquilibriumModel:
             # Keep manageable history
             if len(self.parameter_history) > 500:
                 self.parameter_history = self.parameter_history[-250:]
+            
+            # CRITICAL FIX: Save learned parameter adjustments to unified thermal state
+            self._save_learning_to_thermal_state()
 
     def _calculate_thermal_time_constant_gradient_FIXED(self, recent_predictions: List[Dict]) -> float:
         """
@@ -763,6 +830,42 @@ class ThermalEquilibriumModel:
             'fixes_applied': 'FIXED_VERSION_WITH_CORRECTED_GRADIENTS'
         }
     
+    def _save_learning_to_thermal_state(self):
+        """
+        CRITICAL FIX: Save learned parameter adjustments to unified thermal state.
+        
+        This bridges the gap between in-memory adaptive learning and persistent storage.
+        Without this, all learning is lost on restart.
+        """
+        try:
+            from .unified_thermal_state import get_thermal_state_manager
+            
+            # Get baseline parameters to calculate deltas
+            state_manager = get_thermal_state_manager()
+            baseline = state_manager.state["baseline_parameters"]
+            
+            # Calculate parameter deltas from baseline
+            thermal_delta = self.thermal_time_constant - baseline["thermal_time_constant"]
+            heat_loss_delta = self.heat_loss_coefficient - baseline["heat_loss_coefficient"]
+            effectiveness_delta = self.outlet_effectiveness - baseline["outlet_effectiveness"]
+            
+            # Update learning state with parameter adjustments
+            state_manager.update_learning_state(
+                learning_confidence=self.learning_confidence,
+                parameter_adjustments={
+                    'thermal_time_constant_delta': thermal_delta,
+                    'heat_loss_coefficient_delta': heat_loss_delta,
+                    'outlet_effectiveness_delta': effectiveness_delta
+                }
+            )
+            
+            logging.debug(f"💾 Saved learning state: thermal_Δ={thermal_delta:+.3f}, "
+                         f"heat_loss_Δ={heat_loss_delta:+.5f}, "
+                         f"effectiveness_Δ={effectiveness_delta:+.3f}")
+                         
+        except Exception as e:
+            logging.error(f"❌ Failed to save learning to thermal state: {e}")
+
     def reset_adaptive_learning(self):
         """Reset adaptive learning state with aggressive initial settings."""
         self.prediction_history = []

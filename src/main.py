@@ -138,7 +138,19 @@ def main(args):
     # --- Thermal Model Calibration ---
     if args.calibrate_physics:
         try:
+            from .physics_calibration import backup_existing_calibration
+            
             logging.info("=== CALIBRATING THERMAL EQUILIBRIUM MODEL ===")
+            
+            # Create backup before calibration
+            logging.info("Step 0: Creating backup before calibration...")
+            backup_path = backup_existing_calibration()
+            if backup_path:
+                import os
+                logging.info("✅ Previous thermal state backed up: %s", os.path.basename(backup_path))
+            else:
+                logging.info("ℹ️ No existing thermal state found to backup")
+            
             result = train_thermal_equilibrium_model()
             if result:
                 logging.info("✅ Thermal model calibrated successfully!")
@@ -164,8 +176,34 @@ def main(args):
     # --- Main Control Loop ---
     # This loop runs indefinitely, performing one full cycle of learning and
     # prediction every 5 minutes.
+    
+    # Define blocking_entities outside try block so it's available in exception handler
+    blocking_entities = [
+        config.DHW_STATUS_ENTITY_ID,
+        config.DEFROST_STATUS_ENTITY_ID,
+        config.DISINFECTION_STATUS_ENTITY_ID,
+        config.DHW_BOOST_HEATER_STATUS_ENTITY_ID,
+    ]
+    
+    # Cycle timing debug variables
+    cycle_number = 0
+    last_cycle_end_time = None
+    
     while True:
         try:
+            # CYCLE START DEBUG LOGGING
+            cycle_number += 1
+            cycle_start_time = time.time()
+            cycle_start_datetime = datetime.now()
+            
+            # Calculate interval since last cycle
+            if last_cycle_end_time is not None:
+                interval_since_last = cycle_start_time - last_cycle_end_time
+                logging.info(f"🔄 CYCLE {cycle_number} START: {cycle_start_datetime.strftime('%H:%M:%S')} "
+                           f"(interval: {interval_since_last/60:.1f}min since last cycle)")
+            else:
+                logging.info(f"🔄 CYCLE {cycle_number} START: {cycle_start_datetime.strftime('%H:%M:%S')} "
+                           f"(first cycle)")
             # Initialize shadow mode tracking for this cycle
             shadow_mode_active = (
                 config.TARGET_OUTLET_TEMP_ENTITY_ID !=
@@ -251,11 +289,18 @@ def main(args):
 
                     # Create learning features with the actual outlet temp
                     # that was applied
-                    learning_features = last_run_features.copy()
-                    if isinstance(learning_features, pd.DataFrame):
-                        learning_features = learning_features.to_dict(
+                    # Fix: Handle case where last_run_features might be stored as string
+                    if isinstance(last_run_features, str):
+                        logging.warning("last_run_features stored as string, skipping detailed learning")
+                        learning_features = {}
+                    elif isinstance(last_run_features, pd.DataFrame):
+                        learning_features = last_run_features.copy().to_dict(
                             orient="records"
                         )[0]
+                    elif isinstance(last_run_features, dict):
+                        learning_features = last_run_features.copy()
+                    else:
+                        learning_features = last_run_features.copy() if last_run_features else {}
 
                     learning_features["outlet_temp"] = actual_applied_temp
                     learning_features["outlet_temp_sq"] = (
@@ -267,11 +312,39 @@ def main(args):
 
                     # Online learning is now handled by ThermalEquilibriumModel in model_wrapper
                     try:
-                        logging.debug(
-                            "Online learning: applied_temp=%.1f°C, "
-                            "actual_change=%.3f°C (handled by thermal model)",
+                        # Import and create model wrapper for learning
+                        from .model_wrapper import get_enhanced_model_wrapper
+                        
+                        # Create wrapper instance
+                        wrapper = get_enhanced_model_wrapper()
+                        
+                        # Prepare prediction context for learning
+                        prediction_context = {
+                            'outlet_temp': actual_applied_temp,
+                            'outdoor_temp': learning_features.get('outdoor_temp', 10.0),
+                            'pv_power': learning_features.get('pv_now', 0.0),
+                            'fireplace_on': learning_features.get('fireplace_on', 0.0),
+                            'tv_on': learning_features.get('tv_on', 0.0)
+                        }
+                        
+                        # Calculate what the model predicted vs actual result
+                        predicted_change = 0.0  # Model's prediction for indoor temp change
+                        actual_change = actual_indoor_change
+                        
+                        # Call the learning feedback method that was missing!
+                        wrapper.learn_from_prediction_feedback(
+                            predicted_temp=last_indoor_temp + predicted_change,
+                            actual_temp=current_indoor,
+                            prediction_context=prediction_context,
+                            timestamp=datetime.now().isoformat()
+                        )
+                        
+                        logging.info(
+                            "✅ Online learning: applied_temp=%.1f°C, "
+                            "actual_change=%.3f°C, cycle=%d",
                             actual_applied_temp,
-                            actual_indoor_change
+                            actual_indoor_change,
+                            wrapper.cycle_count
                         )
                     except Exception as e:
                         logging.warning(
@@ -304,12 +377,7 @@ def main(args):
             # --- Check for blocking modes (DHW, Defrost) ---
             # Skip the control logic if the heat pump is busy with other tasks
             # like heating domestic hot water (DHW) or defrosting.
-            blocking_entities = [
-                config.DHW_STATUS_ENTITY_ID,
-                config.DEFROST_STATUS_ENTITY_ID,
-                config.DISINFECTION_STATUS_ENTITY_ID,
-                config.DHW_BOOST_HEATER_STATUS_ENTITY_ID,
-            ]
+            # blocking_entities already defined outside try block
             # Build a list of active blocking reasons so we can distinguish
             # DHW-like (long) blockers from short ones like defrost.
             blocking_reasons = [
@@ -785,12 +853,80 @@ def main(args):
                 logging.info("🔍 SHADOW MODE: ML prediction calculated but not applied to heating system")
                 logging.info("   Final temp: %.1f°C (calculated but not sent to HA)", final_temp)
             else:
+                # Apply smart rounding: test floor vs ceiling to see which gets closer to target
+                floor_temp = np.floor(final_temp)
+                ceiling_temp = np.ceil(final_temp)
+                
+                if floor_temp == ceiling_temp:
+                    # Already an integer
+                    smart_rounded_temp = int(final_temp)
+                    logging.debug(f"Smart rounding: {final_temp:.2f}°C is already integer")
+                else:
+                    # Test both options using the thermal model to see which gets closer to target
+                    try:
+                        from .model_wrapper import get_enhanced_model_wrapper
+                        wrapper = get_enhanced_model_wrapper()
+                        
+                        # Create test contexts for floor and ceiling temperatures
+                        test_context_floor = {
+                            'outlet_temp': floor_temp,
+                            'outdoor_temp': outdoor_temp,
+                            'pv_power': features.get('pv_now', 0.0) if hasattr(features, 'get') else 0.0,
+                            'fireplace_on': fireplace_on,
+                            'tv_on': features.get('tv_on', 0.0) if hasattr(features, 'get') else 0.0
+                        }
+                        
+                        test_context_ceiling = test_context_floor.copy()
+                        test_context_ceiling['outlet_temp'] = ceiling_temp
+                        
+                        # Get predictions for both temperatures
+                        floor_predicted = wrapper.predict_indoor_temp(
+                            outlet_temp=floor_temp,
+                            outdoor_temp=outdoor_temp,
+                            pv_power=test_context_floor['pv_power'],
+                            fireplace_on=test_context_floor['fireplace_on'],
+                            tv_on=test_context_floor['tv_on']
+                        )
+                        ceiling_predicted = wrapper.predict_indoor_temp(
+                            outlet_temp=ceiling_temp,
+                            outdoor_temp=outdoor_temp,
+                            pv_power=test_context_ceiling['pv_power'],
+                            fireplace_on=test_context_ceiling['fireplace_on'],
+                            tv_on=test_context_ceiling['tv_on']
+                        )
+                        
+                        # Calculate errors from target
+                        floor_error = abs(floor_predicted - target_indoor_temp)
+                        ceiling_error = abs(ceiling_predicted - target_indoor_temp)
+                        
+                        if floor_error <= ceiling_error:
+                            smart_rounded_temp = int(floor_temp)
+                            chosen = "floor"
+                            chosen_predicted = floor_predicted
+                            chosen_error = floor_error
+                        else:
+                            smart_rounded_temp = int(ceiling_temp)
+                            chosen = "ceiling"
+                            chosen_predicted = ceiling_predicted
+                            chosen_error = ceiling_error
+                        
+                        logging.info(
+                            f"Smart rounding: {final_temp:.2f}°C → {smart_rounded_temp}°C "
+                            f"(chose {chosen}: floor→{floor_predicted:.2f}°C [err={floor_error:.3f}], "
+                            f"ceiling→{ceiling_predicted:.2f}°C [err={ceiling_error:.3f}], "
+                            f"target={target_indoor_temp:.1f}°C)"
+                        )
+                    except Exception as e:
+                        # Fallback to regular rounding if smart rounding fails
+                        smart_rounded_temp = round(final_temp)
+                        logging.warning(f"Smart rounding failed ({e}), using regular rounding: {final_temp:.2f}°C → {smart_rounded_temp}°C")
+                
                 logging.debug("Setting target outlet temp")
                 ha_client.set_state(
                     config.TARGET_OUTLET_TEMP_ENTITY_ID,
-                    final_temp,
+                    smart_rounded_temp,
                     get_sensor_attributes(config.TARGET_OUTLET_TEMP_ENTITY_ID),
-                    round_digits=0,
+                    round_digits=None,  # No additional rounding needed - already handled by smart rounding
                 )
 
             # --- Log Metrics ---
@@ -964,10 +1100,26 @@ def main(args):
                     "Failed to write MODEL_ERROR state to HA.", exc_info=True
                 )
 
+        # CYCLE END DEBUG LOGGING
+        cycle_end_time = time.time()
+        cycle_duration = cycle_end_time - cycle_start_time
+        cycle_end_datetime = datetime.now()
+        
+        logging.info(f"✅ CYCLE {cycle_number} END: {cycle_end_datetime.strftime('%H:%M:%S')} "
+                    f"(duration: {cycle_duration:.1f}s)")
+        
+        last_cycle_end_time = cycle_end_time
+
         # Poll for blocking events during the idle period so defrost starts/ends
         # are detected quickly. This call will block until the next cycle is
         # due, or until a blocking event starts or ends.
+        logging.info(f"💤 POLLING START: Waiting {config.CYCLE_INTERVAL_MINUTES}min "
+                    f"until next cycle...")
         poll_for_blocking(ha_client, state, blocking_entities)
+        
+        poll_end_time = time.time()
+        poll_duration = poll_end_time - cycle_end_time
+        logging.info(f"⏰ POLLING END: Waited {poll_duration/60:.1f}min, starting next cycle...")
 
 
 if __name__ == "__main__":

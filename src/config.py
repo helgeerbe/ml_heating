@@ -259,7 +259,7 @@ ML_HEATING_CONTROL_ENTITY_ID: str = os.getenv(
 # for different building characteristics and testing scenarios.
 
 # Core Thermal Properties (Priority 1 - Critical for Model Behavior)
-THERMAL_TIME_CONSTANT: float = float(os.getenv("THERMAL_TIME_CONSTANT", "24.0"))  # Building thermal response time (hours)
+THERMAL_TIME_CONSTANT: float = float(os.getenv("THERMAL_TIME_CONSTANT", "4.0"))  # Building thermal response time (hours)
 HEAT_LOSS_COEFFICIENT: float = float(os.getenv("HEAT_LOSS_COEFFICIENT", "0.08"))  # Heat loss rate per degree difference
 OUTLET_EFFECTIVENESS: float = float(os.getenv("OUTLET_EFFECTIVENESS", "0.6"))     # Heat pump outlet efficiency
 OUTDOOR_COUPLING: float = float(os.getenv("OUTDOOR_COUPLING", "0.3"))            # Outdoor temperature influence factor

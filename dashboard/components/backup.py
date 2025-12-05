@@ -343,22 +343,23 @@ def export_model_data():
             'configuration': {}
         }
         
-        # Export model state if available
-        model_state_file = Path('/data/models/ml_state.pkl')
-        if model_state_file.exists():
+        # Export thermal state if available (unified JSON format)
+        thermal_state_file = Path('/opt/ml_heating/thermal_state.json')
+        if thermal_state_file.exists():
             try:
-                with open(model_state_file, 'rb') as f:
-                    state = pickle.load(f)
-                # Convert to JSON-serializable format
+                with open(thermal_state_file, 'r') as f:
+                    thermal_state = json.load(f)
+                # Export relevant thermal state data
+                export_data['thermal_state'] = thermal_state
                 export_data['model_state'] = {
-                    'confidence': float(state.get('confidence', 0)),
-                    'mae': float(state.get('mae', 0)),
-                    'rmse': float(state.get('rmse', 0)),
-                    'cycle_count': int(state.get('cycle_count', 0)),
-                    'last_prediction': float(state.get('last_prediction', 0))
+                    'learning_confidence': thermal_state.get('learning_state', {}).get('learning_confidence', 0),
+                    'cycle_count': thermal_state.get('learning_state', {}).get('cycle_count', 0),
+                    'baseline_source': thermal_state.get('baseline_parameters', {}).get('source', 'unknown'),
+                    'calibration_date': thermal_state.get('baseline_parameters', {}).get('calibration_date'),
+                    'total_predictions': thermal_state.get('prediction_metrics', {}).get('total_predictions', 0)
                 }
             except Exception:
-                export_data['model_state'] = {'error': 'Failed to load model state'}
+                export_data['model_state'] = {'error': 'Failed to load thermal state'}
         
         # Export configuration
         config_file = Path('/data/options.json')

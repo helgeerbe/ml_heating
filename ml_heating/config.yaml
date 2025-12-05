@@ -168,7 +168,7 @@ options:
   # Thermal Equilibrium Model Parameters - Physics-based model configuration
   # Core thermal properties that can be tuned for different building characteristics
   # Building thermal response time in hours (how fast building temperature changes)
-  thermal_time_constant: 24.0
+  thermal_time_constant: 4.0
   # Heat loss rate per degree difference between indoor and outdoor temperature
   heat_loss_coefficient: 0.05
   # Heat pump outlet efficiency (how effectively outlet heats indoor air)

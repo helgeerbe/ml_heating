@@ -309,7 +309,7 @@ class HAClient:
         attributes_learning = get_sensor_attributes("sensor.ml_heating_learning")
         attributes_learning.update({
             # Learned thermal parameters
-            "thermal_time_constant": learning_metrics.get("thermal_time_constant", 24.0),
+            "thermal_time_constant": learning_metrics.get("thermal_time_constant", 6.0),
             "heat_loss_coefficient": learning_metrics.get("heat_loss_coefficient", 0.05),
             "outlet_effectiveness": learning_metrics.get("outlet_effectiveness", 0.8),
             "learning_confidence": learning_metrics.get("learning_confidence", 3.0),

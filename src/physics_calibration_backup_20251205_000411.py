@@ -34,75 +34,282 @@ except ImportError:
 
 
 def train_thermal_equilibrium_model():
-    """Train the Thermal Equilibrium Model with historical data for optimal thermal parameters using scipy optimization"""
+    """Train the Thermal Equilibrium Model with historical data for optimal thermal parameters"""
     
-    logging.info("=== THERMAL EQUILIBRIUM MODEL TRAINING (SCIPY OPTIMIZATION) ===")
+    logging.info("=== THERMAL EQUILIBRIUM MODEL TRAINING ===")
     
-    # Step 1: Fetch historical data
-    logging.info("Step 1: Fetching historical data...")
-    df = fetch_historical_data_for_calibration(lookback_hours=config.TRAINING_LOOKBACK_HOURS)
-    
-    if df is None or df.empty:
-        logging.error("❌ Failed to fetch historical data")
-        return None
-    
-    logging.info(f"✅ Retrieved {len(df)} samples ({len(df)/12:.1f} hours)")
-    
-    # Step 2: Filter for stable periods
-    logging.info("Step 2: Filtering for stable thermal equilibrium periods...")
-    stable_periods = filter_stable_periods(df)
-    
-    if len(stable_periods) < 50:
-        logging.error(f"❌ Insufficient stable periods: {len(stable_periods)} (need at least 50)")
-        return None
-    
-    logging.info(f"✅ Found {len(stable_periods)} stable periods for calibration")
-    
-    # Step 3: Optimize thermal parameters using scipy
-    logging.info("Step 3: Optimizing thermal parameters using scipy.optimize...")
-    optimized_params = optimize_thermal_parameters(stable_periods)
-    
-    if optimized_params is None or not optimized_params.get('optimization_success', False):
-        logging.error("❌ Parameter optimization failed")
-        return None
-    
-    logging.info(f"✅ Optimization completed - MAE: {optimized_params['mae']:.4f}°C")
-    
-    # Step 4: Create thermal model with optimized parameters
-    logging.info("Step 4: Creating thermal model with optimized parameters...")
+    # Initialize thermal model
     thermal_model = ThermalEquilibriumModel()
     
-    # Apply optimized parameters to thermal model
-    thermal_model.outlet_effectiveness = optimized_params['outlet_effectiveness']
-    thermal_model.heat_loss_coefficient = optimized_params['heat_loss_coefficient']
-    thermal_model.thermal_time_constant = optimized_params['thermal_time_constant']
+    influx = InfluxService(
+        url=config.INFLUX_URL,
+        token=config.INFLUX_TOKEN,
+        org=config.INFLUX_ORG
+    )
     
-    # Apply heat source weights
-    thermal_model.external_source_weights['pv'] = optimized_params.get('pv_heat_weight', config.PV_HEAT_WEIGHT)
-    thermal_model.external_source_weights['fireplace'] = optimized_params.get('fireplace_heat_weight', config.FIREPLACE_HEAT_WEIGHT)
-    thermal_model.external_source_weights['tv'] = optimized_params.get('tv_heat_weight', config.TV_HEAT_WEIGHT)
+    logging.info("Fetching historical data with target temperatures...")
+    df = influx.get_training_data(lookback_hours=config.TRAINING_LOOKBACK_HOURS)
     
-    # Set reasonable learning confidence based on optimization success
-    thermal_model.learning_confidence = 0.8  # High confidence from scipy optimization
+    if df.empty or len(df) < 240:
+        logging.error("ERROR: Insufficient training data")
+        return None
     
-    logging.info("\n=== OPTIMIZED THERMAL PARAMETERS ===")
+    logging.info(f"Processing {len(df)} samples ({len(df)/12:.1f} hours)")
+    
+    # Enhanced feature preparation with target temperatures
+    features_list = []
+    labels_list = []
+    
+    # Data quality tracking
+    total_samples = 0
+    filtered_samples = {
+        'temp_gap': 0,
+        'delta_outlier': 0, 
+        'sensor_divergence': 0,
+        'outlet_range': 0,
+        'rate_limiting': 0,
+        'missing_data': 0
+    }
+    
+    logging.info("Building features with enhanced data filtering...")
+    
+    # Get column names
+    outlet_col = config.ACTUAL_OUTLET_TEMP_ENTITY_ID.split(".", 1)[-1]
+    indoor_col = config.INDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
+    outdoor_col = config.OUTDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
+    target_col = config.TARGET_INDOOR_TEMP_ENTITY_ID.split(".", 1)[-1]
+    dhw_col = config.DHW_STATUS_ENTITY_ID.split(".", 1)[-1]
+    disinfect_col = config.DISINFECTION_STATUS_ENTITY_ID.split(".", 1)[-1]
+    boost_col = config.DHW_BOOST_HEATER_STATUS_ENTITY_ID.split(".", 1)[-1]
+    defrost_col = config.DEFROST_STATUS_ENTITY_ID.split(".", 1)[-1]
+    pv_power_col = config.PV_POWER_ENTITY_ID.split(".", 1)[-1]
+    fireplace_col = config.FIREPLACE_STATUS_ENTITY_ID.split(".", 1)[-1]
+    tv_col = config.TV_STATUS_ENTITY_ID.split(".", 1)[-1]
+    
+    for idx in range(12, len(df) - config.PREDICTION_HORIZON_STEPS):
+        row = df.iloc[idx]
+        total_samples += 1
+        
+        # Extract core temperatures
+        outlet_temp = row.get(outlet_col)
+        indoor_temp = row.get(indoor_col)
+        outdoor_temp = row.get(outdoor_col)
+        target_temp = row.get(target_col, 21.0)
+        
+        # Get indoor lag (30 min = 3 steps back at 10 min intervals)
+        indoor_lag_30m = (df.iloc[idx - 3].get(indoor_col) 
+                          if idx >= 3 else indoor_temp)
+        
+        # Skip if missing critical data
+        if (pd.isna(outlet_temp) or pd.isna(indoor_temp) 
+                or pd.isna(outdoor_temp)):
+            filtered_samples['missing_data'] += 1
+            continue
+        
+        # Calculate actual temperature change
+        future_indoor = df.iloc[idx + config.PREDICTION_HORIZON_STEPS].get(
+            indoor_col)
+        if pd.isna(future_indoor) or pd.isna(target_temp):
+            filtered_samples['missing_data'] += 1
+            continue
+        
+        actual_delta = float(future_indoor) - float(indoor_temp)
+        
+        # Enhanced data filtering for outlier removal (same as validation)
+        temp_gap = target_temp - indoor_temp
+        
+        # 1. Skip very large temperature gaps (system faults)
+        if abs(temp_gap) > 3.0:
+            filtered_samples['temp_gap'] += 1
+            continue
+            
+        # 2. Enhanced outlier filtering for realistic temperature changes
+        if abs(actual_delta) > 0.5:  # Skip large unrealistic changes
+            filtered_samples['delta_outlier'] += 1
+            continue
+            
+        # 3. Sensor consistency checks
+        if abs(indoor_temp - target_temp) > 5.0:  # Extreme sensor divergence
+            filtered_samples['sensor_divergence'] += 1
+            continue
+            
+        # 4. Physics constraint validation
+        if outlet_temp < 10.0 or outlet_temp > 70.0:  # Unrealistic outlet temps
+            filtered_samples['outlet_range'] += 1
+            continue
+            
+        # 5. Rate limiting - check previous temperature for sudden jumps
+        if idx >= 6:  # Need some history
+            prev_indoor = df.iloc[idx - 6].get(indoor_col)  # 1 hour ago
+            if prev_indoor is not None:
+                temp_rate = abs(indoor_temp - prev_indoor)  # Change over 1 hour
+                if temp_rate > 2.0:  # Skip sudden temperature jumps
+                    filtered_samples['rate_limiting'] += 1
+                    continue
+        
+        # Build feature dictionary (only 19 features needed)
+        features = {
+            'outlet_temp': float(outlet_temp),
+            'indoor_temp_lag_30m': float(indoor_lag_30m),
+            'target_temp': float(target_temp),
+            'outdoor_temp': float(outdoor_temp),
+            'dhw_heating': float(row.get(dhw_col, 0.0)),
+            'dhw_disinfection': float(row.get(disinfect_col, 0.0)),
+            'dhw_boost_heater': float(row.get(boost_col, 0.0)),
+            'defrosting': float(row.get(defrost_col, 0.0)),
+            'pv_now': float(row.get(pv_power_col, 0.0)),
+            'fireplace_on': float(row.get(fireplace_col, 0.0)),
+            'tv_on': float(row.get(tv_col, 0.0)),
+            'temp_forecast_1h': float(outdoor_temp),
+            'temp_forecast_2h': float(outdoor_temp),
+            'temp_forecast_3h': float(outdoor_temp),
+            'temp_forecast_4h': float(outdoor_temp),
+            'pv_forecast_1h': 0.0,
+            'pv_forecast_2h': 0.0,
+            'pv_forecast_3h': 0.0,
+            'pv_forecast_4h': 0.0,
+        }
+        
+        features_list.append(features)
+        labels_list.append(actual_delta)
+    
+    if not features_list:
+        logging.error("ERROR: No valid training samples after filtering")
+        return None
+    
+    # Log data quality statistics
+    total_filtered = sum(filtered_samples.values())
+    kept_samples = len(features_list)
+    filter_rate = (total_filtered / total_samples) * 100 if total_samples > 0 else 0
+    
+    logging.info("=== DATA QUALITY FILTERING RESULTS ===")
+    logging.info(f"Total samples processed: {total_samples}")
+    logging.info(f"Samples filtered out: {total_filtered} ({filter_rate:.1f}%)")
+    logging.info(f"Samples kept for training: {kept_samples}")
+    logging.info("Filter breakdown:")
+    for filter_type, count in filtered_samples.items():
+        if count > 0:
+            pct = (count / total_samples) * 100
+            logging.info(f"  {filter_type}: {count} ({pct:.1f}%)")
+    
+    logging.info(
+        f"Training on {kept_samples} realistic heating scenarios"
+    )
+    
+    # Training loop - Use thermal equilibrium model for parameter optimization
+    logging.info("\n=== THERMAL PARAMETER OPTIMIZATION ===")
+    logging.info("🔧 PHYSICS-CONSTRAINED LEARNING: Preventing unrealistic parameter drift")
+    
+    # Store initial parameters from .env config
+    initial_outlet_effectiveness = thermal_model.outlet_effectiveness
+    logging.info(f"Starting outlet effectiveness: {initial_outlet_effectiveness:.3f}")
+    
+    # Track prediction accuracy for optimization
+    prediction_errors = []
+    
+    for i, (features, actual_delta) in enumerate(zip(features_list, labels_list)):
+        # Extract thermal context from features
+        context = {
+            'outlet_temp': features['outlet_temp'],
+            'outdoor_temp': features['outdoor_temp'],
+            'pv_power': features.get('pv_now', 0.0),
+            'fireplace_on': features.get('fireplace_on', 0.0),
+            'tv_on': features.get('tv_on', 0.0)
+        }
+        
+        # Predict equilibrium temperature using thermal model
+        current_indoor = features['indoor_temp_lag_30m']
+        predicted_equilibrium = thermal_model.predict_equilibrium_temperature(
+            outlet_temp=features['outlet_temp'],
+            outdoor_temp=features['outdoor_temp'],
+            pv_power=context['pv_power'],
+            fireplace_on=context['fireplace_on'],
+            tv_on=context['tv_on']
+        )
+        
+        # Convert equilibrium prediction to temperature change prediction
+        predicted_delta = (predicted_equilibrium - current_indoor) * 0.1
+        
+        # Calculate actual final temperature for feedback
+        actual_final = current_indoor + actual_delta
+        
+        # Update thermal model with prediction feedback
+        thermal_model.update_prediction_feedback(
+            predicted_temp=predicted_equilibrium,
+            actual_temp=actual_final,
+            prediction_context=context,
+            timestamp=df.iloc[12 + i]['_time'] if i < len(df) - 12 else None
+        )
+        
+        # PHYSICS CONSTRAINT: Prevent outlet effectiveness from drifting too far from realistic values
+        if i > 0 and (i + 1) % 50 == 0:  # Check every 50 samples
+            # Enforce minimum outlet effectiveness based on .env config
+            min_outlet_effectiveness = max(0.4, initial_outlet_effectiveness - 0.1)  # Allow 10% drift down
+            max_outlet_effectiveness = min(0.8, initial_outlet_effectiveness + 0.1)  # Allow 10% drift up
+            
+            if thermal_model.outlet_effectiveness < min_outlet_effectiveness:
+                logging.info(f"🔧 PHYSICS CONSTRAINT: Outlet effectiveness {thermal_model.outlet_effectiveness:.3f} too low, "
+                           f"correcting to minimum {min_outlet_effectiveness:.3f}")
+                thermal_model.outlet_effectiveness = min_outlet_effectiveness
+                
+            elif thermal_model.outlet_effectiveness > max_outlet_effectiveness:
+                logging.info(f"🔧 PHYSICS CONSTRAINT: Outlet effectiveness {thermal_model.outlet_effectiveness:.3f} too high, "
+                           f"correcting to maximum {max_outlet_effectiveness:.3f}")
+                thermal_model.outlet_effectiveness = max_outlet_effectiveness
+        
+        # Track prediction error
+        prediction_error = abs(predicted_delta - actual_delta)
+        prediction_errors.append(prediction_error)
+        
+        if (i + 1) % 200 == 0:
+            avg_error = sum(prediction_errors[-200:]) / min(200, len(prediction_errors))
+            logging.info(
+                f"Processed {i+1}/{len(features_list)} - "
+                f"Avg Error: {avg_error:.4f}°C - "
+                f"Confidence: {thermal_model.learning_confidence:.3f}"
+            )
+    
+    # Results
+    logging.info("\n=== THERMAL TRAINING COMPLETED ===")
+    avg_error = sum(prediction_errors) / len(prediction_errors) if prediction_errors else 0.0
+    logging.info(f"Final Average Error: {avg_error:.4f}°C")
+    logging.info(f"Total training samples: {len(prediction_errors)}")
+    
+    logging.info("\n=== LEARNED THERMAL PARAMETERS ===")
     logging.info(f"Thermal time constant: {thermal_model.thermal_time_constant:.2f}h")
     logging.info(f"Heat loss coefficient: {thermal_model.heat_loss_coefficient:.4f}")
     logging.info(f"Outlet effectiveness: {thermal_model.outlet_effectiveness:.3f}")
-    logging.info(f"PV heat weight: {thermal_model.external_source_weights.get('pv', 0):.4f}")
-    logging.info(f"Fireplace heat weight: {thermal_model.external_source_weights.get('fireplace', 0):.2f}")
-    logging.info(f"TV heat weight: {thermal_model.external_source_weights.get('tv', 0):.2f}")
-    logging.info(f"Optimization MAE: {optimized_params['mae']:.4f}°C")
     logging.info(f"Learning confidence: {thermal_model.learning_confidence:.3f}")
     
-    # Step 5: Save thermal learning state to unified thermal state manager
-    logging.info("Step 5: Saving calibrated parameters to unified thermal state...")
+    # Get adaptive learning metrics
+    learning_metrics = thermal_model.get_adaptive_learning_metrics()
+    if not learning_metrics.get('insufficient_data', False):
+        logging.info(f"Parameter updates: {learning_metrics['parameter_updates']}")
+        logging.info(f"Update percentage: {learning_metrics['update_percentage']:.1f}%")
+    
+    # Test thermal equilibrium physics
+    logging.info("\n=== THERMAL PHYSICS VALIDATION ===")
+    logging.info("Testing equilibrium predictions:")
+    for outlet_temp in [35, 45, 55]:
+        for outdoor_temp in [0, 10, 20]:
+            equilibrium = thermal_model.predict_equilibrium_temperature(
+                outlet_temp=outlet_temp,
+                outdoor_temp=outdoor_temp,
+                pv_power=0,
+                fireplace_on=0,
+                tv_on=0
+            )
+            logging.info(f"  Outlet {outlet_temp}°C, Outdoor {outdoor_temp}°C → "
+                        f"Equilibrium {equilibrium:.2f}°C")
+    
+    # Save thermal learning state to unified thermal state manager
+    logging.info("\n=== SAVING CALIBRATED PARAMETERS TO UNIFIED THERMAL STATE ===")
     try:
         from .unified_thermal_state import get_thermal_state_manager
         
         state_manager = get_thermal_state_manager()
         
-        # Use optimized parameters as calibrated baseline
+        # Save as calibrated baseline parameters
         calibrated_params = {
             'thermal_time_constant': thermal_model.thermal_time_constant,
             'heat_loss_coefficient': thermal_model.heat_loss_coefficient,
@@ -113,9 +320,28 @@ def train_thermal_equilibrium_model():
         }
         
         # Set as calibrated baseline (this updates the parameters source to "calibrated")
-        state_manager.set_calibrated_baseline(calibrated_params, calibration_cycles=len(stable_periods))
+        state_manager.set_calibrated_baseline(calibrated_params, calibration_cycles=kept_samples)
         
-        logging.info("✅ Calibrated parameters (scipy-optimized) saved to unified thermal state")
+        # Also update learning state
+        state_manager.update_learning_state(
+            learning_confidence=thermal_model.learning_confidence,
+            parameter_adjustments={
+                'thermal_time_constant_delta': 0.0,  # Reset deltas since we're setting new baseline
+                'heat_loss_coefficient_delta': 0.0,
+                'outlet_effectiveness_delta': 0.0
+            }
+        )
+        
+        # Add parameter and prediction history
+        if thermal_model.parameter_history:
+            for record in thermal_model.parameter_history[-50:]:  # Last 50 updates
+                state_manager.add_parameter_history_record(record)
+        
+        if thermal_model.prediction_history:
+            for record in thermal_model.prediction_history[-100:]:  # Last 100 predictions
+                state_manager.add_prediction_record(record)
+        
+        logging.info("✅ Calibrated parameters saved to unified thermal state")
         logging.info("✅ Parameters will be automatically loaded on next restart")
         logging.info("🔄 Restart ml_heating service to use calibrated thermal model")
         
@@ -140,9 +366,6 @@ def validate_thermal_model():
     logging.info("=== THERMAL MODEL VALIDATION ===")
     
     try:
-        # Import centralized thermal configuration
-        from .thermal_config import ThermalParameterConfig
-        
         # Initialize thermal model (will use default parameters or restored state)
         thermal_model = ThermalEquilibriumModel()
         
@@ -617,18 +840,20 @@ def optimize_thermal_parameters(stable_periods):
     param_values = []
     param_bounds = []
     
-    # Always optimize core thermal parameters (EXCLUDE thermal_time_constant due to parameter coupling)
-    param_names.extend(['outlet_effectiveness', 'heat_loss_coefficient'])
+    # Always optimize core thermal parameters
+    param_names.extend(['outlet_effectiveness', 'heat_loss_coefficient', 'thermal_time_constant'])
     param_values.extend([
         current_params['outlet_effectiveness'],
-        current_params['heat_loss_coefficient']
+        current_params['heat_loss_coefficient'], 
+        current_params['thermal_time_constant']
     ])
     # Import centralized thermal configuration
     from .thermal_config import ThermalParameterConfig
     
     param_bounds.extend([
         ThermalParameterConfig.get_bounds('outlet_effectiveness'),
-        ThermalParameterConfig.get_bounds('heat_loss_coefficient')
+        ThermalParameterConfig.get_bounds('heat_loss_coefficient'),
+        ThermalParameterConfig.get_bounds('thermal_time_constant')
     ])
     
     # Conditionally add heat source parameters based on data availability
@@ -650,34 +875,20 @@ def optimize_thermal_parameters(stable_periods):
     logging.info(f"Optimizing {len(param_names)} parameters: {param_names}")
     
     def objective_function(params):
-        """Calculate MAE for given parameters with dynamic parameter mapping and debugging"""
+        """Calculate MAE for given parameters with dynamic parameter mapping"""
         total_error = 0.0
         valid_predictions = 0
         
         # Map parameters to their names dynamically
         param_dict = dict(zip(param_names, params))
         
-        # Debug: Log parameter values being tested
-        debug_str = ", ".join([f"{name}={val:.4f}" for name, val in param_dict.items()])
-        # Only log every 10th call to avoid spam
-        if hasattr(objective_function, 'call_count'):
-            objective_function.call_count += 1
-        else:
-            objective_function.call_count = 1
-            
-        if objective_function.call_count % 10 == 1:
-            logging.debug(f"Testing params: {debug_str}")
-        
-        # Test on subset for speed during optimization (use all data for final evaluation)
-        test_periods = stable_periods[::5]  # Use every 5th period for speed
-        
-        for period in test_periods:
+        for period in stable_periods:
             try:
                 # Create temporary thermal model with test parameters
                 test_model = ThermalEquilibriumModel()
                 test_model.outlet_effectiveness = param_dict['outlet_effectiveness']
                 test_model.heat_loss_coefficient = param_dict['heat_loss_coefficient']
-                test_model.thermal_time_constant = current_params['thermal_time_constant']  # FIXED: Use current value since not optimized
+                test_model.thermal_time_constant = param_dict['thermal_time_constant']
                 
                 # Set heat source weights (use original values for excluded params)
                 test_model.external_source_weights['pv'] = param_dict.get(
@@ -714,20 +925,12 @@ def optimize_thermal_parameters(stable_periods):
             return 1000.0  # High error for invalid parameter sets
             
         mae = total_error / valid_predictions
-        
-        # Debug: Log MAE for this parameter set
-        if objective_function.call_count % 10 == 1:
-            logging.debug(f"MAE for {debug_str}: {mae:.4f}")
-            
         return mae
     
     logging.info(f"Starting optimization with {len(stable_periods)} periods...")
     logging.info("This may take a few minutes...")
     
-    # Enable DEBUG logging to see parameter exploration
-    logging.getLogger().setLevel(logging.DEBUG)
-    
-    # Run optimization with improved settings for better exploration
+    # Run optimization
     try:
         result = minimize(
             objective_function,
@@ -735,28 +938,10 @@ def optimize_thermal_parameters(stable_periods):
             bounds=param_bounds,
             method='L-BFGS-B',
             options={
-                'maxiter': 500,      # More iterations for better exploration
-                'ftol': 1e-3,        # More appropriate tolerance for MAE ~1.5°C
-                'disp': True,        # Show optimization progress
-                'iprint': 2          # Print status every 2 iterations
+                'maxiter': 100,
+                'ftol': 1e-6
             }
         )
-        
-        # Log detailed optimization results regardless of success
-        logging.info(f"🔍 SCIPY OPTIMIZATION RESULTS:")
-        logging.info(f"  Success: {result.success}")
-        logging.info(f"  Message: {result.message}")
-        logging.info(f"  Function evaluations: {result.nfev}")
-        logging.info(f"  Iterations: {result.nit if hasattr(result, 'nit') else 'N/A'}")
-        logging.info(f"  Final function value: {result.fun:.6f}")
-        
-        # Log initial vs final parameter values
-        logging.info(f"  Parameter changes:")
-        for i, param_name in enumerate(param_names):
-            initial_val = param_values[i]
-            final_val = result.x[i]
-            change = final_val - initial_val
-            logging.info(f"    {param_name}: {initial_val:.6f} → {final_val:.6f} (Δ{change:+.6f})")
         
         if result.success:
             # Build optimized parameters dict with both optimized and excluded params
