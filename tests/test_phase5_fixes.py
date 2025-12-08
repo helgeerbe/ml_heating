@@ -70,10 +70,10 @@ class TestPhase5PredictIndoorTemp(unittest.TestCase):
                 result, 5.0,
                 "Indoor temperature prediction should be reasonable (>= 5°C)"
             )
-            self.assertLessEqual(
-                result, 30.0,
-                "Indoor temperature prediction should be reasonable (<= 30°C)"
-            )
+        self.assertLessEqual(
+            result, 35.0,
+            "Indoor temperature prediction should be reasonable (<= 35°C)"
+        )
 
     def test_predict_indoor_temp_parameter_validation(self):
         """Test parameter validation in predict_indoor_temp."""

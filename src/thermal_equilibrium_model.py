@@ -11,13 +11,16 @@ import numpy as np
 import logging
 from typing import Dict, List
 
-# Support both package-relative and direct import for notebooks
+# MIGRATION: Use unified thermal parameter system
 try:
-    from . import config  # Package-relative import
+    from .thermal_parameters import thermal_params  # Package-relative import
     from .thermal_constants import PhysicsConstants
+    # Keep config import for backward compatibility during migration
+    from . import config  # Fallback for non-migrated parameters
 except ImportError:
-    import config  # Direct import fallback for notebooks
+    from thermal_parameters import thermal_params  # Direct import fallback for notebooks
     from thermal_constants import PhysicsConstants
+    import config  # Direct import fallback
 
 # Singleton pattern for ThermalEquilibriumModel to prevent excessive instantiation
 _thermal_equilibrium_model_instance = None
@@ -109,15 +112,16 @@ class ThermalEquilibriumModel:
             logging.info("⚙️ Using config defaults as fallback")
     
     def _load_config_defaults(self):
-        """Load thermal parameters from config.py defaults."""
-        self.thermal_time_constant = config.THERMAL_TIME_CONSTANT
-        self.heat_loss_coefficient = config.HEAT_LOSS_COEFFICIENT
-        self.outlet_effectiveness = config.OUTLET_EFFECTIVENESS
+        """MIGRATED: Load thermal parameters from unified parameter system."""
+        # MIGRATION: Use unified thermal parameter system
+        self.thermal_time_constant = thermal_params.get('thermal_time_constant')
+        self.heat_loss_coefficient = thermal_params.get('heat_loss_coefficient')
+        self.outlet_effectiveness = thermal_params.get('outlet_effectiveness')
 
         self.external_source_weights = {
-            'pv': config.PV_HEAT_WEIGHT,
-            'fireplace': config.FIREPLACE_HEAT_WEIGHT,
-            'tv': config.TV_HEAT_WEIGHT
+            'pv': thermal_params.get('pv_heat_weight'),
+            'fireplace': thermal_params.get('fireplace_heat_weight'),
+            'tv': thermal_params.get('tv_heat_weight')
         }
         
         # Initialize remaining attributes

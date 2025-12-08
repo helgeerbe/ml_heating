@@ -56,7 +56,7 @@ def test_unified_json_system():
         
         # Test setting calibrated baseline
         calibrated_params = {
-            'thermal_time_constant': 28.5,
+            'thermal_time_constant': 18.5,
             'heat_loss_coefficient': 0.12,
             'outlet_effectiveness': 0.65
         }
@@ -105,7 +105,7 @@ def test_unified_json_system():
         print(f"   Outlet effectiveness: {model.outlet_effectiveness}")
         
         # Verify it loaded calibrated parameters (not defaults)
-        if abs(model.thermal_time_constant - 29.7) < 0.5:  # 28.5 + 1.2 adjustment
+        if abs(model.thermal_time_constant - 19.7) < 0.5:  # 18.5 + 1.2 adjustment
             print(f"✅ Model loaded calibrated + adjusted parameters correctly")
         else:
             print(f"⚠️  Model parameters may not be loading correctly")
