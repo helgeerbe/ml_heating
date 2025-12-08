@@ -86,15 +86,13 @@ class TestHASensorExport:
         call_args = mock_ha_client.log_model_metrics.call_args
         assert call_args is not None
         
-        # Check that confidence, mae, rmse are passed as keyword arguments
+        # Check that mae, rmse are passed as keyword arguments
+        # Note: confidence is now reported via ml_heating_learning sensor, not here
         kwargs = call_args.kwargs
-        assert 'confidence' in kwargs
         assert 'mae' in kwargs
         assert 'rmse' in kwargs
         
         # Check that values are reasonable
-        assert isinstance(kwargs['confidence'], float)
-        assert kwargs['confidence'] > 0
         assert isinstance(kwargs['mae'], float) 
         assert kwargs['mae'] >= 0
         assert isinstance(kwargs['rmse'], float)
@@ -196,6 +194,10 @@ class TestHASensorExport:
         mock_create_ha_client.return_value = mock_ha_client
         
         wrapper = EnhancedModelWrapper()
+        
+        # Remove get_feature_importance method to test the skip logic
+        if hasattr(wrapper.thermal_model, 'get_feature_importance'):
+            delattr(wrapper.thermal_model, 'get_feature_importance')
         
         # Ensure thermal model doesn't have get_feature_importance method
         assert not hasattr(wrapper.thermal_model, 'get_feature_importance')

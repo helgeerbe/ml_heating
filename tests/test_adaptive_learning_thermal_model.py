@@ -26,6 +26,10 @@ class TestAdaptiveLearningThermalModel(unittest.TestCase):
     
     def setUp(self):
         """Set up test fixtures."""
+        # Reset singleton to ensure fresh instance for each test
+        from src import thermal_equilibrium_model
+        thermal_equilibrium_model._thermal_equilibrium_model_instance = None
+        
         self.model = ThermalEquilibriumModel()
         self.model.reset_adaptive_learning()  # Clean state for each test
         

@@ -238,37 +238,20 @@ class HAClient:
             round_digits=None,
         )
 
-    def log_model_metrics(
-        self, confidence: float, mae: float, rmse: float
-    ) -> None:
+    def log_model_metrics(self, mae: float, rmse: float) -> None:
         """
         Publishes key model performance metrics to dedicated HA sensors.
 
-        This creates sensors for model confidence, Mean Absolute Error (MAE),
-        and Root Mean Squared Error (RMSE), allowing for real-time tracking
-        of the model's performance and uncertainty from within Home
-        Assistant.
+        This creates sensors for Mean Absolute Error (MAE) and Root Mean Squared Error (RMSE),
+        allowing for real-time tracking of the model's performance from within Home Assistant.
+        
+        Note: Model confidence is now provided via sensor.ml_heating_learning.state to avoid redundancy.
 
         Args:
-            confidence: The model's confidence score (std dev of tree
-            predictions).
             mae: The current Mean Absolute Error.
             rmse: The current Root Mean Squared Error.
         """
         now_utc = datetime.now(timezone.utc).isoformat()
-
-        # Log Confidence (standard deviation of tree predictions)
-        logging.debug("Logging confidence")
-        attributes_confidence = get_sensor_attributes(
-            config.CONFIDENCE_ENTITY_ID
-        )
-        attributes_confidence["last_updated"] = now_utc
-        self.set_state(
-            config.CONFIDENCE_ENTITY_ID,
-            confidence,
-            attributes_confidence,
-            round_digits=4,
-        )
 
         # Log Mean Absolute Error (MAE)
         logging.debug("Logging MAE")

@@ -19,19 +19,36 @@ except ImportError:
     import config  # Direct import fallback for notebooks
     from thermal_constants import PhysicsConstants
 
-# Copy all the original class content but with fixed gradient methods
+# Singleton pattern for ThermalEquilibriumModel to prevent excessive instantiation
+_thermal_equilibrium_model_instance = None
+
 class ThermalEquilibriumModel:
     """
     A physics-based thermal model that predicts indoor temperature equilibrium
     and adapts its parameters based on real-world feedback.
+    
+    Implements singleton pattern to prevent excessive logging during calibration.
     """
     
+    def __new__(cls):
+        global _thermal_equilibrium_model_instance
+        if _thermal_equilibrium_model_instance is None:
+            _thermal_equilibrium_model_instance = super(ThermalEquilibriumModel, cls).__new__(cls)
+            _thermal_equilibrium_model_instance._initialized = False
+        return _thermal_equilibrium_model_instance
+    
     def __init__(self):
-        # FIXED: Load calibrated parameters first, fallback to config defaults
-        self._load_thermal_parameters()
-        
-        self.outdoor_coupling = config.OUTDOOR_COUPLING
-        # thermal_bridge_factor removed in Phase 2: was not used in calculations
+        # Only initialize once due to singleton pattern
+        if not getattr(self, '_initialized', False):
+            # FIXED: Load calibrated parameters first, fallback to config defaults
+            self._load_thermal_parameters()
+            
+            self.outdoor_coupling = config.OUTDOOR_COUPLING
+            # thermal_bridge_factor removed in Phase 2: was not used in calculations
+            self._initialized = True
+        else:
+            # Singleton instance already initialized, skip redundant initialization
+            pass
     def _load_thermal_parameters(self):
         """
         Load thermal parameters with priority: calibrated > config defaults.
@@ -310,39 +327,52 @@ class ThermalEquilibriumModel:
             self.outlet_effectiveness_bounds[1]
         )
         
-        # Log parameter changes if significant
+        # Log parameter changes and track history
         thermal_change = abs(self.thermal_time_constant - old_thermal_time_constant)
         heat_loss_change = abs(self.heat_loss_coefficient - old_heat_loss_coefficient)
         effectiveness_change = abs(self.outlet_effectiveness - old_outlet_effectiveness)
         
-        if thermal_change > 0.01 or heat_loss_change > 0.0001 or effectiveness_change > 0.001:
+        # PHASE 2 FIX: Always record parameter state (for tracking parameter_updates)
+        # This ensures parameter_updates increments even with small changes
+        self.parameter_history.append({
+            'timestamp': recent_predictions[-1]['timestamp'],
+            'thermal_time_constant': self.thermal_time_constant,
+            'heat_loss_coefficient': self.heat_loss_coefficient,
+            'outlet_effectiveness': self.outlet_effectiveness,
+            'learning_rate': current_learning_rate,
+            'learning_confidence': self.learning_confidence,
+            'avg_recent_error': np.mean([abs(p['error']) for p in recent_predictions]),
+            'gradients': {
+                'thermal': thermal_gradient,
+                'heat_loss': heat_loss_gradient,
+                'effectiveness': effectiveness_gradient
+            },
+            'changes': {
+                'thermal': thermal_change,
+                'heat_loss': heat_loss_change,
+                'effectiveness': effectiveness_change
+            }
+        })
+        
+        # Keep manageable history
+        if len(self.parameter_history) > 500:
+            self.parameter_history = self.parameter_history[-250:]
+        
+        # PHASE 1 FIX: Lower thresholds for significant change logging (10x reduction)
+        # This allows smaller but meaningful changes to be logged and saved
+        if thermal_change > 0.001 or heat_loss_change > 0.00001 or effectiveness_change > 0.0001:
             logging.info(f"Adaptive learning update: "
                         f"thermal: {old_thermal_time_constant:.2f}→{self.thermal_time_constant:.2f} (Δ{thermal_change:+.3f}), "
                         f"heat_loss: {old_heat_loss_coefficient:.4f}→{self.heat_loss_coefficient:.4f} (Δ{heat_loss_change:+.5f}), "
                         f"effectiveness: {old_outlet_effectiveness:.3f}→{self.outlet_effectiveness:.3f} (Δ{effectiveness_change:+.3f})")
             
-            # Store parameter history
-            self.parameter_history.append({
-                'timestamp': recent_predictions[-1]['timestamp'],
-                'thermal_time_constant': self.thermal_time_constant,
-                'heat_loss_coefficient': self.heat_loss_coefficient,
-                'outlet_effectiveness': self.outlet_effectiveness,
-                'learning_rate': current_learning_rate,
-                'learning_confidence': self.learning_confidence,
-                'avg_recent_error': np.mean([abs(p['error']) for p in recent_predictions]),
-                'gradients': {
-                    'thermal': thermal_gradient,
-                    'heat_loss': heat_loss_gradient,
-                    'effectiveness': effectiveness_gradient
-                }
-            })
-            
-            # Keep manageable history
-            if len(self.parameter_history) > 500:
-                self.parameter_history = self.parameter_history[-250:]
-            
             # CRITICAL FIX: Save learned parameter adjustments to unified thermal state
             self._save_learning_to_thermal_state()
+        else:
+            # Log micro-updates for diagnostics
+            logging.debug(f"Micro learning update: thermal_Δ={thermal_change:+.5f}, "
+                         f"heat_loss_Δ={heat_loss_change:+.7f}, "
+                         f"effectiveness_Δ={effectiveness_change:+.5f}")
 
     def _calculate_parameter_gradient(self, parameter_name: str, epsilon: float, recent_predictions: List[Dict]) -> float:
         """

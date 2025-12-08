@@ -47,11 +47,11 @@ class EnhancedModelWrapper:
         self.thermal_model = ThermalEquilibriumModel()
         self.learning_enabled = True
         
-        # Initialize prediction metrics for MAE/RMSE tracking
-        self.prediction_metrics = PredictionMetrics()
-        
         # Get thermal state manager
         self.state_manager = get_thermal_state_manager()
+        
+        # Initialize prediction metrics for MAE/RMSE tracking with state integration
+        self.prediction_metrics = PredictionMetrics(state_manager=self.state_manager)
         
         # Get current cycle count from unified state
         metrics = self.state_manager.get_learning_metrics()
@@ -383,10 +383,8 @@ class EnhancedModelWrapper:
             # Get comprehensive metrics
             ha_metrics = self.get_comprehensive_metrics_for_ha()
             
-            # Export model confidence
-            confidence = ha_metrics.get('learning_confidence', 3.0)
+            # Export MAE/RMSE metrics (confidence now provided via ml_heating_learning sensor)
             ha_client.log_model_metrics(
-                confidence=confidence,
                 mae=ha_metrics.get('mae_all_time', 0.0),
                 rmse=ha_metrics.get('rmse_all_time', 0.0)
             )
@@ -400,10 +398,15 @@ class EnhancedModelWrapper:
                 if importances:
                     ha_client.log_feature_importance(importances)
             
-            logging.debug("✅ Exported metrics to Home Assistant sensors")
+            logging.info("✅ Exported metrics to Home Assistant sensors successfully")
             
         except Exception as e:
-            logging.warning(f"Failed to export metrics to HA: {e}")
+            # CRITICAL FIX: Better error logging for debugging sensor export issues
+            logging.error(f"❌ FAILED to export metrics to HA: {e}", exc_info=True)
+            logging.error(f"   Attempted to export: {list(ha_metrics.keys()) if 'ha_metrics' in locals() else 'metrics not created'}")
+            logging.error(f"   HA Client created: {'ha_client' in locals()}")
+            # Re-raise the exception for visibility during debugging
+            raise
     
     def get_prediction_confidence(self) -> float:
         """Get current prediction confidence from thermal model."""
@@ -412,16 +415,21 @@ class EnhancedModelWrapper:
     def get_learning_metrics(self) -> Dict:
         """Get comprehensive learning metrics for monitoring."""
         try:
-            return self.thermal_model.get_adaptive_learning_metrics()
+            metrics = self.thermal_model.get_adaptive_learning_metrics()
+            # Check if we got valid metrics or just insufficient_data flag
+            if isinstance(metrics, dict) and 'insufficient_data' not in metrics and len(metrics) > 1:
+                return metrics
         except AttributeError:
-            # Fallback if method doesn't exist
-            return {
-                'thermal_time_constant': self.thermal_model.thermal_time_constant,
-                'heat_loss_coefficient': self.thermal_model.heat_loss_coefficient,
-                'outlet_effectiveness': self.thermal_model.outlet_effectiveness,
-                'learning_confidence': self.thermal_model.learning_confidence,
-                'cycle_count': self.cycle_count
-            }
+            pass
+        
+        # Fallback if method doesn't exist or returns insufficient_data
+        return {
+            'thermal_time_constant': self.thermal_model.thermal_time_constant,
+            'heat_loss_coefficient': self.thermal_model.heat_loss_coefficient,
+            'outlet_effectiveness': self.thermal_model.outlet_effectiveness,
+            'learning_confidence': self.thermal_model.learning_confidence,
+            'cycle_count': self.cycle_count
+        }
     
     def get_comprehensive_metrics_for_ha(self) -> Dict:
         """Get comprehensive metrics for Home Assistant sensor export."""
@@ -429,11 +437,15 @@ class EnhancedModelWrapper:
             # Get thermal learning metrics
             thermal_metrics = self.get_learning_metrics()
             
-            # Get prediction accuracy metrics
+            # Get prediction accuracy metrics (all-time for MAE/RMSE)
             prediction_metrics = self.prediction_metrics.get_metrics()
             
             # Get recent performance
             recent_performance = self.prediction_metrics.get_recent_performance(10)
+            
+            # Get 24h window simplified accuracy breakdown
+            accuracy_24h = self.prediction_metrics.get_24h_accuracy_breakdown()
+            good_control_24h = self.prediction_metrics.get_24h_good_control_percentage()
             
             # Combine into comprehensive HA-friendly format
             ha_metrics = {
@@ -448,7 +460,7 @@ class EnhancedModelWrapper:
                 'parameter_updates': thermal_metrics.get('parameter_updates', 0),
                 'update_percentage': thermal_metrics.get('update_percentage', 0),
                 
-                # Prediction accuracy (MAE/RMSE)
+                # Prediction accuracy (MAE/RMSE) - all-time
                 'mae_1h': prediction_metrics.get('1h', {}).get('mae', 0.0),
                 'mae_6h': prediction_metrics.get('6h', {}).get('mae', 0.0), 
                 'mae_24h': prediction_metrics.get('24h', {}).get('mae', 0.0),
@@ -459,7 +471,13 @@ class EnhancedModelWrapper:
                 'recent_mae_10': recent_performance.get('mae', 0.0),
                 'recent_max_error': recent_performance.get('max_error', 0.0),
                 
-                # Accuracy breakdown
+                # NEW: Simplified 3-category accuracy (24h window)
+                'perfect_accuracy_pct': accuracy_24h.get('perfect', {}).get('percentage', 0.0),
+                'tolerable_accuracy_pct': accuracy_24h.get('tolerable', {}).get('percentage', 0.0), 
+                'poor_accuracy_pct': accuracy_24h.get('poor', {}).get('percentage', 0.0),
+                'good_control_pct': good_control_24h,
+                
+                # Legacy accuracy breakdown (all-time) - kept for backward compatibility
                 'excellent_accuracy_pct': prediction_metrics.get('accuracy_breakdown', {}).get('excellent', {}).get('percentage', 0.0),
                 'good_accuracy_pct': (
                     prediction_metrics.get('accuracy_breakdown', {}).get('excellent', {}).get('percentage', 0.0) +
@@ -467,9 +485,9 @@ class EnhancedModelWrapper:
                     prediction_metrics.get('accuracy_breakdown', {}).get('good', {}).get('percentage', 0.0)
                 ),
                 
-                # Trend analysis
-                'is_improving': prediction_metrics.get('trends', {}).get('is_improving', False),
-                'improvement_percentage': prediction_metrics.get('trends', {}).get('mae_improvement_percentage', 0.0),
+                # Trend analysis (ensure JSON serializable)
+                'is_improving': bool(prediction_metrics.get('trends', {}).get('is_improving', False)),
+                'improvement_percentage': float(prediction_metrics.get('trends', {}).get('mae_improvement_percentage', 0.0)),
                 
                 # Model health summary
                 'model_health': 'excellent' if thermal_metrics.get('learning_confidence', 0) >= 4.0 else

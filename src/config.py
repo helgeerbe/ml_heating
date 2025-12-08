@@ -195,9 +195,7 @@ BLOCKING_POLL_INTERVAL_SECONDS: int = int(
 # --- Metrics Entity IDs ---
 # These entities are created in Home Assistant to allow real-time monitoring
 # of the model's performance and health.
-CONFIDENCE_ENTITY_ID: str = os.getenv(
-    "CONFIDENCE_ENTITY_ID", "sensor.ml_model_confidence"
-)
+# Note: Model confidence is now provided via sensor.ml_heating_learning.state
 MAE_ENTITY_ID: str = os.getenv("MAE_ENTITY_ID", "sensor.ml_model_mae")
 RMSE_ENTITY_ID: str = os.getenv("RMSE_ENTITY_ID", "sensor.ml_model_rmse")
 

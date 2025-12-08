@@ -15,7 +15,7 @@ import json
 from datetime import datetime
 
 # Add the src directory to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 # Import all components
 from model_wrapper import get_enhanced_model_wrapper

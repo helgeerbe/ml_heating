@@ -148,7 +148,7 @@ class ThermalStateManager:
             serializable_state = self._convert_numpy_types(self.state)
             
             with open(self.state_file, 'w') as f:
-                json.dump(serializable_state, f, indent=2, default=str)
+                json.dump(serializable_state, f, indent=2)
             
             logging.debug(f"💾 Saved unified thermal state to {self.state_file}")
             return True
@@ -177,7 +177,7 @@ class ThermalStateManager:
         return merge_dict(merged, loaded_state)
     
     def _convert_numpy_types(self, obj) -> Any:
-        """Convert numpy types to native Python types for JSON serialization."""
+        """Convert numpy types and pandas objects to native Python types for JSON serialization."""
         if isinstance(obj, dict):
             return {key: self._convert_numpy_types(value) for key, value in obj.items()}
         elif isinstance(obj, list):
@@ -188,6 +188,16 @@ class ThermalStateManager:
             return float(obj)
         elif isinstance(obj, np.ndarray):
             return obj.tolist()
+        elif hasattr(obj, 'to_dict'):  # pandas DataFrame/Series
+            try:
+                return obj.to_dict(orient='records')[0] if len(obj) == 1 else obj.to_dict(orient='records')
+            except Exception:
+                logging.warning(f"Failed to convert pandas object to dict: {type(obj)}")
+                return None  # Return None instead of string representation
+        elif hasattr(obj, '__dict__') and not isinstance(obj, (str, int, float, bool)):
+            # Complex objects that can't be easily serialized
+            logging.warning(f"Cannot serialize complex object of type {type(obj)}, storing as None")
+            return None
         else:
             return obj
     

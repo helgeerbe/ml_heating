@@ -19,19 +19,20 @@ class PredictionMetrics:
     
     Tracks MAE (Mean Absolute Error) and RMSE (Root Mean Square Error)
     over multiple time windows for comprehensive accuracy analysis.
+    
+    FIXED: Now uses unified thermal state for persistence across service restarts.
     """
     
-    def __init__(self, max_history_size: int = 1000):
+    def __init__(self, max_history_size: int = 1000, state_manager=None):
         """
-        Initialize prediction metrics tracker.
+        Initialize prediction metrics tracker with unified thermal state integration.
         
         Args:
             max_history_size: Maximum number of predictions to keep in memory
+            state_manager: Unified thermal state manager for persistence
         """
         self.max_history_size = max_history_size
-        
-        # Prediction history storage
-        self.predictions = deque(maxlen=max_history_size)
+        self.state_manager = state_manager
         
         # Time window configurations (in number of predictions)
         self.windows = {
@@ -46,8 +47,62 @@ class PredictionMetrics:
         self._cache_timestamp = None
         self._cache_valid_duration = 60  # Cache valid for 60 seconds
         
-        # Persistent state for reloading
-        self.state_file = None
+        # FIXED: Load existing predictions from unified thermal state
+        self._load_from_state()
+        
+        logging.info(f"🔢 PredictionMetrics initialized with {len(self.predictions)} existing predictions")
+    
+    def _load_from_state(self):
+        """Load prediction history from unified thermal state."""
+        if self.state_manager is None:
+            # Fallback to in-memory storage if no state manager
+            self.predictions = deque(maxlen=self.max_history_size)
+            return
+            
+        try:
+            # Get prediction history from unified state
+            state = self.state_manager.state
+            prediction_records = state.get("learning_state", {}).get("prediction_history", [])
+            
+            # Convert to deque for metrics processing
+            self.predictions = deque(maxlen=self.max_history_size)
+            for record in prediction_records:
+                # Convert unified state format to prediction metrics format
+                if 'abs_error' not in record and 'error' in record:
+                    record['abs_error'] = abs(record['error'])
+                if 'squared_error' not in record and 'error' in record:
+                    record['squared_error'] = record['error'] ** 2
+                    
+                self.predictions.append(record)
+                
+            logging.debug(f"📊 Loaded {len(self.predictions)} predictions from unified thermal state")
+            
+        except Exception as e:
+            logging.warning(f"Failed to load predictions from state: {e}")
+            self.predictions = deque(maxlen=self.max_history_size)
+    
+    def _save_to_state(self):
+        """Save prediction history to unified thermal state."""
+        if self.state_manager is None:
+            return
+            
+        try:
+            # Convert deque to list for storage
+            prediction_list = list(self.predictions)
+            
+            # Update unified state prediction history
+            self.state_manager.state["learning_state"]["prediction_history"] = prediction_list
+            
+            # Also update the prediction count in metrics section
+            self.state_manager.state["prediction_metrics"]["total_predictions"] = len(prediction_list)
+            
+            # Save unified state
+            self.state_manager.save_state()
+            
+            logging.debug(f"💾 Saved {len(prediction_list)} predictions to unified thermal state")
+            
+        except Exception as e:
+            logging.warning(f"Failed to save predictions to state: {e}")
         
     def add_prediction(self, predicted: float, actual: float, 
                       context: Dict = None, timestamp: str = None):
@@ -77,6 +132,9 @@ class PredictionMetrics:
         
         # Invalidate cache
         self._cache_timestamp = None
+        
+        # FIXED: Auto-save to unified thermal state after adding prediction
+        self._save_to_state()
         
         logging.debug(f"Added prediction: pred={predicted:.2f}, "
                      f"actual={actual:.2f}, error={prediction_record['error']:.3f}")
@@ -171,7 +229,7 @@ class PredictionMetrics:
     
     def _calculate_trends(self) -> Dict:
         """Calculate accuracy trends over time."""
-        if len(self.predictions) < 20:
+        if len(self.predictions) < 10:  # FIXED: Lower threshold from 20 to 10
             return {'insufficient_data': True}
         
         # Split into two halves for trend analysis
@@ -193,7 +251,14 @@ class PredictionMetrics:
         second_half_mae = np.mean(second_half_errors)
         
         improvement = first_half_mae - second_half_mae
-        improvement_percentage = (improvement / first_half_mae) * 100 if first_half_mae > 0 else 0
+        # Prevent extreme percentages from very small baseline errors
+        # Cap percentage at reasonable bounds (-100% to +100%)
+        if first_half_mae > 0:
+            raw_percentage = (improvement / first_half_mae) * 100
+            # Clamp to reasonable range
+            improvement_percentage = max(-100.0, min(100.0, raw_percentage))
+        else:
+            improvement_percentage = 0
         
         return {
             'mae_improvement': float(improvement),
@@ -342,6 +407,149 @@ class PredictionMetrics:
         )
         
         return summary
+    
+    def get_simplified_accuracy_breakdown(self) -> Dict:
+        """
+        Get simplified 3-category accuracy breakdown: Perfect/Tolerable/Poor.
+        
+        Categories:
+        - Perfect: 0.0°C error exactly
+        - Tolerable: >0.0°C and ≤0.1°C error  
+        - Poor: >0.2°C error
+        
+        Note: Errors between 0.1°C and 0.2°C are counted as "tolerable" 
+        (acceptable but not perfect control).
+        
+        Returns:
+            Dict with perfect, tolerable, poor categories with count and percentage
+        """
+        if not self.predictions:
+            return {
+                'perfect': {'count': 0, 'percentage': 0.0},
+                'tolerable': {'count': 0, 'percentage': 0.0},
+                'poor': {'count': 0, 'percentage': 0.0}
+            }
+        
+        abs_errors = [p['abs_error'] for p in self.predictions]
+        total_predictions = len(abs_errors)
+        
+        # Count by simplified categories (using round to handle floating point precision)
+        perfect_count = sum(1 for error in abs_errors if round(error, 10) == 0.0)
+        tolerable_count = sum(1 for error in abs_errors if 0.0 < round(error, 10) < 0.2) 
+        poor_count = sum(1 for error in abs_errors if round(error, 10) >= 0.2)
+        
+        # Calculate percentages
+        perfect_pct = (perfect_count / total_predictions) * 100 if total_predictions > 0 else 0
+        tolerable_pct = (tolerable_count / total_predictions) * 100 if total_predictions > 0 else 0
+        poor_pct = (poor_count / total_predictions) * 100 if total_predictions > 0 else 0
+        
+        return {
+            'perfect': {
+                'count': perfect_count,
+                'percentage': float(perfect_pct)
+            },
+            'tolerable': {
+                'count': tolerable_count,
+                'percentage': float(tolerable_pct)
+            },
+            'poor': {
+                'count': poor_count,
+                'percentage': float(poor_pct)
+            }
+        }
+    
+    def get_good_control_percentage(self) -> float:
+        """
+        Get 'good control' percentage = perfect + tolerable predictions.
+        
+        Returns:
+            Percentage of predictions with ≤0.1°C error
+        """
+        breakdown = self.get_simplified_accuracy_breakdown()
+        return breakdown['perfect']['percentage'] + breakdown['tolerable']['percentage']
+    
+    def _get_predictions_in_24h_window(self) -> List[Dict]:
+        """
+        Get predictions from the last 24 hours.
+        
+        Returns:
+            List of prediction records within 24h window
+        """
+        if not self.predictions:
+            return []
+        
+        now = datetime.now()
+        cutoff_time = now - timedelta(hours=24)
+        
+        window_predictions = []
+        for prediction in self.predictions:
+            try:
+                # Parse timestamp
+                pred_time = datetime.fromisoformat(prediction['timestamp'].replace('Z', '+00:00'))
+                # Remove timezone info for comparison
+                pred_time = pred_time.replace(tzinfo=None)
+                
+                if pred_time >= cutoff_time:
+                    window_predictions.append(prediction)
+            except (ValueError, KeyError):
+                # Skip predictions with invalid timestamps
+                continue
+        
+        return window_predictions
+    
+    def get_24h_accuracy_breakdown(self) -> Dict:
+        """
+        Get simplified accuracy breakdown for last 24 hours only.
+        
+        Returns:
+            Dict with perfect, tolerable, poor categories for 24h window
+        """
+        window_predictions = self._get_predictions_in_24h_window()
+        
+        if not window_predictions:
+            return {
+                'perfect': {'count': 0, 'percentage': 0.0},
+                'tolerable': {'count': 0, 'percentage': 0.0},
+                'poor': {'count': 0, 'percentage': 0.0}
+            }
+        
+        abs_errors = [p['abs_error'] for p in window_predictions]
+        total_predictions = len(abs_errors)
+        
+        # Count by simplified categories (same logic as all-time method with floating point fix)
+        perfect_count = sum(1 for error in abs_errors if round(error, 10) == 0.0)
+        tolerable_count = sum(1 for error in abs_errors if 0.0 < round(error, 10) < 0.2)
+        poor_count = sum(1 for error in abs_errors if round(error, 10) >= 0.2)
+        
+        # Calculate percentages
+        perfect_pct = (perfect_count / total_predictions) * 100 if total_predictions > 0 else 0
+        tolerable_pct = (tolerable_count / total_predictions) * 100 if total_predictions > 0 else 0
+        poor_pct = (poor_count / total_predictions) * 100 if total_predictions > 0 else 0
+        
+        return {
+            'perfect': {
+                'count': perfect_count,
+                'percentage': float(perfect_pct)
+            },
+            'tolerable': {
+                'count': tolerable_count,
+                'percentage': float(tolerable_pct)
+            },
+            'poor': {
+                'count': poor_count,
+                'percentage': float(poor_pct)
+            }
+        }
+    
+    def get_24h_good_control_percentage(self) -> float:
+        """
+        Get 'good control' percentage for last 24 hours = perfect + tolerable.
+        
+        Returns:
+            Percentage of predictions with ≤0.1°C error in last 24h
+        """
+        breakdown = self.get_24h_accuracy_breakdown()
+        return breakdown['perfect']['percentage'] + breakdown['tolerable']['percentage']
 
 
 # Global instance for easy access

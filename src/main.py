@@ -107,9 +107,14 @@ def main(args):
     # Load environment variables and configure logging.
     load_dotenv()
     log_level = logging.DEBUG if args.debug or config.DEBUG else logging.INFO
+    
+    # Configure logging to ensure output goes to stdout for systemd capture
+    import sys
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s - %(levelname)s - %(message)s",
+        stream=sys.stdout,  # Explicitly output to stdout for systemd
+        force=True,  # Force reconfigure if already configured
     )
 
     # Suppress verbose logging from underlying libraries.
@@ -291,9 +296,17 @@ def main(args):
                     # that was applied
                     # Fix: Handle case where last_run_features might be stored as string
                     if isinstance(last_run_features, str):
-                        logging.warning("last_run_features stored as string, skipping detailed learning")
-                        learning_features = {}
-                    elif isinstance(last_run_features, pd.DataFrame):
+                        logging.error("CRITICAL: last_run_features corrupted as string - attempting to recover")
+                        try:
+                            # Try to parse as JSON if it's a string representation
+                            import json
+                            last_run_features = json.loads(last_run_features)
+                            logging.info("✅ Successfully recovered features from JSON string")
+                        except (json.JSONDecodeError, TypeError):
+                            logging.error("❌ Cannot recover features from string, using empty dict")
+                            last_run_features = {}
+                    
+                    if isinstance(last_run_features, pd.DataFrame):
                         learning_features = last_run_features.copy().to_dict(
                             orient="records"
                         )[0]
