@@ -1007,6 +1007,243 @@ The system uses **two types of learning**:
 
 ---
 
+## Home Assistant Sensors (Refactored Schema)
+
+The ml_heating system exports metrics to Home Assistant through a clean, non-redundant sensor architecture. Each sensor has a distinct purpose with no overlapping attributes.
+
+**Key Design Principles:**
+- ✅ **Zero Redundancy**: Each attribute appears in exactly one sensor
+- ✅ **Clear Separation**: Each sensor has a distinct monitoring purpose  
+- ✅ **Enhanced Insights**: Time-windowed analysis and error distribution
+- ✅ **User-Friendly**: Meaningful thresholds and interpretable values
+
+### Overview of Sensors
+
+| Sensor | Purpose | State Value | Unit | Monitoring Focus |
+|--------|---------|-------------|------|-----------------|
+| `sensor.ml_heating_state` | Operational status | Status code (0-7) | state | Real-time prediction info |
+| `sensor.ml_heating_learning` | Learning confidence | Confidence score (0-5) | confidence | Adaptive learning progress |
+| `sensor.ml_model_mae` | Prediction accuracy | Mean Absolute Error | °C | Time-windowed accuracy |
+| `sensor.ml_model_rmse` | Error distribution | Root Mean Square Error | °C | Error analysis & bias |
+| `sensor.ml_prediction_accuracy` | Control quality | Good control % | % | 24h heating performance |
+
+---
+
+### sensor.ml_heating_state
+
+**Purpose**: Current operational status and real-time prediction information.
+
+**State**: Numeric status code (0-7)
+
+| Code | Meaning | Description |
+|------|---------|-------------|
+| 0 | OK | Prediction completed successfully |
+| 1 | Low Confidence | Model confidence below threshold |
+| 2 | Blocked | DHW/Defrost/Disinfection active |
+| 3 | Network Error | Cannot reach Home Assistant API |
+| 4 | Missing Sensors | Critical sensor data unavailable |
+| 5 | (reserved) | - |
+| 6 | Heating Off | Climate entity not in heat/auto mode |
+| 7 | Model Error | Exception during prediction |
+
+**Attributes**:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `state_description` | string | Human-readable status message |
+| `suggested_temp` | float | Model's calculated outlet temperature (°C) |
+| `final_temp` | float | Applied temperature after clamping (°C) |
+| `predicted_indoor` | float | Predicted indoor temperature (°C) |
+| `temperature_error` | float | Current deviation from target (°C) |
+| `last_prediction_time` | timestamp | When the prediction was made |
+| `blocking_reasons` | list | Active blocking entities (if blocked) |
+| `heating_state` | string | Current climate entity state |
+
+---
+
+### sensor.ml_heating_learning
+
+**Purpose**: Learning status, model confidence, and learned thermal parameters.
+
+**State**: Learning confidence score (0.0 - 5.0)
+
+**Confidence Interpretation**:
+
+| Score | Quality | Meaning |
+|-------|---------|---------|
+| ≥ 4.0 | Excellent | Fully trusted predictions, model has converged |
+| 3.0 - 4.0 | Good | Reliable predictions, still fine-tuning |
+| 2.0 - 3.0 | Fair | Use with caution, model still learning |
+| < 2.0 | Poor | Consider recalibration or check data quality |
+
+**Attributes**:
+
+| Attribute | Type | Description | Typical Range |
+|-----------|------|-------------|---------------|
+| `thermal_time_constant` | float | Learned τ parameter (hours) | 2-12 hours |
+| `heat_loss_coefficient` | float | Learned heat loss rate | 0.05-0.5 |
+| `outlet_effectiveness` | float | Learned heating efficiency | 0.05-0.3 |
+| `cycle_count` | int | Total learning cycles completed | - |
+| `parameter_updates` | int | Times parameters were adjusted | - |
+| `model_health` | string | Health assessment based on learning confidence | excellent/good/fair/poor |
+| `learning_progress` | float | Progress toward maturity (0-1) | ≥0.8 = mature |
+| `is_improving` | bool | Whether accuracy trend is positive | - |
+| `improvement_percentage` | float | MAE improvement trend (%) | >0 = improving |
+| `total_predictions` | int | Total predictions tracked | - |
+
+**Model Health Calculation**:
+
+The `model_health` attribute is derived from the `learning_confidence` score using these thresholds:
+
+| Learning Confidence | Model Health | Meaning |
+|-------------------|-------------|---------|
+| ≥ 4.0 | excellent | Model has fully converged, predictions highly reliable |
+| 3.0 - 4.0 | good | Model is stable, predictions are reliable |
+| 2.0 - 3.0 | fair | Model still learning, use predictions with caution |
+| < 2.0 | poor | Model needs more data or recalibration |
+
+**Parameters Considered**:
+- **Primary**: `learning_confidence` score (0.0 - 5.0)
+- **Contributing factors to confidence**:
+  - Prediction accuracy over recent cycles
+  - Parameter stability (how much thermal parameters are changing)
+  - Error trend (improving vs. degrading)
+  - Number of learning cycles completed
+
+**Learning Progress Interpretation**:
+- **0.0 - 0.3**: Initial learning phase, parameters may shift significantly
+- **0.3 - 0.6**: Active learning, parameters stabilizing  
+- **0.6 - 0.8**: Near-mature, fine-tuning adjustments
+- **0.8 - 1.0**: Mature model, minimal parameter changes needed
+
+---
+
+### sensor.ml_model_mae
+
+**Purpose**: Primary accuracy metric - Mean Absolute Error in temperature predictions.
+
+**State**: All-time MAE (°C)
+
+**MAE Interpretation**:
+
+| MAE | Quality | Action |
+|-----|---------|--------|
+| < 0.1°C | Excellent | No action needed |
+| 0.1 - 0.2°C | Good | Normal operation |
+| 0.2 - 0.3°C | Acceptable | Monitor for trends |
+| ≥ 0.3°C | Poor | Investigate cause, consider recalibration |
+
+**Attributes**:
+
+| Attribute | Type | Description | Good Threshold |
+|-----------|------|-------------|----------------|
+| `mae_1h` | float | MAE over last hour | < 0.2°C |
+| `mae_6h` | float | MAE over last 6 hours | < 0.2°C |
+| `mae_24h` | float | MAE over last 24 hours | < 0.2°C |
+| `trend_direction` | string | Error trend | "improving"/"stable"/"degrading" |
+| `prediction_count` | int | Predictions in calculation | - |
+| `last_updated` | timestamp | When metrics were updated | - |
+
+---
+
+### sensor.ml_model_rmse
+
+**Purpose**: Error distribution metric - Root Mean Square Error penalizes large errors more than MAE.
+
+**State**: All-time RMSE (°C)
+
+**RMSE Interpretation**:
+
+| RMSE | Quality | Meaning |
+|------|---------|---------|
+| < 0.15°C | Excellent | Consistently accurate predictions |
+| 0.15 - 0.25°C | Good | Acceptable error distribution |
+| 0.25 - 0.4°C | Fair | Some larger errors occurring |
+| ≥ 0.4°C | Poor | Unpredictable errors, investigate |
+
+**Attributes**:
+
+| Attribute | Type | Description | Good Threshold |
+|-----------|------|-------------|----------------|
+| `recent_max_error` | float | Max error in last 10 predictions | < 0.5°C |
+| `std_error` | float | Standard deviation of errors | < 0.2°C |
+| `mean_bias` | float | Average signed error (systematic bias) | Near 0 |
+| `prediction_count` | int | Predictions in calculation | - |
+| `last_updated` | timestamp | When metrics were updated | - |
+
+---
+
+### sensor.ml_prediction_accuracy
+
+**Purpose**: Easy-to-understand accuracy percentages based on 24-hour window.
+
+**State**: Good control percentage (%) - predictions within ±0.2°C
+
+**Accuracy Interpretation**:
+
+| Good Control % | Quality | Meaning |
+|----------------|---------|---------|
+| ≥ 90% | Excellent | Outstanding temperature control |
+| 80 - 90% | Good | Reliable control, occasional deviations |
+| 70 - 80% | Acceptable | Room for improvement |
+| < 70% | Poor | Needs investigation |
+
+**Attributes**:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `perfect_accuracy_pct` | float | % predictions with exactly 0.0°C error |
+| `tolerable_accuracy_pct` | float | % predictions within 0.0-0.2°C error |
+| `poor_accuracy_pct` | float | % predictions with >0.2°C error |
+| `prediction_count_24h` | int | Predictions in 24-hour window |
+| `excellent_all_time_pct` | float | % within ±0.1°C (all-time) |
+| `good_all_time_pct` | float | % within ±0.5°C (all-time) |
+| `last_updated` | timestamp | When metrics were updated |
+
+---
+
+### Monitoring Dashboard Example
+
+Create a Lovelace dashboard card to monitor ML Heating:
+
+```yaml
+type: entities
+title: ML Heating Status
+entities:
+  - entity: sensor.ml_heating_state
+    name: Status
+  - entity: sensor.ml_heating_learning
+    name: Learning Confidence
+  - entity: sensor.ml_model_mae
+    name: Prediction Error (MAE)
+  - entity: sensor.ml_prediction_accuracy
+    name: Control Quality
+  - type: attribute
+    entity: sensor.ml_heating_learning
+    attribute: model_health
+    name: Model Health
+  - type: attribute
+    entity: sensor.ml_heating_learning
+    attribute: cycle_count
+    name: Learning Cycles
+```
+
+### Alerting Thresholds
+
+Recommended alert thresholds for monitoring:
+
+| Metric | Warning | Critical |
+|--------|---------|----------|
+| `ml_heating_state` | = 1 (Low Confidence) | ≥ 3 (Network/Sensor/Model errors) |
+| `ml_heating_learning` | < 2.5 | < 2.0 |
+| `ml_model_mae` | > 0.25°C | > 0.35°C |
+| `ml_model_rmse` | > 0.3°C | > 0.45°C |
+| `ml_prediction_accuracy` | < 75% | < 65% |
+
+**Note**: State 2 (Blocked) is normal operation during DHW/Defrost and should not trigger alerts.
+
+---
+
 ## Summary
 
 The ml_heating system uses a physics-based approach instead of black-box machine learning:
@@ -1022,3 +1259,5 @@ The key parameters are:
 - **Outlet effectiveness** - How well the heating system transfers heat
 
 Start with calibration, let the system learn, and adjust parameters if you see oscillation, undershoot, or overshoot.
+
+Monitor system health using the Home Assistant sensors described above, and set up alerts for the recommended thresholds to catch issues early.

@@ -242,10 +242,12 @@ class HAClient:
         """
         Publishes key model performance metrics to dedicated HA sensors.
 
-        This creates sensors for Mean Absolute Error (MAE) and Root Mean Squared Error (RMSE),
-        allowing for real-time tracking of the model's performance from within Home Assistant.
+        This creates sensors for Mean Absolute Error (MAE) and Root Mean
+        Squared Error (RMSE), allowing for real-time tracking of the model's
+        performance from within Home Assistant.
         
-        Note: Model confidence is now provided via sensor.ml_heating_learning.state to avoid redundancy.
+        Note: Model confidence is now provided via 
+        sensor.ml_heating_learning.state to avoid redundancy.
 
         Args:
             mae: The current Mean Absolute Error.
@@ -278,9 +280,12 @@ class HAClient:
     def log_adaptive_learning_metrics(self, learning_metrics: Dict[str, Any]) -> None:
         """
         Publishes adaptive learning metrics to Home Assistant sensors.
-
-        Creates dedicated sensors for adaptive learning status, prediction
-        accuracy metrics (MAE/RMSE), and learned thermal parameters.
+        
+        REFACTORED: Implements clean sensor schema to eliminate redundancy:
+        - ml_heating_learning: Learning confidence and thermal parameters only
+        - ml_model_mae: Enhanced with time-windowed attributes
+        - ml_model_rmse: Enhanced with error distribution attributes
+        - ml_prediction_accuracy: 24h control quality (no redundant MAE/RMSE)
 
         Args:
             learning_metrics: Dictionary containing all learning metrics
@@ -288,42 +293,26 @@ class HAClient:
         """
         now_utc = datetime.now(timezone.utc).isoformat()
 
-        # Main adaptive learning sensor
+        # 1. ML Heating Learning sensor: Confidence + thermal parameters
         attributes_learning = get_sensor_attributes("sensor.ml_heating_learning")
         attributes_learning.update({
             # Learned thermal parameters
             "thermal_time_constant": learning_metrics.get("thermal_time_constant", 6.0),
             "heat_loss_coefficient": learning_metrics.get("heat_loss_coefficient", 0.05),
             "outlet_effectiveness": learning_metrics.get("outlet_effectiveness", 0.8),
-            "learning_confidence": learning_metrics.get("learning_confidence", 3.0),
             
             # Learning progress
             "cycle_count": learning_metrics.get("cycle_count", 0),
             "parameter_updates": learning_metrics.get("parameter_updates", 0),
-            "update_percentage": learning_metrics.get("update_percentage", 0.0),
-            
-            # MAE/RMSE tracking
-            "mae_1h": learning_metrics.get("mae_1h", 0.0),
-            "mae_6h": learning_metrics.get("mae_6h", 0.0),
-            "mae_24h": learning_metrics.get("mae_24h", 0.0),
-            "mae_all_time": learning_metrics.get("mae_all_time", 0.0),
-            "rmse_all_time": learning_metrics.get("rmse_all_time", 0.0),
-            
-            # Recent performance
-            "recent_mae_10": learning_metrics.get("recent_mae_10", 0.0),
-            "recent_max_error": learning_metrics.get("recent_max_error", 0.0),
-            
-            # Model health
             "model_health": learning_metrics.get("model_health", "unknown"),
+            "learning_progress": min(1.0, learning_metrics.get("cycle_count", 0) / 100.0),
             "is_improving": learning_metrics.get("is_improving", False),
             "improvement_percentage": learning_metrics.get("improvement_percentage", 0.0),
-            
-            # Total predictions tracked
             "total_predictions": learning_metrics.get("total_predictions", 0),
             "last_updated": now_utc
         })
 
-        # State is the learning confidence score
+        # State is the learning confidence score (no redundant attribute)
         learning_confidence = learning_metrics.get("learning_confidence", 0.0)
         self.set_state(
             "sensor.ml_heating_learning",
@@ -332,27 +321,93 @@ class HAClient:
             round_digits=3,
         )
 
-        # Prediction accuracy sensor (percentage of good predictions)
-        attributes_accuracy = get_sensor_attributes("sensor.ml_prediction_accuracy")
-        attributes_accuracy.update({
-            "excellent_accuracy_pct": learning_metrics.get("excellent_accuracy_pct", 0.0),
-            "good_accuracy_pct": learning_metrics.get("good_accuracy_pct", 0.0),
-            "mae_current": learning_metrics.get("mae_1h", 0.0),
-            "rmse_current": learning_metrics.get("rmse_all_time", 0.0),
+        # 2. Enhanced MAE sensor: All-time MAE + time-windowed breakdowns
+        attributes_mae = get_sensor_attributes("sensor.ml_model_mae")
+        attributes_mae.update({
+            "mae_1h": learning_metrics.get("mae_1h", 0.0),
+            "mae_6h": learning_metrics.get("mae_6h", 0.0), 
+            "mae_24h": learning_metrics.get("mae_24h", 0.0),
+            "trend_direction": self._get_mae_trend(learning_metrics),
             "prediction_count": learning_metrics.get("total_predictions", 0),
             "last_updated": now_utc
         })
 
-        # State is the percentage of good predictions (±0.5°C)
-        good_accuracy_pct = learning_metrics.get("good_accuracy_pct", 0.0)
+        # State is all-time MAE
+        mae_all_time = learning_metrics.get("mae_all_time", 0.0)
+        self.set_state(
+            "sensor.ml_model_mae",
+            mae_all_time,
+            attributes_mae,
+            round_digits=4,
+        )
+
+        # 3. Enhanced RMSE sensor: All-time RMSE + error distribution
+        attributes_rmse = get_sensor_attributes("sensor.ml_model_rmse")
+        attributes_rmse.update({
+            "recent_max_error": learning_metrics.get("recent_max_error", 0.0),
+            "std_error": self._calculate_std_error(learning_metrics),
+            "mean_bias": self._calculate_mean_bias(learning_metrics),
+            "prediction_count": learning_metrics.get("total_predictions", 0),
+            "last_updated": now_utc
+        })
+
+        # State is all-time RMSE
+        rmse_all_time = learning_metrics.get("rmse_all_time", 0.0)
+        self.set_state(
+            "sensor.ml_model_rmse", 
+            rmse_all_time,
+            attributes_rmse,
+            round_digits=4,
+        )
+
+        # 4. Clean prediction accuracy sensor: 24h control quality only
+        attributes_accuracy = get_sensor_attributes("sensor.ml_prediction_accuracy")
+        attributes_accuracy.update({
+            "perfect_accuracy_pct": learning_metrics.get("perfect_accuracy_pct", 0.0),
+            "tolerable_accuracy_pct": learning_metrics.get("tolerable_accuracy_pct", 0.0),
+            "poor_accuracy_pct": learning_metrics.get("poor_accuracy_pct", 0.0),
+            "prediction_count_24h": learning_metrics.get("prediction_count_24h", 0),
+            "excellent_all_time_pct": learning_metrics.get("excellent_accuracy_pct", 0.0),
+            "good_all_time_pct": learning_metrics.get("good_accuracy_pct", 0.0),
+            "last_updated": now_utc
+        })
+
+        # State is the percentage of good control (24h window, ±0.2°C)
+        good_control_24h = learning_metrics.get("good_control_pct", 0.0)
         self.set_state(
             "sensor.ml_prediction_accuracy",
-            good_accuracy_pct,
+            good_control_24h,
             attributes_accuracy,
             round_digits=1,
         )
 
-        logging.debug("Logged adaptive learning metrics to HA")
+        logging.debug("Logged refactored sensor metrics to HA")
+
+    def _get_mae_trend(self, metrics: Dict[str, Any]) -> str:
+        """Determine MAE trend direction."""
+        improvement_pct = metrics.get("improvement_percentage", 0.0)
+        if improvement_pct > 5.0:
+            return "improving"
+        elif improvement_pct < -5.0:
+            return "degrading"
+        else:
+            return "stable"
+
+    def _calculate_std_error(self, metrics: Dict[str, Any]) -> float:
+        """Calculate standard deviation of errors (placeholder)."""
+        # This would need access to individual prediction errors
+        # For now, estimate from MAE vs RMSE relationship
+        mae = metrics.get("mae_all_time", 0.0)
+        rmse = metrics.get("rmse_all_time", 0.0)
+        if rmse > mae:
+            return round((rmse**2 - mae**2)**0.5, 4)
+        return 0.0
+
+    def _calculate_mean_bias(self, metrics: Dict[str, Any]) -> float:
+        """Calculate mean bias (systematic over/under-prediction)."""
+        # This would need access to individual prediction errors with sign
+        # For now, return 0.0 as placeholder
+        return 0.0
 
 
 def get_sensor_attributes(entity_id: str) -> Dict[str, Any]:

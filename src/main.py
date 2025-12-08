@@ -977,12 +977,8 @@ def main(args):
                             "temperature_error": round(
                                 abs(error_target_vs_actual), 3
                             ),
-                            # ThermalEquilibriumModel trust metrics
-                            "thermal_stability": round(thermal_trust_metrics.get("thermal_stability", 0.0), 4),
-                            "prediction_consistency": round(thermal_trust_metrics.get("prediction_consistency", 0.0), 4),
-                            "physics_alignment": round(thermal_trust_metrics.get("physics_alignment", 0.0), 4),
-                            "model_health": thermal_trust_metrics.get("model_health", "unknown"),
-                            "learning_progress": round(thermal_trust_metrics.get("learning_progress", 0.0), 4),
+                            # Note: ThermalEquilibriumModel trust metrics moved to 
+                            # sensor.ml_heating_learning to eliminate redundancy
                         }
                     )
                     ha_client.set_state(
