@@ -323,3 +323,12 @@ CALIBRATION_BASELINE_FILE: str = os.getenv("CALIBRATION_BASELINE_FILE", "/data/c
 STABILITY_TEMP_CHANGE_THRESHOLD: float = float(os.getenv("STABILITY_TEMP_CHANGE_THRESHOLD", "0.1"))
 MIN_STABLE_PERIOD_MINUTES: int = int(os.getenv("MIN_STABLE_PERIOD_MINUTES", "30"))
 OPTIMIZATION_METHOD: str = os.getenv("OPTIMIZATION_METHOD", "L-BFGS-B")
+
+# --- Delta Temperature Forecast Calibration ---
+# Enable local calibration of weather forecasts using measured temperature offset
+# This corrects for systematic biases between weather station and actual location
+ENABLE_DELTA_FORECAST_CALIBRATION: bool = (
+    os.getenv("ENABLE_DELTA_FORECAST_CALIBRATION", "true").lower() == "true"
+)
+# Maximum allowed temperature offset to prevent unrealistic corrections
+DELTA_CALIBRATION_MAX_OFFSET: float = float(os.getenv("DELTA_CALIBRATION_MAX_OFFSET", "10.0"))

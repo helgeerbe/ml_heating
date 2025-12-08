@@ -152,18 +152,37 @@ def build_physics_features(
             logging.debug(f"Could not fetch PV forecast: {e}")
             pv_forecasts = [0.0, 0.0, 0.0, 0.0]
     
-    temp_forecasts = ha_client.get_hourly_forecast()
+    # Convert to float for calculations first
+    actual_indoor_f = float(actual_indoor)
+    outdoor_temp_f = float(outdoor_temp)
+    outlet_temp_f = float(outlet_temp)
+    target_temp_f = float(target_indoor_temp)
+    
+    # Get calibrated temperature forecasts using delta correction
+    try:
+        # Check if delta calibration is enabled and available
+        if (hasattr(config, 'ENABLE_DELTA_FORECAST_CALIBRATION') and 
+            config.ENABLE_DELTA_FORECAST_CALIBRATION and
+            hasattr(ha_client, 'get_calibrated_hourly_forecast')):
+            temp_forecasts = ha_client.get_calibrated_hourly_forecast(
+                current_outdoor_temp=outdoor_temp_f,
+                enable_delta_calibration=True
+            )
+        else:
+            temp_forecasts = ha_client.get_hourly_forecast()
+            
+        # Ensure we have a valid list of forecasts
+        if not isinstance(temp_forecasts, list) or len(temp_forecasts) < 4:
+            # Fallback to default values if forecasts are invalid
+            temp_forecasts = [outdoor_temp_f] * 4
+    except Exception as e:
+        logging.debug(f"Could not fetch temperature forecasts: {e}")
+        temp_forecasts = [outdoor_temp_f] * 4
     
     # Get current time for cyclical encoding
     now = datetime.now()
     current_hour = now.hour
     current_month = now.month
-    
-    # Convert to float for calculations
-    actual_indoor_f = float(actual_indoor)
-    outdoor_temp_f = float(outdoor_temp)
-    outlet_temp_f = float(outlet_temp)
-    target_temp_f = float(target_indoor_temp)
     
     # Calculate time period for gradient (in hours)
     time_period = config.HISTORY_STEP_MINUTES / 60.0

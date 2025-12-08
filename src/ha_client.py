@@ -201,6 +201,72 @@ class HAClient:
             )
         return result
 
+    def get_calibrated_hourly_forecast(
+        self, 
+        current_outdoor_temp: float, 
+        enable_delta_calibration: bool = True
+    ) -> List[float]:
+        """
+        Retrieves weather forecasts calibrated to local measurements.
+        
+        This method applies delta calibration where the difference between 
+        actual measured temperature and forecast current temperature is applied 
+        to all future forecast hours. This corrects for systematic biases 
+        between the weather station and the actual location.
+        
+        Example:
+        - Weather forecast: Current=25°C, 1h=27°C, 2h=26°C, 3h=24°C
+        - Actual measurement: 26°C
+        - Offset: 26-25 = +1°C
+        - Calibrated forecast: [26°C, 28°C, 27°C, 25°C]
+        
+        Args:
+            current_outdoor_temp: Actual measured outdoor temperature
+            enable_delta_calibration: Whether to apply delta calibration
+            
+        Returns:
+            List of calibrated temperature forecasts for next 4 hours
+        """
+        # Get raw absolute forecasts
+        raw_forecasts = self.get_hourly_forecast()
+        
+        # If delta calibration is disabled, return raw forecasts
+        if not enable_delta_calibration:
+            logging.debug("Delta calibration disabled, using raw forecasts")
+            return raw_forecasts
+            
+        # Validate inputs
+        if not raw_forecasts or raw_forecasts[0] == 0.0:
+            logging.warning(
+                "Invalid raw forecast data, skipping delta calibration"
+            )
+            return raw_forecasts
+            
+        if current_outdoor_temp is None or abs(current_outdoor_temp) > 60:
+            logging.warning(
+                f"Invalid outdoor temperature {current_outdoor_temp}°C, "
+                f"skipping delta calibration"
+            )
+            return raw_forecasts
+        
+        # Calculate local temperature offset
+        forecast_current_temp = raw_forecasts[0]
+        temperature_offset = current_outdoor_temp - forecast_current_temp
+        
+        # Apply offset to all forecast hours
+        calibrated_forecasts = []
+        for raw_temp in raw_forecasts:
+            calibrated_temp = raw_temp + temperature_offset
+            calibrated_forecasts.append(round(calibrated_temp, 2))
+        
+        logging.debug(
+            f"Delta calibration applied: offset={temperature_offset:+.2f}°C"
+        )
+        logging.debug(f"Raw forecasts: {raw_forecasts}")
+        logging.debug(f"Calibrated forecasts: {calibrated_forecasts}")
+        
+        return calibrated_forecasts
+
     def log_feature_importance(self, importances: Dict[str, float]):
         """
         Publishes the model's feature importances to a Home Assistant sensor.

@@ -68,6 +68,9 @@ class TestWeek4EnhancedForecastFeatures(unittest.TestCase):
         mock_config.HISTORY_STEP_MINUTES = 10
         mock_config.PV_FORECAST_ENTITY_ID = None
         
+        # Disable delta calibration for this test to use original forecast method
+        mock_config.ENABLE_DELTA_FORECAST_CALIBRATION = False
+        
         # Mock other entity IDs to avoid errors
         for attr in ['DHW_STATUS_ENTITY_ID', 'DISINFECTION_STATUS_ENTITY_ID', 
                      'DHW_BOOST_HEATER_STATUS_ENTITY_ID', 'DEFROST_STATUS_ENTITY_ID',
@@ -99,6 +102,9 @@ class TestWeek4EnhancedForecastFeatures(unittest.TestCase):
         mock_config.HISTORY_STEP_MINUTES = 10
         mock_config.PV_FORECAST_ENTITY_ID = None
         
+        # Disable delta calibration for this test to use original forecast method
+        mock_config.ENABLE_DELTA_FORECAST_CALIBRATION = False
+        
         # Mock other entity IDs
         for attr in ['DHW_STATUS_ENTITY_ID', 'DISINFECTION_STATUS_ENTITY_ID', 
                      'DHW_BOOST_HEATER_STATUS_ENTITY_ID', 'DEFROST_STATUS_ENTITY_ID',
@@ -129,6 +135,9 @@ class TestWeek4EnhancedForecastFeatures(unittest.TestCase):
         mock_config.HISTORY_STEPS = 6
         mock_config.HISTORY_STEP_MINUTES = 10
         mock_config.PV_FORECAST_ENTITY_ID = None
+        
+        # Disable delta calibration for this test to use original forecast method
+        mock_config.ENABLE_DELTA_FORECAST_CALIBRATION = False
         
         # Mock other entity IDs
         for attr in ['DHW_STATUS_ENTITY_ID', 'DISINFECTION_STATUS_ENTITY_ID', 

@@ -241,6 +241,12 @@ options:
   min_stable_period_minutes: 30
   # Scipy optimization method
   optimization_method: "L-BFGS-B"
+  
+  # Delta Temperature Forecast Calibration - Local weather calibration
+  # Enable delta calibration using local temperature offset
+  enable_delta_forecast_calibration: true
+  # Maximum allowed offset (°C) for safety
+  delta_calibration_max_offset: 10.0
 
 schema:
   # Core Entity Configuration - All entity fields as string input
@@ -353,3 +359,6 @@ schema:
   stability_temp_change_threshold: "float(0.05,0.5)"
   min_stable_period_minutes: "int(15,120)"
   optimization_method: "str"
+  # Delta Temperature Forecast Calibration - Boolean and float types
+  enable_delta_forecast_calibration: "bool"
+  delta_calibration_max_offset: "float(1.0,20.0)"
