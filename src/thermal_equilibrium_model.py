@@ -178,31 +178,49 @@ class ThermalEquilibriumModel:
                                        current_indoor: float, pv_power: float = 0, fireplace_on: float = 0,
                                        tv_on: float = 0) -> float:
         """
-        FIXED PHYSICS: Predict equilibrium using proper heat balance equation.
+        ENHANCED PHYSICS: Predict equilibrium using differential-based effectiveness model.
+        
+        Physics Enhancement (Dec 9, 2025): Heat transfer effectiveness now scales with 
+        outlet-indoor temperature differential to fix overnight low-differential scenarios.
+        
+        Key insight: Heat transfer ∝ (outlet - indoor) differential, not constant effectiveness.
+        At 25°C outlet, 20°C indoor: 5°C differential = minimal heating effectiveness
+        At 35°C outlet, 21°C indoor: 14°C differential = normal heating effectiveness
         
         Heat Balance at equilibrium:
-        Heat from outlet + External heat sources = Heat loss to outdoor
-        
-        eff × (outlet_temp - T_eq) + external_thermal_power = loss × (T_eq - outdoor_temp)
-        
-        Where external_thermal_power is converted to thermal units, not temperature units.
-        
-        Solving for T_eq:
-        eff × outlet_temp - eff × T_eq + external_thermal_power = loss × T_eq - loss × outdoor_temp
-        eff × outlet_temp + external_thermal_power + loss × outdoor_temp = (eff + loss) × T_eq
-        T_eq = (eff × outlet_temp + loss × outdoor_temp + external_thermal_power) / (eff + loss)
+        effective_heat_transfer + external_thermal_power = heat_loss_to_outdoor
         """
+        # Calculate outlet-indoor differential for effectiveness scaling
+        outlet_indoor_diff = outlet_temp - current_indoor
+        
+        # PHYSICS 3.3: Implement differential-based effectiveness scaling
+        base_effectiveness = self.outlet_effectiveness
+        
+        # PHYSICS 3.4: Add minimum differential threshold for effective heating
+        min_effective_diff = 3.0  # Below 3°C differential, heating becomes ineffective
+        
+        if abs(outlet_indoor_diff) < min_effective_diff:
+            # Very low differential - minimal heating effect
+            differential_factor = abs(outlet_indoor_diff) / min_effective_diff * 0.3  # Max 30% effectiveness
+        else:
+            # Normal differential - use physics-based scaling
+            # Heat transfer effectiveness increases with temperature differential
+            # Using logarithmic scaling to prevent unrealistic high values
+            differential_factor = min(1.0, 0.5 + 0.5 * (abs(outlet_indoor_diff) / 15.0))
+        
+        # Apply differential scaling to effectiveness
+        effective_effectiveness = base_effectiveness * differential_factor
+        
         # External heat sources - these are thermal power contributions
-        # They need to be converted to equivalent temperature effects
         heat_from_pv = pv_power * self.external_source_weights.get('pv', 0.0)
         heat_from_fireplace = fireplace_on * self.external_source_weights.get('fireplace', 0.0) 
         heat_from_tv = tv_on * self.external_source_weights.get('tv', 0.0)
         
-        # Total external thermal power (in thermal units, not temperature)
+        # Total external thermal power
         external_thermal_power = heat_from_pv + heat_from_fireplace + heat_from_tv
         
-        # Physics parameters
-        eff = self.outlet_effectiveness
+        # Physics parameters with enhanced differential effectiveness
+        eff = effective_effectiveness
         loss = self.heat_loss_coefficient
         
         # Prevent division by zero
@@ -210,23 +228,25 @@ class ThermalEquilibriumModel:
         if denominator <= 0:
             return outdoor_temp  # Fallback to outdoor temperature
         
-        # FIXED PHYSICS: Heat balance equation solved for equilibrium temperature
-        # The external thermal power is additive to the heat inputs
+        # ENHANCED PHYSICS: Heat balance with differential-based effectiveness
+        # Now accounts for reduced effectiveness at low outlet-indoor differentials
         equilibrium_temp = (eff * outlet_temp + loss * outdoor_temp + external_thermal_power) / denominator
         
-        # FIXED: Physical constraints that don't override correct physics calculations
-        # Only apply constraints for obviously impossible scenarios, not normal operation
+        # Physical constraints for obviously impossible scenarios only
         if outlet_temp > outdoor_temp:  # Heating mode (normal case)
-            # In heating mode, equilibrium should be at least outdoor temp
-            # but allow for external heat sources to push temperature higher
-            # Removed overly restrictive 80% efficiency cap that was breaking tests
             equilibrium_temp = max(outdoor_temp, equilibrium_temp)
         elif outlet_temp < outdoor_temp:  # Cooling mode (rare for heat pumps)
-            # In cooling mode, equilibrium should be at most outdoor temp
             equilibrium_temp = min(outdoor_temp, equilibrium_temp)
         else:  # outlet_temp == outdoor_temp
             # No temperature difference from outlet, only external heat contributes
             equilibrium_temp = outdoor_temp + external_thermal_power / loss if loss > 0 else outdoor_temp
+        
+        # PHYSICS 3.5: Debug logging for low differential scenarios
+        if abs(outlet_indoor_diff) < 10.0:  # Log when differential is low
+            logging.debug(f"🔬 Low differential physics: outlet={outlet_temp:.1f}°C, "
+                         f"indoor={current_indoor:.1f}°C, diff={outlet_indoor_diff:.1f}°C, "
+                         f"base_eff={base_effectiveness:.3f}, effective_eff={eff:.3f}, "
+                         f"factor={differential_factor:.3f}, equilibrium={equilibrium_temp:.2f}°C")
             
         return equilibrium_temp
 

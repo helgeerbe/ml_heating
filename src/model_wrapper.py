@@ -23,11 +23,13 @@ try:
     from .unified_thermal_state import get_thermal_state_manager
     from .influx_service import create_influx_service
     from .prediction_metrics import PredictionMetrics
+    from . import config
 except ImportError:
     from thermal_equilibrium_model import ThermalEquilibriumModel
     from unified_thermal_state import get_thermal_state_manager
     from influx_service import create_influx_service
     from prediction_metrics import PredictionMetrics
+    import config
 
 
 # Singleton pattern to prevent multiple model instantiation
@@ -229,14 +231,66 @@ class EnhancedModelWrapper:
         # Iterative search to find outlet temperature that produces target indoor temp
         # This uses the learned thermal physics parameters from calibration
         tolerance = 0.1  # °C
-        outlet_min, outlet_max = 25.0, 65.0
+        # Use configured clamp bounds instead of hardcoded values
+        outlet_min, outlet_max = config.CLAMP_MIN_ABS, config.CLAMP_MAX_ABS
         
         logging.debug(f"🔍 PHASE 5 Binary search start: {current_indoor:.1f}°C → {target_indoor:.1f}°C")
         logging.debug(f"   Search parameters: outdoor={outdoor_temp:.1f}°C, pv={pv_power:.1f}W, "
                      f"fireplace={fireplace_on}, tv={tv_on}")
         
+        # Fix 1.4: Pre-check for unreachable targets to avoid futile searching
+        try:
+            # Check what minimum outlet temp produces
+            min_prediction = self.thermal_model.predict_equilibrium_temperature(
+                outlet_temp=outlet_min,
+                outdoor_temp=outdoor_temp,
+                current_indoor=current_indoor,
+                pv_power=pv_power,
+                fireplace_on=fireplace_on,
+                tv_on=tv_on
+            )
+            
+            # Check what maximum outlet temp produces  
+            max_prediction = self.thermal_model.predict_equilibrium_temperature(
+                outlet_temp=outlet_max,
+                outdoor_temp=outdoor_temp,
+                current_indoor=current_indoor,
+                pv_power=pv_power,
+                fireplace_on=fireplace_on,
+                tv_on=tv_on
+            )
+            
+            if min_prediction is not None and max_prediction is not None:
+                # Target below minimum capability - use minimum outlet
+                if target_indoor < min_prediction - tolerance:
+                    logging.warning(f"🎯 Pre-check: Target {target_indoor:.1f}°C unreachable "
+                                  f"(min outlet {outlet_min:.1f}°C → {min_prediction:.2f}°C), "
+                                  f"using minimum")
+                    return outlet_min
+                
+                # Target above maximum capability - use maximum outlet  
+                if target_indoor > max_prediction + tolerance:
+                    logging.warning(f"🎯 Pre-check: Target {target_indoor:.1f}°C unreachable "
+                                  f"(max outlet {outlet_max:.1f}°C → {max_prediction:.2f}°C), "
+                                  f"using maximum")
+                    return outlet_max
+                    
+                logging.debug(f"   Pre-check: Target {target_indoor:.1f}°C achievable "
+                            f"(range: {min_prediction:.1f}-{max_prediction:.1f}°C)")
+        except Exception as e:
+            logging.warning(f"Pre-check failed: {e}, proceeding with binary search")
+        
         # Binary search for optimal outlet temperature
         for iteration in range(20):  # Max 20 iterations for efficiency
+            # Fix 1.3: Check if range has collapsed (early exit)
+            range_size = outlet_max - outlet_min
+            if range_size < 0.05:  # °C - range too small to matter
+                final_outlet = (outlet_min + outlet_max) / 2.0
+                logging.info(f"🔄 Binary search early exit after {iteration+1} iterations: "
+                           f"range collapsed to {range_size:.3f}°C, "
+                           f"using {final_outlet:.1f}°C")
+                return final_outlet
+            
             outlet_mid = (outlet_min + outlet_max) / 2.0
             
             # Predict indoor temperature with this outlet temperature
