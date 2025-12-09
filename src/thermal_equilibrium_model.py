@@ -43,7 +43,7 @@ class ThermalEquilibriumModel:
     def __init__(self):
         # Only initialize once due to singleton pattern
         if not getattr(self, '_initialized', False):
-            # FIXED: Load calibrated parameters first, fallback to config defaults
+            # Load calibrated parameters first, fallback to config defaults
             self._load_thermal_parameters()
             
             self.outdoor_coupling = config.OUTDOOR_COUPLING
@@ -54,7 +54,7 @@ class ThermalEquilibriumModel:
             pass
     def _load_thermal_parameters(self):
         """
-        FIXED: Load thermal parameters with proper baseline + adjustments.
+        Load thermal parameters with proper baseline + adjustments.
         This ensures trained parameters persist across restarts.
         """
         try:

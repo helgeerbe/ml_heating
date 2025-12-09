@@ -52,7 +52,7 @@ def poll_for_blocking(ha_client, state, blocking_entities):
         try:
             all_states_poll = ha_client.get_all_states()
         except Exception:
-            logging.debug("Failed to poll HA during idle; will retry.", exc_info=True)
+            logging.warning("Failed to poll HA during idle; will retry.", exc_info=True)
             time.sleep(config.BLOCKING_POLL_INTERVAL_SECONDS)
             continue
 
@@ -77,9 +77,7 @@ def poll_for_blocking(ha_client, state, blocking_entities):
                 )
                 logging.info("Blocking detected during idle poll; handling immediately.")
             except Exception:
-                logging.debug(
-                    "Failed to persist blocking start detected during idle poll.", exc_info=True
-                )
+                logging.warning("Failed to persist blocking start during idle poll.", exc_info=True)
             return
 
         # Blocking ended during idle -> persist end time so grace will run.
@@ -92,9 +90,7 @@ def poll_for_blocking(ha_client, state, blocking_entities):
                 )
                 logging.info("Blocking ended during idle poll; will run grace on next loop.")
             except Exception:
-                logging.debug(
-                    "Failed to persist blocking end during idle poll.", exc_info=True
-                )
+                logging.warning("Failed to persist blocking end during idle poll.", exc_info=True)
             return
 
         time.sleep(config.BLOCKING_POLL_INTERVAL_SECONDS)
@@ -285,10 +281,6 @@ def main(args):
                 )
 
                 if actual_applied_temp is None:
-                    logging.debug(
-                        "Could not read actual applied temp, using "
-                        "last_final_temp as fallback"
-                    )
                     actual_applied_temp = last_final_temp_stored
 
                 # Get current indoor temperature to calculate actual change

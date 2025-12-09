@@ -137,9 +137,6 @@ class EnhancedModelWrapper:
                                f"outlet={outlet_temp}, outdoor={outdoor_temp}")
                 return outdoor_temp + 10.0  # Safe fallback
             
-            logging.debug(f"🎯 Smart rounding prediction: "
-                         f"{outlet_temp:.1f}°C outlet → "
-                         f"{predicted_temp:.2f}°C indoor")
             
             return float(predicted_temp)  # Ensure we return a float
             
@@ -234,9 +231,6 @@ class EnhancedModelWrapper:
         # Use configured clamp bounds instead of hardcoded values
         outlet_min, outlet_max = config.CLAMP_MIN_ABS, config.CLAMP_MAX_ABS
         
-        logging.debug(f"🔍 PHASE 5 Binary search start: {current_indoor:.1f}°C → {target_indoor:.1f}°C")
-        logging.debug(f"   Search parameters: outdoor={outdoor_temp:.1f}°C, pv={pv_power:.1f}W, "
-                     f"fireplace={fireplace_on}, tv={tv_on}")
         
         # Fix 1.4: Pre-check for unreachable targets to avoid futile searching
         try:

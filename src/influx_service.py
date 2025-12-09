@@ -157,11 +157,6 @@ class InfluxService:
             
             # Resample the data to the exact number of steps required.
             if len(values) != steps:
-                logging.debug(
-                    "Resampling history from %d to %d points.",
-                    len(values),
-                    steps,
-                )
                 # Create an array of original indices
                 original_indices = np.linspace(0, 1, len(values))
                 # Create an array of new indices
@@ -247,14 +242,8 @@ class InfluxService:
                 entity_ids_short.append(entity)
             original_names.append(entities[i])  # Keep original name for mapping
         
-        # Debug: log entity processing for troubleshooting
-        logging.debug(f"Original entities: {entities}")
-        logging.debug(f"Mapped to real entities: {real_entities}")
-        logging.debug(f"Stripped entity IDs: {entity_ids_short}")
-        
         # BULLETPROOF APPROACH: Query each entity separately to avoid OR operator issues
         # This completely sidesteps the Flux syntax problems by using proven single-entity queries
-        logging.debug("Using separate queries approach to avoid OR operator issues")
         
         # Query each entity separately using proven single-entity method
         entity_dataframes = []
