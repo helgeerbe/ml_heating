@@ -484,8 +484,13 @@ class PredictionMetrics:
         window_predictions = []
         for prediction in self.predictions:
             try:
-                # Parse timestamp
-                pred_time = datetime.fromisoformat(prediction['timestamp'].replace('Z', '+00:00'))
+                # Parse timestamp - handle None timestamps
+                timestamp_str = prediction.get('timestamp')
+                if timestamp_str is None:
+                    # Skip predictions with no timestamp
+                    continue
+                    
+                pred_time = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
                 # Remove timezone info for comparison
                 pred_time = pred_time.replace(tzinfo=None)
                 

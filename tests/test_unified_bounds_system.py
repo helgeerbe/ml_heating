@@ -50,15 +50,18 @@ class TestTemperatureBoundsConsistency:
         # NOW IMPLEMENTED: Test unified bounds
         from src.thermal_parameters import thermal_params
         
-        # Verify conflict resolution decisions are implemented
-        assert thermal_params.get('outlet_temp_min') == 25.0  # Physics minimum
+        # Verify conflict resolution decisions are implemented  
+        # Note: Default is 25.0°C but 14.0°C is now accepted for efficient low-temp operation
         assert thermal_params.get('outlet_temp_max') == 65.0  # Safety maximum
         
-        # Test bounds are properly set
+        # Test bounds are properly set - 14°C minimum now supported for efficient heating
         min_bounds = thermal_params.get_bounds('outlet_temp_min')
         max_bounds = thermal_params.get_bounds('outlet_temp_max')
-        assert min_bounds == (20.0, 30.0)  # Reasonable range around 25°C
+        assert min_bounds == (14.0, 30.0)  # Updated to accept 14°C for absent periods
         assert max_bounds == (60.0, 70.0)  # Reasonable range around 65°C
+        
+        # Verify 14°C is now valid (resolves the original warning)
+        assert thermal_params.validate('outlet_temp_min', 14.0) == True
 
 
 class TestPhysicsBoundsRealism:

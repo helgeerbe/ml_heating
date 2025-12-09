@@ -275,6 +275,9 @@ class EnhancedModelWrapper:
             logging.warning(f"Pre-check failed: {e}, proceeding with binary search")
         
         # Binary search for optimal outlet temperature
+        logging.debug(f"🎯 Binary search start: target={target_indoor:.1f}°C, "
+                     f"current={current_indoor:.1f}°C, range={outlet_min:.1f}-{outlet_max:.1f}°C")
+        
         for iteration in range(20):  # Max 20 iterations for efficiency
             # Fix 1.3: Check if range has collapsed (early exit)
             range_size = outlet_max - outlet_min

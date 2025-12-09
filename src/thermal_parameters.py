@@ -97,7 +97,7 @@ class ThermalParameterManager:
         # Temperature bounds (CONFLICT RESOLVED)
         'outlet_temp_min': ParameterInfo(
             default=25.0,  # Resolution: Physics-based minimum vs 14.0 in config.py
-            bounds=(20.0, 30.0),
+            bounds=(14.0, 30.0),
             description='Minimum outlet temperature for heating mode',
             unit='°C',
             env_var='CLAMP_MIN_ABS'

@@ -187,14 +187,14 @@ class TestPhase5BinarySearchLogging(unittest.TestCase):
         with open(model_wrapper_path, 'r') as f:
             wrapper_content = f.read()
         
-        # Check for actual Phase 5 binary search logging components
+        # Check for actual binary search logging components
         phase5_logging_components = [
-            "PHASE 5 Binary search start",
+            "Binary search start",
             "Iteration {iteration+1}: outlet=",
             "Binary search converged after",
             "didn't converge after 20 iterations",
-            "PHASE 5 FIX: Handle None returns",
-            "PHASE 5 ENHANCEMENT: Detailed logging at each iteration",
+            "Handle None returns",
+            "Detailed logging at each iteration",
         ]
         
         for component in phase5_logging_components:
