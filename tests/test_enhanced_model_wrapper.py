@@ -56,14 +56,12 @@ def test_enhanced_wrapper():
         print(f"✅ Learning metrics: {len(metrics)} metrics available")
         
         print("\n🎉 All tests passed! Enhanced Model Wrapper is ready.")
-        return True
         
     except Exception as e:
         print(f"❌ Test failed: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        assert False, f"Test failed: {e}"
 
 if __name__ == "__main__":
-    success = test_enhanced_wrapper()
-    sys.exit(0 if success else 1)
+    test_enhanced_wrapper()

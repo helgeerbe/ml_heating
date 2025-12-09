@@ -24,14 +24,21 @@ from . import config
 from .physics_features import build_physics_features
 from .ha_client import create_ha_client, get_sensor_attributes
 from .influx_service import create_influx_service
-from .model_wrapper import (
-    simplified_outlet_prediction,
-)
+from .model_wrapper import simplified_outlet_prediction
 from .physics_calibration import (
     train_thermal_equilibrium_model,
     validate_thermal_model,
 )
 from .state_manager import load_state, save_state
+from .heating_controller import (
+    BlockingStateManager,
+    SensorDataManager, 
+    HeatingSystemStateChecker
+)
+from .temperature_control import (
+    TemperatureControlManager,
+    OnlineLearning
+)
 
 
 def poll_for_blocking(ha_client, state, blocking_entities):
@@ -722,11 +729,53 @@ def main(args):
                 name for name, value in critical_sensors.items() if value is None
             ]
 
+            # ENHANCED DEBUGGING for intermittent state 4 issue
             if missing_sensors:
-                logging.warning(
-                    "Critical sensors unavailable: %s. Skipping.",
+                logging.error(
+                    "🚨 SETTING STATE 4 - Critical sensors unavailable: %s",
                     ", ".join(missing_sensors),
                 )
+                # Log detailed sensor status for debugging
+                logging.error("📊 SENSOR DEBUG:")
+                for sensor_name, sensor_value in critical_sensors.items():
+                    status = "MISSING" if sensor_value is None else "OK"
+                    logging.error(f"   {sensor_name}: {sensor_value} [{status}]")
+                
+                # Force retry sensor read to check if it's a temporary glitch
+                logging.info("🔄 RETRY: Attempting fresh sensor read to confirm issue...")
+                try:
+                    fresh_states = ha_client.get_all_states()
+                    retry_critical_sensors = {
+                        config.TARGET_INDOOR_TEMP_ENTITY_ID: ha_client.get_state(config.TARGET_INDOOR_TEMP_ENTITY_ID, fresh_states),
+                        config.INDOOR_TEMP_ENTITY_ID: ha_client.get_state(config.INDOOR_TEMP_ENTITY_ID, fresh_states),
+                        config.OUTDOOR_TEMP_ENTITY_ID: ha_client.get_state(config.OUTDOOR_TEMP_ENTITY_ID, fresh_states),
+                        config.OPENWEATHERMAP_TEMP_ENTITY_ID: ha_client.get_state(config.OPENWEATHERMAP_TEMP_ENTITY_ID, fresh_states),
+                        config.AVG_OTHER_ROOMS_TEMP_ENTITY_ID: ha_client.get_state(config.AVG_OTHER_ROOMS_TEMP_ENTITY_ID, fresh_states),
+                        config.ACTUAL_OUTLET_TEMP_ENTITY_ID: ha_client.get_state(config.ACTUAL_OUTLET_TEMP_ENTITY_ID, fresh_states),
+                    }
+                    retry_missing_sensors = [
+                        name for name, value in retry_critical_sensors.items() if value is None
+                    ]
+                    
+                    if retry_missing_sensors:
+                        logging.error("❌ CONFIRMED: Still missing after retry: %s", ", ".join(retry_missing_sensors))
+                        missing_sensors = retry_missing_sensors  # Use fresh data
+                    else:
+                        logging.warning("✅ RACE CONDITION DETECTED: Retry found all sensors working! Using retry data.")
+                        # Update with working sensor values from retry
+                        target_indoor_temp = retry_critical_sensors[config.TARGET_INDOOR_TEMP_ENTITY_ID]
+                        actual_indoor = retry_critical_sensors[config.INDOOR_TEMP_ENTITY_ID]
+                        outdoor_temp = retry_critical_sensors[config.OUTDOOR_TEMP_ENTITY_ID] 
+                        owm_temp = retry_critical_sensors[config.OPENWEATHERMAP_TEMP_ENTITY_ID]
+                        avg_other_rooms_temp = retry_critical_sensors[config.AVG_OTHER_ROOMS_TEMP_ENTITY_ID]
+                        actual_outlet_temp = retry_critical_sensors[config.ACTUAL_OUTLET_TEMP_ENTITY_ID]
+                        missing_sensors = []  # Clear missing list
+                        
+                except Exception as e:
+                    logging.error("❌ RETRY FAILED: %s", e, exc_info=True)
+                    
+            # Only set state 4 if sensors are still missing after retry
+            if missing_sensors:
                 try:
                     attributes_state = get_sensor_attributes(
                         "sensor.ml_heating_state"
@@ -740,6 +789,8 @@ def main(args):
                             "last_updated": datetime.now(
                                 timezone.utc
                             ).isoformat(),
+                            "debug_cycle": cycle_number,
+                            "debug_timestamp": datetime.now().isoformat(),
                         }
                     )
                     ha_client.set_state(
@@ -748,6 +799,7 @@ def main(args):
                         attributes_state,
                         round_digits=None,
                     )
+                    logging.error("🚨 STATE 4 SET in HA with missing sensors: %s", missing_sensors)
                 except Exception:
                     logging.debug(
                         "Failed to write NO_DATA state to HA.", exc_info=True
@@ -896,6 +948,7 @@ def main(args):
                         floor_predicted = wrapper.predict_indoor_temp(
                             outlet_temp=floor_temp,
                             outdoor_temp=outdoor_temp,
+                            current_indoor=prediction_indoor_temp,
                             pv_power=test_context_floor['pv_power'],
                             fireplace_on=test_context_floor['fireplace_on'],
                             tv_on=test_context_floor['tv_on']
@@ -903,6 +956,7 @@ def main(args):
                         ceiling_predicted = wrapper.predict_indoor_temp(
                             outlet_temp=ceiling_temp,
                             outdoor_temp=outdoor_temp,
+                            current_indoor=prediction_indoor_temp,
                             pv_power=test_context_ceiling['pv_power'],
                             fireplace_on=test_context_ceiling['fireplace_on'],
                             tv_on=test_context_ceiling['tv_on']

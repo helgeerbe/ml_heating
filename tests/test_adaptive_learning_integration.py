@@ -59,7 +59,7 @@ def test_adaptive_learning_enabled():
     print(f"   ✅ Parameters updating: {parameter_changed}")
     print(f"   ✅ Learning confidence: {model.learning_confidence:.3f}")
     
-    return True
+    assert parameter_changed, "Parameters should update with adaptive learning"
 
 def test_empty_trajectory_methods():
     """Test 2: Verify empty trajectory methods are implemented."""
@@ -88,7 +88,7 @@ def test_empty_trajectory_methods():
         
     except Exception as e:
         print(f"   ❌ predict_thermal_trajectory failed: {e}")
-        return False
+        assert False, f"predict_thermal_trajectory failed: {e}"
     
     # Test calculate_optimal_outlet_temperature method
     try:
@@ -107,9 +107,7 @@ def test_empty_trajectory_methods():
         
     except Exception as e:
         print(f"   ❌ calculate_optimal_outlet_temperature failed: {e}")
-        return False
-    
-    return True
+        assert False, f"calculate_optimal_outlet_temperature failed: {e}"
 
 def test_mae_rmse_tracking():
     """Test 3: Verify MAE/RMSE tracking system."""
@@ -154,11 +152,9 @@ def test_mae_rmse_tracking():
         breakdown = metrics_result.get('accuracy_breakdown', {})
         print(f"   ✅ Accuracy breakdown available: {len(breakdown) > 0}")
         
-        return True
-        
     except Exception as e:
         print(f"   ❌ MAE/RMSE tracking failed: {e}")
-        return False
+        assert False, f"MAE/RMSE tracking failed: {e}"
 
 def test_enhanced_ha_metrics():
     """Test 4: Verify enhanced HA metrics export."""
@@ -197,11 +193,9 @@ def test_enhanced_ha_metrics():
         assert ha_metrics['mae_all_time'] >= 0, "MAE should be non-negative"
         assert ha_metrics['total_predictions'] > 0, "Should have predictions"
         
-        return True
-        
     except Exception as e:
         print(f"   ❌ Enhanced HA metrics failed: {e}")
-        return False
+        assert False, f"Enhanced HA metrics failed: {e}"
 
 def test_integration_workflow():
     """Test 5: Full integration workflow."""
@@ -245,11 +239,9 @@ def test_integration_workflow():
         print(f"   ✅ Final learning confidence: {final_metrics['learning_confidence']:.2f}")
         print(f"   ✅ Final cycle count: {final_metrics['cycle_count']}")
         
-        return True
-        
     except Exception as e:
         print(f"   ❌ Integration workflow failed: {e}")
-        return False
+        assert False, f"Integration workflow failed: {e}"
 
 def main():
     """Run all integration tests."""

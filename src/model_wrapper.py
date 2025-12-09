@@ -472,10 +472,25 @@ class EnhancedModelWrapper:
             metrics = self.thermal_model.get_adaptive_learning_metrics()
             # Check if we got valid metrics or just insufficient_data flag
             if isinstance(metrics, dict) and 'insufficient_data' not in metrics and len(metrics) > 1:
-                return metrics
+                # CRITICAL FIX: Extract current parameters from nested structure if available
+                if 'current_parameters' in metrics:
+                    current_params = metrics['current_parameters']
+                    # Return flattened structure with actual loaded parameters
+                    result = metrics.copy()
+                    result.update({
+                        'thermal_time_constant': current_params.get('thermal_time_constant', self.thermal_model.thermal_time_constant),
+                        'heat_loss_coefficient': current_params.get('heat_loss_coefficient', self.thermal_model.heat_loss_coefficient),
+                        'outlet_effectiveness': current_params.get('outlet_effectiveness', self.thermal_model.outlet_effectiveness),
+                        'learning_confidence': self.thermal_model.learning_confidence,
+                        'cycle_count': self.cycle_count
+                    })
+                    return result
+                else:
+                    # Use the metrics as-is if current_parameters key not found
+                    return metrics
         except AttributeError:
             pass
-        
+
         # Fallback if method doesn't exist or returns insufficient_data
         return {
             'thermal_time_constant': self.thermal_model.thermal_time_constant,

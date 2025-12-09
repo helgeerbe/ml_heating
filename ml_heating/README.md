@@ -8,13 +8,14 @@ This stable channel provides production-ready ML heating control with automatic 
 
 ## Features
 
-- **Heat Balance Controller** - 🆕 **Intelligent 3-phase temperature control** (CHARGING/BALANCING/MAINTENANCE modes)
-- **Trajectory Prediction** - 4-hour thermal forecasting with oscillation prevention
-- **Physics-based ML optimization** - Intelligent heating control using real-world physics models
-- **Real-time dashboard** - Advanced analytics and performance monitoring
-- **Multi-model comparison** - Compare different heating strategies
-- **Automated backup system** - Protect your ML models and configurations
-- **Seasonal learning** - Automatically adapts to seasonal patterns
+- **ThermalEquilibriumModel** - Physics-based machine learning with continuous parameter adaptation
+- **Delta Forecast Calibration** - 🆕 **Local weather forecast calibration** for enhanced thermal prediction accuracy
+- **Enhanced Model Wrapper** - Intelligent outlet temperature prediction with smart rounding
+- **Adaptive Learning** - Real-time parameter optimization based on prediction feedback
+- **Multi-Heat Source Integration** - PV solar, fireplace, and electronics heat coordination
+- **Active & Shadow Modes** - Safe testing mode alongside production heat curve operation
+- **Live Performance Tracking** - Real-time confidence and accuracy monitoring
+- **Comprehensive Safety** - Blocking detection, gradual temperature control, and health monitoring
 - **External heat source detection** - Accounts for PV, fireplace, and other heat sources
 
 ## Installation

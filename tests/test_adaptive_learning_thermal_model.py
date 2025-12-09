@@ -360,47 +360,6 @@ class TestAdaptiveLearningThermalModel(unittest.TestCase):
         # Note: Parameter adaptation may not always occur depending on the learning algorithm
         self.assertGreaterEqual(len(self.model.parameter_history), 0)
         
-    def test_physics_aware_thresholds_with_learning(self):
-        """Test physics-aware thresholds after adaptive learning."""
-        # Calculate initial thresholds
-        initial_thresholds = self.model.calculate_physics_aware_thresholds(
-            current_indoor=20.5,
-            target_indoor=21.0,
-            outlet_temp=40.0,
-            outdoor_temp=10.0,
-            pv_power=1000.0
-        )
-        
-        # If method returns None (not implemented), skip this test
-        if initial_thresholds is None:
-            self.skipTest("calculate_physics_aware_thresholds not implemented in fixed model")
-        
-        # Train with feedback
-        for i in range(30):
-            self.model.update_prediction_feedback(
-                predicted_temp=21.2,
-                actual_temp=20.8,  # Consistently over-predicting
-                prediction_context={
-                    'outlet_temp': 40.0,
-                    'outdoor_temp': 10.0,
-                    'pv_power': 1000.0
-                },
-                timestamp=f"2025-12-02T12:{i:02d}:00"
-            )
-        
-        # Calculate thresholds after learning
-        final_thresholds = self.model.calculate_physics_aware_thresholds(
-            current_indoor=20.5,
-            target_indoor=21.0,
-            outlet_temp=40.0,
-            outdoor_temp=10.0,
-            pv_power=1000.0
-        )
-        
-        # Thresholds should still be calculated (may have changed due to parameter adaptation)
-        self.assertIn('charging_threshold', final_thresholds)
-        self.assertIn('balancing_threshold', final_thresholds)
-        self.assertIn('recommended_mode', final_thresholds)
         
     def test_learning_convergence_detection(self):
         """Test detection of learning convergence."""

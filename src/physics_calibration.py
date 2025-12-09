@@ -8,10 +8,6 @@ using historical target temperature data and actual house behavior.
 import logging
 import pandas as pd
 import numpy as np
-import json
-import os
-import shutil
-from datetime import datetime
 
 try:
     from scipy.optimize import minimize
@@ -23,13 +19,13 @@ except ImportError:
 try:
     from . import config
     from .thermal_equilibrium_model import ThermalEquilibriumModel
-    from .state_manager import save_state, load_state
+    from .state_manager import save_state
     from .influx_service import InfluxService
 except ImportError:
     # Direct import fallback for standalone execution
     import config
     from thermal_equilibrium_model import ThermalEquilibriumModel
-    from state_manager import save_state, load_state
+    from state_manager import save_state
     from influx_service import InfluxService
 
 
@@ -152,14 +148,15 @@ def validate_thermal_model():
         
         # Test monotonicity - higher outlet should mean higher equilibrium
         monotonic_check = []
+        outdoor_temp_test = 5.0  # Fixed test outdoor temperature
         for outlet_temp in [25, 30, 35, 40, 45, 50, 55, 60]:
             equilibrium = thermal_model.predict_equilibrium_temperature(
                 outlet_temp=outlet_temp,
-                outdoor_temp=outdoor_temp,
-                current_indoor=period.get('indoor_temp', outdoor_temp + 10.0),
-                pv_power=pv_power,
-                fireplace_on=fireplace_on,
-                tv_on=tv_on
+                outdoor_temp=outdoor_temp_test,
+                current_indoor=21.0,  # Fixed test indoor temperature
+                pv_power=0,
+                fireplace_on=0,
+                tv_on=0
             )
             monotonic_check.append(equilibrium)
             print(f"{outlet_temp:3d}°C       → {equilibrium:.2f}°C")
@@ -798,314 +795,52 @@ def optimize_thermal_parameters(stable_periods):
         return None
 
 
-def export_calibrated_baseline(optimized_params, stable_periods):
-    """
-    Step 5: Export calibrated baseline configuration
-    
-    Args:
-        optimized_params: Optimized thermal parameters
-        stable_periods: Stable periods used for calibration
-    
-    Returns:
-        str: Path to exported baseline file
-    """
-    logging.info("=== EXPORTING CALIBRATED BASELINE ===")
-    
-    # Create baseline configuration
-    baseline = {
-        'metadata': {
-            'calibration_date': datetime.now().isoformat(),
-            'data_hours': config.TRAINING_LOOKBACK_HOURS,
-            'stable_periods_count': len(stable_periods),
-            'optimization_method': 'L-BFGS-B',
-            'version': '1.0'
-        },
-        'parameters': {
-            'outlet_effectiveness': optimized_params['outlet_effectiveness'],
-            'heat_loss_coefficient': optimized_params['heat_loss_coefficient'],
-            'thermal_time_constant': optimized_params['thermal_time_constant'],
-            'pv_heat_weight': optimized_params['pv_heat_weight'],
-            'fireplace_heat_weight': optimized_params['fireplace_heat_weight'],
-            'tv_heat_weight': optimized_params['tv_heat_weight']
-        },
-        'quality_metrics': {
-            'mae_celsius': optimized_params['mae'],
-            'optimization_success': optimized_params['optimization_success'],
-            'data_coverage_hours': len(stable_periods) * 0.5,  # 30min periods
-            'stability_threshold': 0.1
-        },
-        'original_parameters': {
-            'outlet_effectiveness': config.OUTLET_EFFECTIVENESS,
-            'heat_loss_coefficient': config.HEAT_LOSS_COEFFICIENT,
-            'thermal_time_constant': config.THERMAL_TIME_CONSTANT,
-            'pv_heat_weight': config.PV_HEAT_WEIGHT,
-            'fireplace_heat_weight': config.FIREPLACE_HEAT_WEIGHT,
-            'tv_heat_weight': config.TV_HEAT_WEIGHT
-        }
-    }
-    
-    # Export to JSON file
-    baseline_path = "/opt/ml_heating/calibrated_baseline.json"
-    try:
-        with open(baseline_path, 'w') as f:
-            json.dump(baseline, f, indent=2)
-        
-        logging.info(f"✅ Calibrated baseline exported to: {baseline_path}")
-        
-        # Log improvement summary
-        logging.info("=== CALIBRATION IMPROVEMENT SUMMARY ===")
-        for param, new_value in baseline['parameters'].items():
-            old_value = baseline['original_parameters'][param]
-            change_pct = ((new_value - old_value) / old_value) * 100
-            logging.info(f"  {param}: {old_value:.4f} → {new_value:.4f} "
-                        f"({change_pct:+.1f}%)")
-        
-        logging.info(f"Expected accuracy improvement: "
-                    f"{optimized_params['mae']:.4f}°C MAE")
-        
-        return baseline_path
-        
-    except Exception as e:
-        logging.error(f"❌ Failed to export baseline: {e}")
-        return None
-
-
-def validate_calibrated_baseline(baseline_path, stable_periods):
-    """
-    Step 6: Validate calibrated baseline on held-out data
-    
-    Args:
-        baseline_path: Path to calibrated baseline file
-        stable_periods: Stable periods for validation
-    
-    Returns:
-        bool: True if validation passed
-    """
-    logging.info("=== VALIDATING CALIBRATED BASELINE ===")
-    
-    try:
-        # Load baseline
-        with open(baseline_path, 'r') as f:
-            baseline = json.load(f)
-        
-        # Split data for validation (use last 20% as held-out)
-        split_point = int(len(stable_periods) * 0.8)
-        validation_periods = stable_periods[split_point:]
-        
-        logging.info(f"Validating on {len(validation_periods)} held-out periods")
-        
-        # Create model with calibrated parameters
-        test_model = ThermalEquilibriumModel()
-        params = baseline['parameters']
-        test_model.outlet_effectiveness = params['outlet_effectiveness']
-        test_model.heat_loss_coefficient = params['heat_loss_coefficient'] 
-        test_model.thermal_time_constant = params['thermal_time_constant']
-        test_model.pv_heat_weight = params['pv_heat_weight']
-        test_model.fireplace_heat_weight = params['fireplace_heat_weight']
-        test_model.tv_heat_weight = params['tv_heat_weight']
-        
-        # Test on validation data
-        errors = []
-        for period in validation_periods:
-            predicted_temp = test_model.predict_equilibrium_temperature(
-                outlet_temp=period['outlet_temp'],
-                outdoor_temp=period['outdoor_temp'],
-                current_indoor=period.get('indoor_temp', period['outdoor_temp'] + 10.0),
-                pv_power=period['pv_power'],
-                fireplace_on=period['fireplace_on'],
-                tv_on=period['tv_on']
-            )
-            
-            error = abs(predicted_temp - period['indoor_temp'])
-            errors.append(error)
-        
-        # Calculate validation metrics
-        validation_mae = np.mean(errors)
-        validation_rmse = np.sqrt(np.mean([e**2 for e in errors]))
-        accuracy_within_03 = sum(1 for e in errors if e <= 0.3) / len(errors)
-        
-        logging.info("=== VALIDATION RESULTS ===")
-        logging.info(f"Validation MAE: {validation_mae:.4f}°C")
-        logging.info(f"Validation RMSE: {validation_rmse:.4f}°C")
-        logging.info(f"Accuracy within ±0.3°C: {accuracy_within_03:.1%}")
-        
-        # Validation criteria - REALISTIC for thermal systems
-        mae_threshold = 3.0  # °C - Realistic for thermal equilibrium predictions
-        accuracy_threshold = 0.05  # 5% within ±0.3°C is reasonable for equilibrium periods
-        
-        mae_pass = validation_mae <= mae_threshold
-        accuracy_pass = accuracy_within_03 >= accuracy_threshold
-        
-        # Additional realistic criteria
-        rmse_threshold = 4.0  # °C
-        rmse_pass = validation_rmse <= rmse_threshold
-        
-        validation_passed = mae_pass and accuracy_pass and rmse_pass
-        
-        logging.info(f"MAE test: {'✅ PASS' if mae_pass else '❌ FAIL'} "
-                    f"(≤{mae_threshold}°C)")
-        logging.info(f"Accuracy test: {'✅ PASS' if accuracy_pass else '❌ FAIL'} "
-                    f"(≥{accuracy_threshold:.0%})")
-        logging.info(f"RMSE test: {'✅ PASS' if rmse_pass else '❌ FAIL'} "
-                    f"(≤{rmse_threshold}°C)")
-        logging.info(f"Overall validation: {'✅ PASSED' if validation_passed else '❌ FAILED'}")
-        
-        # Update baseline with validation results
-        baseline['validation'] = {
-            'mae_celsius': float(validation_mae),
-            'rmse_celsius': float(validation_rmse),
-            'accuracy_within_03c': float(accuracy_within_03),
-            'validation_passed': bool(validation_passed),
-            'validation_periods': int(len(validation_periods))
-        }
-        
-        # Save updated baseline
-        with open(baseline_path, 'w') as f:
-            json.dump(baseline, f, indent=2)
-        
-        return validation_passed
-        
-    except Exception as e:
-        logging.error(f"❌ Validation error: {e}")
-        return False
-
-
 def backup_existing_calibration():
-    """Create backup of existing thermal state before calibration"""
-    try:
-        from .unified_thermal_state import ThermalStateManager
-        
-        # Initialize state manager to check if state exists
-        state_manager = ThermalStateManager()
-        
-        # Check if thermal state file exists
-        if not os.path.exists('/opt/ml_heating/thermal_state.json'):
-            logging.info("ℹ️ No existing thermal state found to backup")
-            return None
-            
-        # Create backup using the ThermalStateManager method
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_filename = f"pre_calibration_{timestamp}"
-        
-        success, backup_path = state_manager.create_backup(backup_filename)
-        
-        if success:
-            logging.info(f"✅ Created thermal state backup: {os.path.basename(backup_path)}")
-            return backup_path
-        else:
-            logging.warning(f"⚠️ Failed to create thermal state backup: {backup_path}")
-            return None
-        
-    except Exception as e:
-        logging.warning(f"⚠️ Failed to create thermal state backup: {e}")
-        return None
-
-
-def restore_calibration_from_backup(backup_path):
     """
-    Restore thermal state from a backup file
+    Create backup of existing thermal calibration before new calibration
     
-    Args:
-        backup_path: Path to the backup file
-        
     Returns:
-        bool: True if restoration successful
+        str: Path to backup file, or None if no existing calibration
     """
+    logging.info("Creating backup of existing thermal calibration...")
+    
     try:
-        # Use unified thermal state manager for restoration
-        from unified_thermal_state import get_thermal_state_manager
+        from .unified_thermal_state import get_thermal_state_manager
+        import json
+        import os
+        from datetime import datetime
         
         state_manager = get_thermal_state_manager()
         
-        # Restore from backup
-        success, message = state_manager.restore_from_backup(backup_path)
-        
-        if success:
-            logging.info(f"✅ Thermal state restored from backup: {message}")
-            return True
+        # Get current thermal state from the state manager
+        # Use the thermal_state property or the file directly
+        if hasattr(state_manager, 'thermal_state'):
+            current_state = state_manager.thermal_state
         else:
-            logging.error(f"❌ Failed to restore thermal state: {message}")
-            return False
+            # Fallback: read the thermal state file directly
+            state_file_path = "/opt/ml_heating/thermal_state.json"
+            if os.path.exists(state_file_path):
+                with open(state_file_path, 'r') as f:
+                    current_state = json.load(f)
+            else:
+                logging.info("No existing thermal state file found - skipping backup")
+                return None
+        
+        # Create backup filename with timestamp (use pre_calibration prefix to match expected format)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_filename = f"pre_calibration_{timestamp}.json"
+        backup_path = os.path.join("/opt/ml_heating", backup_filename)
+        
+        # Save current state to backup file
+        with open(backup_path, 'w') as f:
+            json.dump(current_state, f, indent=2, default=str)
             
+        logging.info(f"✅ Backup created: {backup_path}")
+        return backup_path
+        
     except Exception as e:
-        logging.error(f"❌ Failed to restore from backup: {e}")
-        return False
-
-
-def run_phase0_calibration():
-    """
-    Phase 0: House-Specific Calibration using TRAINING_LOOKBACK_HOURS
-    
-    This implements the foundational calibration step that should run before Phase 1.
-    Uses 672 hours of historical data to optimize ALL thermal parameters.
-    """
-    logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
-    
-    print("🏠 PHASE 0: HOUSE-SPECIFIC CALIBRATION")
-    print("=" * 50)
-    
-    # Step 0: Backup existing calibration
-    print("Step 0: Checking for existing calibration...")
-    backup_path = backup_existing_calibration()
-    if backup_path:
-        print(f"✅ Previous calibration backed up: {os.path.basename(backup_path)}")
-    else:
-        print("ℹ️ No existing calibration found")
-    
-    # Step 1: Fetch historical data
-    print("Step 1: Fetching historical data...")
-    df = fetch_historical_data_for_calibration(
-        lookback_hours=config.TRAINING_LOOKBACK_HOURS)
-    
-    if df is None:
-        print("❌ Failed to fetch historical data")
-        return False
-        
-    print(f"✅ Retrieved {len(df)} samples for calibration")
-    
-    # Step 2: Filter for stable periods
-    print("Step 2: Filtering for stable periods...")
-    stable_periods = filter_stable_periods(df)
-    
-    if len(stable_periods) < 50:
-        print(f"❌ Insufficient stable periods: {len(stable_periods)}")
-        return False
-        
-    print(f"✅ Found {len(stable_periods)} stable periods")
-    
-    # Step 3: Optimize thermal parameters
-    print("Step 3: Optimizing thermal parameters...")
-    optimized_params = optimize_thermal_parameters(stable_periods)
-    
-    if optimized_params is None:
-        print("❌ Parameter optimization failed")
-        return False
-        
-    print(f"✅ Optimization completed - MAE: {optimized_params['mae']:.4f}°C")
-    
-    # Step 4: Export calibrated baseline
-    print("Step 4: Exporting calibrated baseline...")
-    baseline_path = export_calibrated_baseline(optimized_params, stable_periods)
-    
-    if baseline_path is None:
-        print("❌ Failed to export baseline")
-        return False
-        
-    print(f"✅ Baseline exported to: {baseline_path}")
-    
-    # Step 5: Validate baseline
-    print("Step 5: Validating calibrated baseline...")
-    validation_passed = validate_calibrated_baseline(baseline_path, stable_periods)
-    
-    if not validation_passed:
-        print("❌ Baseline validation failed")
-        return False
-        
-    print("✅ Baseline validation PASSED")
-    print("\n🎉 PHASE 0 CALIBRATION COMPLETED SUCCESSFULLY!")
-    print("Next: Run Phase 1 adaptive learning with calibrated baselines")
-    
-    return True
+        logging.warning(f"Failed to create calibration backup: {e}")
+        return None
 
 
 if __name__ == "__main__":

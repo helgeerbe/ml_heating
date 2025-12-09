@@ -54,8 +54,8 @@ class ThermalEquilibriumModel:
             pass
     def _load_thermal_parameters(self):
         """
-        Load thermal parameters with priority: calibrated > config defaults.
-        This ensures calibrated parameters from physics optimization are used.
+        FIXED: Load thermal parameters with proper baseline + adjustments.
+        This ensures trained parameters persist across restarts.
         """
         try:
             # Try to load calibrated parameters from unified thermal state
@@ -70,10 +70,14 @@ class ThermalEquilibriumModel:
             # FIXED: Check for calibrated parameters in baseline_parameters section
             baseline_params = thermal_state.get('baseline_parameters', {})
             if baseline_params.get('source') == 'calibrated':
-                # Load calibrated parameters from baseline_parameters
-                self.thermal_time_constant = baseline_params['thermal_time_constant']
-                self.heat_loss_coefficient = baseline_params['heat_loss_coefficient']
-                self.outlet_effectiveness = baseline_params['outlet_effectiveness']
+                # CRITICAL FIX: Load baseline + adjustments for true trained parameters
+                learning_state = thermal_state.get('learning_state', {})
+                adjustments = learning_state.get('parameter_adjustments', {})
+                
+                # Apply learning adjustments to baseline for actual trained values
+                self.thermal_time_constant = baseline_params['thermal_time_constant'] + adjustments.get('thermal_time_constant_delta', 0.0)
+                self.heat_loss_coefficient = baseline_params['heat_loss_coefficient'] + adjustments.get('heat_loss_coefficient_delta', 0.0)
+                self.outlet_effectiveness = baseline_params['outlet_effectiveness'] + adjustments.get('outlet_effectiveness_delta', 0.0)
                 
                 self.external_source_weights = {
                     'pv': baseline_params.get('pv_heat_weight', config.PV_HEAT_WEIGHT),
@@ -81,10 +85,10 @@ class ThermalEquilibriumModel:
                     'tv': baseline_params.get('tv_heat_weight', config.TV_HEAT_WEIGHT)
                 }
                 
-                logging.info("🎯 Loading CALIBRATED thermal parameters:")
-                logging.info(f"   thermal_time_constant: {self.thermal_time_constant:.2f}h")
-                logging.info(f"   heat_loss_coefficient: {self.heat_loss_coefficient:.4f}")
-                logging.info(f"   outlet_effectiveness: {self.outlet_effectiveness:.3f}")
+                logging.info("🎯 Loading CALIBRATED thermal parameters (baseline + learning adjustments):")
+                logging.info(f"   thermal_time_constant: {baseline_params['thermal_time_constant']:.2f} + {adjustments.get('thermal_time_constant_delta', 0.0):.3f} = {self.thermal_time_constant:.2f}h")
+                logging.info(f"   heat_loss_coefficient: {baseline_params['heat_loss_coefficient']:.4f} + {adjustments.get('heat_loss_coefficient_delta', 0.0):.5f} = {self.heat_loss_coefficient:.4f}")
+                logging.info(f"   outlet_effectiveness: {baseline_params['outlet_effectiveness']:.3f} + {adjustments.get('outlet_effectiveness_delta', 0.0):.3f} = {self.outlet_effectiveness:.3f}")
                 logging.info(f"   pv_heat_weight: {self.external_source_weights['pv']:.4f}")
                 
                 # Validate parameters using schema validator
@@ -99,6 +103,15 @@ class ThermalEquilibriumModel:
                 
                 # Initialize learning attributes for calibrated parameters too
                 self._initialize_learning_attributes()
+                
+                # CRITICAL FIX: Restore learning history from saved state
+                self.learning_confidence = learning_state.get('learning_confidence', 3.0)
+                self.prediction_history = learning_state.get('prediction_history', [])
+                self.parameter_history = learning_state.get('parameter_history', [])
+                
+                logging.info(f"   - Restored learning confidence: {self.learning_confidence:.3f}")
+                logging.info(f"   - Restored prediction history: {len(self.prediction_history)} records")
+                logging.info(f"   - Restored parameter history: {len(self.parameter_history)} records")
                 
             else:
                 # Use config defaults

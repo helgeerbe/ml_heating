@@ -56,7 +56,7 @@ def test_schema_validation():
     is_invalid = validate_metrics_data("ml_prediction_metrics", invalid_data)
     print(f"   ✅ Invalid data rejection: {'PASS' if not is_invalid else 'FAIL'}")
     
-    return is_valid and not is_invalid
+    assert is_valid and not is_invalid, f"Schema validation failed: valid={is_valid}, invalid={is_invalid}"
 
 def test_influxdb_connection():
     """Test InfluxDB connection."""
@@ -65,10 +65,9 @@ def test_influxdb_connection():
     try:
         influx_service = create_influx_service()
         print("   ✅ InfluxDB service created successfully")
-        return True
     except Exception as e:
         print(f"   ❌ InfluxDB connection failed: {e}")
-        return False
+        assert False, f"InfluxDB connection failed: {e}"
 
 def test_prediction_metrics_export():
     """Test prediction metrics export."""
@@ -99,11 +98,10 @@ def test_prediction_metrics_export():
         # Export to InfluxDB
         influx_service.write_prediction_metrics(test_metrics)
         print("   ✅ Prediction metrics exported successfully")
-        return True
         
     except Exception as e:
         print(f"   ❌ Prediction metrics export failed: {e}")
-        return False
+        assert False, f"Prediction metrics export failed: {e}"
 
 def test_thermal_learning_metrics_export():
     """Test thermal learning metrics export with mock thermal model."""
@@ -141,11 +139,10 @@ def test_thermal_learning_metrics_export():
         # Export to InfluxDB
         influx_service.write_thermal_learning_metrics(mock_model)
         print("   ✅ Thermal learning metrics exported successfully")
-        return True
         
     except Exception as e:
         print(f"   ❌ Thermal learning metrics export failed: {e}")
-        return False
+        assert False, f"Thermal learning metrics export failed: {e}"
 
 def test_learning_phase_metrics_export():
     """Test learning phase metrics export."""
@@ -173,11 +170,10 @@ def test_learning_phase_metrics_export():
         # Export to InfluxDB
         influx_service.write_learning_phase_metrics(test_phase_data)
         print("   ✅ Learning phase metrics exported successfully")
-        return True
         
     except Exception as e:
         print(f"   ❌ Learning phase metrics export failed: {e}")
-        return False
+        assert False, f"Learning phase metrics export failed: {e}"
 
 def test_trajectory_prediction_metrics_export():
     """Test trajectory prediction metrics export."""
@@ -213,11 +209,10 @@ def test_trajectory_prediction_metrics_export():
         # Export to InfluxDB
         influx_service.write_trajectory_prediction_metrics(test_trajectory_data)
         print("   ✅ Trajectory prediction metrics exported successfully")
-        return True
         
     except Exception as e:
         print(f"   ❌ Trajectory prediction metrics export failed: {e}")
-        return False
+        assert False, f"Trajectory prediction metrics export failed: {e}"
 
 def main():
     """Run all tests."""

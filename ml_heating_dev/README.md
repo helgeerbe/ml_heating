@@ -10,8 +10,11 @@ This development channel provides access to the latest experimental features, de
 
 ## Development Features
 
-- **Heat Balance Controller** - 🆕 **Latest intelligent 3-phase temperature control** (CHARGING/BALANCING/MAINTENANCE modes)
-- **Trajectory Prediction** - 4-hour thermal forecasting with oscillation prevention
+- **ThermalEquilibriumModel** - Latest physics-based machine learning with continuous parameter adaptation
+- **Delta Forecast Calibration** - 🆕 **Latest local weather forecast calibration** for enhanced thermal prediction accuracy
+- **Enhanced Model Wrapper** - Latest intelligent outlet temperature prediction with smart rounding
+- **Binary Search Optimization** - 🆕 **Latest convergence improvements** preventing overnight looping issues
+- **Unified Thermal Parameters** - 🆕 **Latest parameter consolidation system** with validation
 - **Latest experimental features** - Access cutting-edge ML improvements
 - **Debug logging enabled** - Detailed DEBUG level logging for troubleshooting
 - **Development API access** - Enable external tools and Jupyter notebooks
