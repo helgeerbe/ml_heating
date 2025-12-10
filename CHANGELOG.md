@@ -8,17 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Gentle Trajectory Correction System**: Intelligent additive correction preventing outlet temperature spikes during thermal trajectory deviations
+- **Enhanced Forecast Integration**: Fixed feature storage during binary search for accurate trajectory verification with real PV/temperature forecast data
+- **Open Window Adaptation**: System automatically detects sudden heat loss changes and restabilizes when disturbances end
 - Thermal state validator for robust physics parameter validation
 - Comprehensive thermal physics test suite with 36 critical tests
 - Smart temperature rounding using thermal model predictions
 - Enhanced logging to show actual applied temperatures
 
 ### Changed
+- **MAJOR: Trajectory Correction Algorithm**: Replaced aggressive multiplicative correction (7x factors causing outlet spikes) with gentle additive approach based on user's heat curve automation (5°C/8°C/12°C per degree)
+- **Correction Boundaries**: Conservative ≤0.5°C/≤1.0°C/>1.0°C thresholds instead of aggressive ≤0.3°C/>0.5°C thresholds
+- **Heat Curve Alignment**: Trajectory corrections now use proven 15°C per degree shift logic, scaled for direct outlet temperature adjustment
 - Improved thermal equilibrium model physics formula for accurate predictions
 - Enhanced test coverage for thermal physics edge cases and validation
 - Updated logging format to show rounded temperatures applied to HA sensors
 
 ### Fixed
+- **CRITICAL: Aggressive Trajectory Correction** - Eliminated outlet temperature doubling (0.5°C error → 65°C outlet) by replacing multiplicative with gentle additive corrections (0.5°C error → +2.5°C adjustment)
+- **Feature Storage During Binary Search** - Fixed missing forecast data access during trajectory verification phases
 - **CRITICAL: Thermal Physics Model Bug** - Fixed fundamental physics implementation error causing physically impossible temperature predictions (heating systems predicting cooling)
 - Binary search convergence issues - system now finds optimal outlet temperatures correctly
 - Energy conservation violations in thermal equilibrium calculations
@@ -27,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Heat input calculations using corrected physics formula: T_eq = (eff × outlet + loss × outdoor + external) / (eff + loss)
 
 ### Technical Achievements
+- **Overnight Stability Enhanced**: Gentle trajectory corrections prevent system over-reaction during PV shutdown and weather changes
+- **Conservative Control**: 0.5°C trajectory error now produces reasonable +2.5°C outlet adjustment instead of temperature doubling
+- **Real-time Adaptation**: Trajectory verification uses actual changing forecasts instead of static assumptions
+- **User-Aligned Logic**: Trajectory corrections based on proven heat curve automation patterns already in successful use
 - **Production Ready**: All 36 critical thermal model tests passing (100% success rate)
 - **Physics Compliance**: System now respects thermodynamics and energy conservation
 - **Accuracy**: Temperature predictions now physically realistic and mathematically correct

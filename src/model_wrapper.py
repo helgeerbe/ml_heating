@@ -148,6 +148,9 @@ class EnhancedModelWrapper:
     def calculate_optimal_outlet_temp(self, features: Dict) -> Tuple[float, Dict]:
         """Calculate optimal outlet temperature using direct thermal physics prediction."""
         try:
+            # Store features for use in trajectory verification during binary search
+            self._current_features = features
+            
             # Extract core thermal parameters
             current_indoor = features.get('indoor_temp_lag_30m', 21.0)
             target_indoor = features.get('target_temp', 21.0) 
@@ -324,6 +327,18 @@ class EnhancedModelWrapper:
                 logging.info(f"✅ Binary search converged after {iteration+1} iterations: "
                            f"{outlet_mid:.1f}°C → {predicted_indoor:.2f}°C "
                            f"(target: {target_indoor:.1f}°C, error: {error:.3f}°C)")
+                
+                # NEW: Trajectory verification and course correction
+                if config.TRAJECTORY_PREDICTION_ENABLED:
+                    outlet_mid = self._verify_trajectory_and_correct(
+                        outlet_temp=outlet_mid,
+                        current_indoor=current_indoor,
+                        target_indoor=target_indoor,
+                        outdoor_temp=outdoor_temp,
+                        thermal_features=thermal_features,
+                        features=getattr(self, '_current_features', {})  # Use stored features if available
+                    )
+                
                 return outlet_mid
             
             # Adjust search range based on error
@@ -362,7 +377,125 @@ class EnhancedModelWrapper:
                        f"{final_outlet:.1f}°C → {final_predicted:.2f}°C "
                        f"(target: {target_indoor:.1f}°C, error: {final_error:.3f}°C)")
         
+        # NEW: Trajectory verification and course correction
+        if config.TRAJECTORY_PREDICTION_ENABLED:
+            final_outlet = self._verify_trajectory_and_correct(
+                outlet_temp=final_outlet,
+                current_indoor=current_indoor,
+                target_indoor=target_indoor,
+                outdoor_temp=outdoor_temp,
+                thermal_features=thermal_features,
+                features=getattr(self, '_current_features', {})  # Use stored features if available
+            )
+        
         return final_outlet
+    
+    def _verify_trajectory_and_correct(self, outlet_temp: float, current_indoor: float,
+                                       target_indoor: float, outdoor_temp: float,
+                                       thermal_features: Dict, features: Dict = None) -> float:
+        """
+        Verify that the calculated outlet temperature will actually reach the target
+        using trajectory prediction, and apply course correction if needed.
+        
+        This implements the missing trajectory feedback loop that caused the
+        overnight temperature drop issue (Dec 9-10, 2025).
+        """
+        try:
+            # ENHANCED: Use forecast data if available for more accurate trajectory
+            if features:
+                outdoor_forecast = [
+                    features.get('temp_forecast_1h', outdoor_temp),
+                    features.get('temp_forecast_2h', outdoor_temp),
+                    features.get('temp_forecast_3h', outdoor_temp),
+                    features.get('temp_forecast_4h', outdoor_temp)
+                ]
+                
+                pv_forecast = [
+                    features.get('pv_forecast_1h', thermal_features.get('pv_power', 0.0)),
+                    features.get('pv_forecast_2h', thermal_features.get('pv_power', 0.0)),
+                    features.get('pv_forecast_3h', thermal_features.get('pv_power', 0.0)),
+                    features.get('pv_forecast_4h', thermal_features.get('pv_power', 0.0))
+                ]
+            else:
+                # No forecast data available, use current values
+                outdoor_forecast = [outdoor_temp] * 4
+                pv_forecast = [thermal_features.get('pv_power', 0.0)] * 4
+            
+            # Get trajectory prediction with forecast integration
+            if hasattr(self.thermal_model, 'predict_thermal_trajectory_with_forecasts'):
+                # Enhanced method with forecast arrays
+                trajectory = self.thermal_model.predict_thermal_trajectory_with_forecasts(
+                    current_indoor=current_indoor,
+                    target_indoor=target_indoor,
+                    outlet_temp=outlet_temp,
+                    outdoor_forecast=outdoor_forecast,
+                    pv_forecast=pv_forecast,
+                    time_horizon_hours=config.TRAJECTORY_STEPS,
+                    fireplace_on=thermal_features.get('fireplace_on', 0.0),
+                    tv_on=thermal_features.get('tv_on', 0.0)
+                )
+            else:
+                # Fallback: Use averages of forecast data 
+                avg_outdoor = sum(outdoor_forecast) / len(outdoor_forecast)
+                avg_pv = sum(pv_forecast) / len(pv_forecast)
+                
+                trajectory = self.thermal_model.predict_thermal_trajectory(
+                    current_indoor=current_indoor,
+                    target_indoor=target_indoor,
+                    outlet_temp=outlet_temp,
+                    outdoor_temp=avg_outdoor,
+                    time_horizon_hours=config.TRAJECTORY_STEPS,
+                    pv_power=avg_pv,
+                    fireplace_on=thermal_features.get('fireplace_on', 0.0),
+                    tv_on=thermal_features.get('tv_on', 0.0)
+                )
+                
+                logging.debug(f"🌡️ Using forecast averages: outdoor={avg_outdoor:.1f}°C "
+                            f"(vs current {outdoor_temp:.1f}°C), PV={avg_pv:.0f}W "
+                            f"(vs current {thermal_features.get('pv_power', 0.0):.0f}W)")
+            
+            # Check if trajectory reaches target
+            if trajectory['reaches_target_at'] is None:
+                # Target won't be reached - apply course correction
+                final_temp_predicted = trajectory['equilibrium_temp']
+                temp_error = target_indoor - final_temp_predicted
+                
+                if temp_error > 0.1:  # Need more heating
+                    # GENTLE ADDITIVE TRAJECTORY CORRECTION:
+                    # Inspired by heat curve logic but scaled for direct outlet temp adjustment
+                    # Much more reasonable than multiplicative approach
+                    # - Small trajectory error (≤0.5°C): +5°C per degree
+                    # - Medium trajectory error (0.5-1.0°C): +8°C per degree 
+                    # - Large trajectory error (>1.0°C): +12°C per degree
+                    
+                    if temp_error <= 0.5:
+                        correction_amount = temp_error * 5.0  # +5°C per degree - gentle
+                        correction_type = "gentle"
+                    elif temp_error <= 1.0:
+                        correction_amount = temp_error * 8.0  # +8°C per degree - moderate
+                        correction_type = "moderate_push"
+                    else:
+                        correction_amount = temp_error * 12.0  # +12°C per degree - aggressive
+                        correction_type = "big_heat_push"
+                    
+                    corrected_outlet = outlet_temp + correction_amount
+                    
+                    # Apply bounds
+                    corrected_outlet = min(corrected_outlet, config.CLAMP_MAX_ABS)
+                    
+                    logging.info(f"🎯 Trajectory correction ({correction_type}): {outlet_temp:.1f}°C → {corrected_outlet:.1f}°C "
+                                f"(predicted equilibrium: {final_temp_predicted:.1f}°C, target: {target_indoor:.1f}°C, "
+                                f"trajectory_error: {temp_error:.1f}°C, correction: +{correction_amount:.1f}°C)")
+                    
+                    return corrected_outlet
+            else:
+                logging.debug(f"✅ Trajectory verification: target reached in {trajectory['reaches_target_at']}h")
+            
+            return outlet_temp
+            
+        except Exception as e:
+            logging.error(f"Trajectory verification failed: {e}")
+            return outlet_temp  # Return original if verification fails
     
     # This method is no longer needed - thermal state is loaded in ThermalEquilibriumModel
     

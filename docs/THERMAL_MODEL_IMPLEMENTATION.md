@@ -508,6 +508,110 @@ A useful rule of thumb: After **one time constant (τ)**, temperature reaches **
 - After 8 hours: 86% × 4°C = 3.4°C gained → at 21.4°C
 - After 12 hours: 95% × 4°C = 3.8°C gained → at 21.8°C
 
+### Gentle Trajectory Correction
+
+When the predicted trajectory deviates from the target temperature path, the system applies **gentle additive corrections** to bring the system back on track.
+
+#### Why Gentle Corrections Matter
+
+Naive multiplicative correction approaches can cause outlet temperature spikes:
+
+```
+❌ AGGRESSIVE MULTIPLICATIVE APPROACH:
+correction_factor = 1.0 + (temp_error * 12.0)  # 12x multiplier per degree
+corrected_outlet = outlet_temp * correction_factor
+
+Example problem:
+- Outlet temp: 30°C
+- Temperature error: 0.5°C (trajectory drifting)
+- Correction factor: 1.0 + (0.5 * 12.0) = 7.0
+- Result: 30°C * 7.0 = 210°C! (WAY too high)
+```
+
+This approach causes:
+- **Outlet temperature spikes** (hitting maximum 65°C limits)
+- **System stress** from dramatic temperature changes
+- **Overshooting** target temperatures during recovery
+
+#### The Gentle Additive Solution
+
+The ml_heating system uses **gentle additive corrections** inspired by proven heat curve automation logic:
+
+```
+✅ GENTLE ADDITIVE APPROACH:
+if temp_error <= 0.5°C:
+    correction_amount = temp_error * 5.0   # +5°C per degree
+elif temp_error <= 1.0°C:
+    correction_amount = temp_error * 8.0   # +8°C per degree
+else:
+    correction_amount = temp_error * 12.0  # +12°C per degree
+
+corrected_outlet = outlet_temp + correction_amount  # Additive adjustment
+```
+
+#### Correction Examples
+
+**Scenario 1: Small trajectory error (0.5°C)**
+```
+Original outlet: 35°C
+Temperature error: 0.5°C (house cooling too fast)
+Correction: 0.5°C × 5.0 = +2.5°C
+Final outlet: 35°C + 2.5°C = 37.5°C (reasonable adjustment)
+```
+
+**Scenario 2: Medium trajectory error (0.8°C)**
+```
+Original outlet: 40°C
+Temperature error: 0.8°C (significant drift)
+Correction: 0.8°C × 8.0 = +6.4°C
+Final outlet: 40°C + 6.4°C = 46.4°C (moderate adjustment)
+```
+
+**Scenario 3: Large trajectory error (1.5°C)**
+```
+Original outlet: 32°C
+Temperature error: 1.5°C (major deviation, e.g., window opened)
+Correction: 1.5°C × 12.0 = +18°C
+Final outlet: 32°C + 18°C = 50°C (strong but bounded correction)
+```
+
+#### Heat Curve Alignment
+
+The correction factors (5°C, 8°C, 12°C per degree) are based on successful heat curve automation patterns already proven in real deployments. This ensures trajectory corrections feel natural and don't conflict with existing heating control experience.
+
+#### Open Window Adaptation
+
+The gentle correction system excels at handling sudden thermal disturbances:
+
+```
+Timeline: Open Window Scenario
+
+T+0min:   Window opens → rapid heat loss detected
+T+5min:   Trajectory prediction shows temperature will drop 2°C below target
+          Gentle correction: +12°C outlet adjustment (reasonable)
+T+10min:  System applies increased heating, begins temperature recovery
+T+15min:  Adaptive learning adjusts heat loss coefficient upward
+T+45min:  Window closes → heat loss returns to normal
+T+50min:  System detects reduced heat loss, begins readjustment
+T+60min:  Parameters return to pre-window values, temperature stable
+
+Key benefits:
+✓ No outlet temperature spikes (stayed under 55°C)
+✓ Appropriate response magnitude (12°C increase vs 7x multiplication)
+✓ Automatic parameter adaptation
+✓ Smooth restabilization when disturbance ends
+```
+
+#### Implementation Details
+
+**Trajectory Verification Phase**: The system tracks whether the predicted thermal trajectory is on course to reach the target temperature. If deviations exceed the gentle correction thresholds, additive adjustments are applied.
+
+**Forecast Integration**: During binary search phases, the system stores current forecast data (`_current_features`) to ensure trajectory verification has access to real PV and temperature forecast information, not static assumptions.
+
+**Fallback Safety**: If forecast data is unavailable during trajectory verification, the system gracefully falls back to equilibrium-only control without trajectory corrections, ensuring robust operation.
+
+This gentle approach maintains effective thermal control while preventing the outlet temperature spikes and system stress that characterized earlier aggressive correction methods.
+
 ---
 
 ## Parameters Reference

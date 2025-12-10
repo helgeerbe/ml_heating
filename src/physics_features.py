@@ -112,42 +112,62 @@ def build_physics_features(
         config.TV_STATUS_ENTITY_ID, all_states, is_binary=True
     ) or False
     
-    # Forecasts
+    # FIXED: PV Forecasts with correct 'watts' attribute parsing
     pv_forecasts = [0.0, 0.0, 0.0, 0.0]
     if config.PV_FORECAST_ENTITY_ID:
         try:
-            # Get attributes directly from state cache
-            from datetime import timezone
+            from datetime import timezone, timedelta
             
             pv_state = all_states.get(config.PV_FORECAST_ENTITY_ID)
             pv_forecast_data = (pv_state.get("attributes") 
                                if pv_state else None)
-            if pv_forecast_data and "forecast" in pv_forecast_data:
+            
+            # CORRECT: Look for 'watts' attribute, not 'forecast'
+            if pv_forecast_data and "watts" in pv_forecast_data:
                 now = datetime.now(timezone.utc)
-                fc = pv_forecast_data["forecast"]
-                forecast_dict = {
-                    pd.Timestamp(e["period_start"]): e["pv_estimate"] 
-                    for e in fc 
-                    if "period_start" in e and "pv_estimate" in e
-                }
+                watts_data = pv_forecast_data["watts"]
+                
+                # Convert timestamp strings to pandas timestamps
+                forecast_dict = {}
+                for ts_str, watts in watts_data.items():
+                    try:
+                        # Parse ISO timestamp (handles timezone offsets)
+                        ts = datetime.fromisoformat(ts_str)
+                        forecast_dict[pd.Timestamp(ts)] = float(watts)
+                    except Exception as e_parse:
+                        logging.debug(f"Could not parse timestamp {ts_str}: {e_parse}")
+                        continue
+                        
                 if forecast_dict:
                     s = pd.Series(forecast_dict, dtype=float).sort_index()
                     
-                    # Average over each hour
-                    anchors = [
-                        pd.Timestamp(now) + pd.Timedelta(hours=i) 
-                        for i in range(1, 5)
-                    ]
+                    # Calculate hourly averages for next 4 hours
                     hourly = []
-                    for a in anchors:
-                        start = a
-                        end = a + pd.Timedelta("1h")
-                        slice_vals = s[(s.index >= start) & (s.index < end)]
-                        hourly.append(
-                            float(slice_vals.mean()) 
-                            if not slice_vals.empty else 0.0
-                        )
+                    for hour in range(1, 5):
+                        hour_start = now + timedelta(hours=hour)
+                        hour_end = hour_start + timedelta(hours=1)
+                        
+                        # Find all entries in this hour window
+                        hour_entries = []
+                        for ts, watts in s.items():
+                            # Convert to UTC for comparison
+                            ts_utc = ts.tz_convert('UTC') if ts.tz else ts.tz_localize('UTC')
+                            if hour_start <= ts_utc < hour_end:
+                                hour_entries.append(watts)
+                        
+                        if hour_entries:
+                            avg_watts = sum(hour_entries) / len(hour_entries)
+                            hourly.append(round(avg_watts, 1))
+                        else:
+                            hourly.append(0.0)
+                    
                     pv_forecasts = hourly
+                    logging.debug(f"PV forecast parsed successfully: {pv_forecasts}W")
+                else:
+                    logging.debug("No valid PV forecast timestamps parsed")
+            else:
+                logging.debug(f"PV forecast entity missing 'watts' attribute: {list(pv_forecast_data.keys()) if pv_forecast_data else 'no attributes'}")
+                
         except Exception as e:
             logging.debug(f"Could not fetch PV forecast: {e}")
             pv_forecasts = [0.0, 0.0, 0.0, 0.0]

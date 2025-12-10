@@ -35,10 +35,12 @@ The primary goal is to improve upon traditional heat curves by creating a **self
 ### Intelligent Control
 
 -   **Enhanced Model Wrapper:** Intelligent prediction system that replaces complex control logic with simplified outlet temperature prediction
+-   **Gentle Trajectory Correction:** Intelligent additive correction system that prevents outlet temperature spikes during thermal trajectory deviations, using proven heat curve automation logic (5°C/8°C/12°C per degree) instead of aggressive multiplicative factors
 -   **Smart Rounding:** Tests both floor and ceiling temperatures, predicts outcomes, chooses the one that gets closest to target
 -   **Gradual Temperature Control:** Limits maximum temperature change per cycle to protect heat pump from abrupt setpoint jumps
 -   **Differential-Based Effectiveness:** Heat transfer effectiveness scales with outlet-indoor temperature differential for accurate low-differential scenarios
 -   **Adaptive Learning:** Model parameters continuously adjust based on prediction feedback to improve accuracy over time
+-   **Open Window Adaptation:** System automatically detects sudden heat loss changes (like opened windows) and applies gentle corrections, then restabilizes when disturbances end
 
 ### Safety & Robustness
 
