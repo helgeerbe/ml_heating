@@ -156,7 +156,8 @@ def validate_thermal_model():
                 current_indoor=21.0,  # Fixed test indoor temperature
                 pv_power=0,
                 fireplace_on=0,
-                tv_on=0
+                tv_on=0,
+                _suppress_logging=True
             )
             monotonic_check.append(equilibrium)
             print(f"{outlet_temp:3d}°C       → {equilibrium:.2f}°C")
@@ -216,7 +217,8 @@ def validate_thermal_model():
         for _ in range(5):
             predicted = thermal_model.predict_equilibrium_temperature(
                 current_indoor=21.0,  # Default indoor temp for test
-                **test_context
+                **test_context,
+                _suppress_logging=True
             )
             actual = predicted + 0.1  # Small error
             thermal_model.update_prediction_feedback(
@@ -528,7 +530,8 @@ def debug_thermal_predictions(stable_periods, sample_size=5):
             current_indoor=period.get('indoor_temp', period['outdoor_temp'] + 10.0),
             pv_power=period['pv_power'],
             fireplace_on=period['fireplace_on'],
-            tv_on=period['tv_on']
+            tv_on=period['tv_on'],
+            _suppress_logging=True
         )
         
         actual_temp = period['indoor_temp']
@@ -694,7 +697,8 @@ def optimize_thermal_parameters(stable_periods):
                     current_indoor=period.get('indoor_temp', period['outdoor_temp'] + 10.0),
                     pv_power=period['pv_power'],
                     fireplace_on=period['fireplace_on'],
-                    tv_on=period['tv_on']
+                    tv_on=period['tv_on'],
+                    _suppress_logging=True
                 )
                 
                 # Calculate error

@@ -59,7 +59,7 @@ class EnhancedModelWrapper:
         metrics = self.state_manager.get_learning_metrics()
         self.cycle_count = metrics['current_cycle_count']
         
-        logging.info("🎯 Enhanced Model Wrapper initialized with "
+        logging.info("🎯 Model Wrapper initialized with "
                     "ThermalEquilibriumModel")
         logging.info(f"   - Thermal time constant: "
                     f"{self.thermal_model.thermal_time_constant:.1f}h")
@@ -128,7 +128,8 @@ class EnhancedModelWrapper:
                 current_indoor=current_indoor,
                 pv_power=pv_power,
                 fireplace_on=fireplace_on,
-                tv_on=tv_on
+                tv_on=tv_on,
+                _suppress_logging=True
             )
             
             # CRITICAL FIX: Handle None return from predict_equilibrium_temperature
@@ -175,19 +176,14 @@ class EnhancedModelWrapper:
                 'cycle_count': self.cycle_count
             }
             
-            if optimal_outlet_temp is not None:
-                logging.info(
-                    f"Enhanced prediction: {current_indoor:.2f}°C → {target_indoor:.1f}°C "
-                    f"requires {optimal_outlet_temp:.1f}°C (confidence: {confidence:.3f})"
-                )
-            else:
+            if optimal_outlet_temp is None:
                 logging.warning("Failed to calculate optimal outlet temperature")
                 optimal_outlet_temp = 35.0  # Safe fallback
             
             return optimal_outlet_temp, prediction_metadata
             
         except Exception as e:
-            logging.error(f"Enhanced prediction failed: {e}", exc_info=True)
+            logging.error(f"Prediction failed: {e}", exc_info=True)
             # Fallback to safe temperature
             fallback_temp = 35.0
             fallback_metadata = {
@@ -244,7 +240,7 @@ class EnhancedModelWrapper:
             avg_outdoor = sum(outdoor_forecast) / len(outdoor_forecast)
             avg_pv = sum(pv_forecast) / len(pv_forecast)
             
-            logging.debug(f"🌡️ Using forecast conditions: outdoor={avg_outdoor:.1f}°C "
+            logging.info(f"🌡️ Using forecast conditions: outdoor={avg_outdoor:.1f}°C "
                         f"(vs current {outdoor_temp:.1f}°C), PV={avg_pv:.0f}W "
                         f"(vs current {pv_power:.0f}W)")
         else:
@@ -262,11 +258,9 @@ class EnhancedModelWrapper:
     def _calculate_required_outlet_temp(self, current_indoor: float, target_indoor: float, 
                                       outdoor_temp: float, thermal_features: Dict) -> float:
         """Calculate the outlet temperature required to reach target indoor temperature using learned thermal model."""
-        # If we're already at target, use moderate heating
-        if abs(current_indoor - target_indoor) < 0.1:
-            logging.debug(f"Already at target ({current_indoor:.1f}°C ≈ {target_indoor:.1f}°C), using 35.0°C")
-            return 35.0
-            
+        # REMOVED: "Already at target" bypass logic - let physics model always calculate proper outlet temp
+        # The thermal model should determine maintenance requirements based on actual conditions
+        
         # Use the calibrated thermal model to find required outlet temperature
         # This leverages the 26 days of learned parameters instead of simple heuristics
         pv_power = thermal_features.get('pv_power', 0.0)
@@ -277,14 +271,11 @@ class EnhancedModelWrapper:
         # This uses the learned thermal physics parameters from calibration
         tolerance = 0.1  # °C
         
-        # PHYSICS FIX: Ensure outlet temperature is always above current indoor temperature
-        # For heating, outlet MUST be higher than indoor to transfer heat
-        physics_min_outlet = current_indoor + 3.0  # At least 3°C above indoor for effective heating
-        outlet_min = max(config.CLAMP_MIN_ABS, physics_min_outlet)
+        # Use natural system bounds - let binary search and physics model handle optimal outlet temps
+        outlet_min = config.CLAMP_MIN_ABS
         outlet_max = config.CLAMP_MAX_ABS
         
-        logging.debug(f"🔧 Physics-corrected bounds: outlet_min={outlet_min:.1f}°C "
-                     f"(was {config.CLAMP_MIN_ABS:.1f}°C, physics_min={physics_min_outlet:.1f}°C), "
+        logging.debug(f"🔧 Using natural bounds: outlet_min={outlet_min:.1f}°C, "
                      f"outlet_max={outlet_max:.1f}°C")
         
         
@@ -302,7 +293,8 @@ class EnhancedModelWrapper:
                 current_indoor=current_indoor,
                 pv_power=avg_pv,  # Use forecast average for consistency
                 fireplace_on=fireplace_on,
-                tv_on=tv_on
+                tv_on=tv_on,
+                _suppress_logging=True
             )
             
             # Check what maximum outlet temp produces  
@@ -312,7 +304,8 @@ class EnhancedModelWrapper:
                 current_indoor=current_indoor,
                 pv_power=avg_pv,  # Use forecast average for consistency
                 fireplace_on=fireplace_on,
-                tv_on=tv_on
+                tv_on=tv_on,
+                _suppress_logging=True
             )
             
             if min_prediction is not None and max_prediction is not None:
@@ -359,7 +352,8 @@ class EnhancedModelWrapper:
                     current_indoor=current_indoor,
                     pv_power=avg_pv,  # Use forecast average for consistency
                     fireplace_on=fireplace_on,
-                    tv_on=tv_on
+                    tv_on=tv_on,
+                    _suppress_logging=True
                 )
                 
                 # PHASE 5 FIX: Handle None returns from predict_equilibrium_temperature
@@ -385,6 +379,17 @@ class EnhancedModelWrapper:
                 logging.info(f"✅ Binary search converged after {iteration+1} iterations: "
                            f"{outlet_mid:.1f}°C → {predicted_indoor:.2f}°C "
                            f"(target: {target_indoor:.1f}°C, error: {error:.3f}°C)")
+                
+                # Show final equilibrium physics for the converged result
+                final_physics = self.thermal_model.predict_equilibrium_temperature(
+                    outlet_temp=outlet_mid,
+                    outdoor_temp=avg_outdoor,
+                    current_indoor=current_indoor,
+                    pv_power=avg_pv,
+                    fireplace_on=fireplace_on,
+                    tv_on=tv_on,
+                    _suppress_logging=False  # Show the equilibrium physics logging
+                )
                 
                 # NEW: Trajectory verification and course correction
                 if config.TRAJECTORY_PREDICTION_ENABLED:
@@ -418,7 +423,8 @@ class EnhancedModelWrapper:
                 current_indoor=current_indoor,
                 pv_power=avg_pv,  # Use forecast average for consistency
                 fireplace_on=fireplace_on,
-                tv_on=tv_on
+                tv_on=tv_on,
+                _suppress_logging=True
             )
             
             # PHASE 5 FIX: Handle None return for final prediction
@@ -493,9 +499,7 @@ class EnhancedModelWrapper:
                     tv_on=thermal_features.get('tv_on', 0.0)
                 )
                 
-                logging.debug(f"🌡️ Using forecast averages: outdoor={avg_outdoor:.1f}°C "
-                            f"(vs current {outdoor_temp:.1f}°C), PV={avg_pv:.0f}W "
-                            f"(vs current {thermal_features.get('pv_power', 0.0):.0f}W)")
+                # Forecast averages already logged by _get_forecast_conditions()
             
             # ENHANCED LOGIC: Check for multiple failure modes
             needs_correction = False
@@ -504,7 +508,7 @@ class EnhancedModelWrapper:
             
             # PRIORITY 1: If trajectory shows target will be reached, don't apply corrections
             if trajectory['reaches_target_at'] is not None:
-                logging.debug(f"✅ Trajectory shows target will be reached at {trajectory['reaches_target_at']}h - no correction needed")
+                logging.info(f"✅ Trajectory shows target will be reached at {trajectory['reaches_target_at']}h - no correction needed")
                 return outlet_temp
             
             # PRIORITY 2: Target won't be reached at all
@@ -883,10 +887,10 @@ def get_enhanced_model_wrapper() -> EnhancedModelWrapper:
     global _enhanced_model_wrapper_instance
     
     if _enhanced_model_wrapper_instance is None:
-        logging.info("🔧 Creating new Enhanced Model Wrapper instance (singleton)")
+        logging.info("🔧 Creating new Model Wrapper instance (singleton)")
         _enhanced_model_wrapper_instance = EnhancedModelWrapper()
     else:
-        logging.debug("♻️ Reusing existing Enhanced Model Wrapper instance")
+        logging.debug("♻️ Reusing existing Model Wrapper instance")
         
     return _enhanced_model_wrapper_instance
 
@@ -933,7 +937,7 @@ def simplified_outlet_prediction(
         metadata['thermal_trust_metrics'] = thermal_trust_metrics
         
         logging.info(
-            f"✨ Simplified prediction: {current_temp:.2f}°C → {target_temp:.1f}°C "
+            f"🎯 Prediction: {current_temp:.2f}°C → {target_temp:.1f}°C "
             f"requires {outlet_temp:.1f}°C (confidence: {confidence:.3f})"
         )
         

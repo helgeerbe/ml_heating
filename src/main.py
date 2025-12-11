@@ -371,8 +371,13 @@ def main(args):
                     )
                     
                     # Shadow mode error tracking removed - handled by ThermalEquilibriumModel
-                    if shadow_mode_active and actual_applied_temp != last_final_temp_stored:
-                        logging.debug(
+                    # Only log shadow mode comparison when actually in shadow mode (not active mode)
+                    effective_shadow_mode = (
+                        config.SHADOW_MODE or 
+                        not ha_client.get_state(config.ML_HEATING_CONTROL_ENTITY_ID, all_states, is_binary=True)
+                    )
+                    if effective_shadow_mode and actual_applied_temp != last_final_temp_stored:
+                        logging.info(
                             "Shadow mode: ML would have set %.1f°C, HC set %.1f°C",
                             last_final_temp_stored, actual_applied_temp
                         )
@@ -841,7 +846,7 @@ def main(args):
             
             # Log simplified prediction info
             logging.info(
-                "Enhanced Model Wrapper: temp=%.1f°C, error=%.3f°C, confidence=%.3f",
+                "Model Wrapper: temp=%.1f°C, error=%.3f°C, confidence=%.3f",
                 suggested_temp,
                 abs(error_target_vs_actual),
                 confidence

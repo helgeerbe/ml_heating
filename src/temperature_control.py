@@ -36,7 +36,7 @@ class TemperaturePredictor:
         
         # Log simplified prediction info
         logging.info(
-            "Enhanced Model Wrapper: temp=%.1f°C, error=%.3f°C, confidence=%.3f",
+            "Model Wrapper: temp=%.1f°C, error=%.3f°C, confidence=%.3f",
             suggested_temp, abs(error_target_vs_actual), confidence
         )
         
@@ -293,12 +293,15 @@ class OnlineLearning:
     def _log_shadow_mode_comparison(self, actual_applied_temp: float, 
                                   last_final_temp_stored: float) -> None:
         """Log shadow mode comparison if applicable"""
-        shadow_mode_active = (
+        # Only log comparison when actually in shadow mode (not active mode)
+        # In active mode, ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID reads what ML itself set
+        effective_shadow_mode = (
+            config.SHADOW_MODE or 
             config.TARGET_OUTLET_TEMP_ENTITY_ID != config.ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID
         )
         
-        if shadow_mode_active and actual_applied_temp != last_final_temp_stored:
-            logging.debug(
+        if effective_shadow_mode and actual_applied_temp != last_final_temp_stored:
+            logging.info(
                 "Shadow mode: ML would have set %.1f°C, HC set %.1f°C",
                 last_final_temp_stored, actual_applied_temp
             )
