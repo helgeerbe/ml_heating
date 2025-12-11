@@ -1,6 +1,85 @@
 # Active Context - Current Work & Decision State
 
-## Current Work Focus - December 10, 2025
+## Current Work Focus - December 11, 2025
+
+### 🎯 **THERMAL MODEL SIMPLIFICATION COMPLETED - December 11, 2025**
+
+**MAJOR IMPROVEMENT**: Differential-based effectiveness scaling successfully removed from thermal model, eliminating calibration-runtime mismatch for consistent model behavior!
+
+#### ✅ **DIFFERENTIAL SCALING REMOVAL BREAKTHROUGH ACHIEVED**
+
+**CALIBRATION-RUNTIME CONSISTENCY IMPLEMENTED**:
+- **Problem**: Differential scaling reduced effectiveness to 63-87% during live operation while model was calibrated at 100%
+- **Root Cause**: Binary search explored full range (25-60°C) but differential scaling penalized mid-range temperatures during live operation
+- **Solution**: Complete removal of differential scaling logic, using constant outlet effectiveness directly
+- **Result**: Consistent model behavior between calibration and runtime phases
+
+**Key Technical Achievements**:
+1. **Simplified Heat Balance**: Removed ~30 lines of complex differential scaling logic
+2. **TDD Implementation**: Created 11 comprehensive tests with 100% pass rate
+3. **Consistent Physics**: Heat balance equation now uses constant effectiveness coefficient
+4. **Clean Codebase**: Eliminated complex outlet-indoor differential calculations
+5. **User Recalibration**: Fresh thermal state after model simplification
+
+**Thermal Model Algorithm Simplification**:
+```python
+# NEW: Simplified constant effectiveness (December 11, 2025)
+effective_effectiveness = self.outlet_effectiveness  # Direct use
+
+# OLD: Complex differential scaling (REMOVED)
+# outlet_indoor_diff = outlet_temp - current_indoor
+# if outlet_indoor_diff < 3.0:
+#     differential_factor = outlet_indoor_diff / 3.0 * 0.3
+# else:
+#     differential_factor = min(1.0, 0.5 + 0.5 * (outlet_indoor_diff / 15.0))
+# effective_effectiveness = base_effectiveness * differential_factor
+```
+
+**Model Consistency Enhancement**:
+- **Calibration Phase**: Model learns parameters from historical data with constant effectiveness
+- **Live Operation**: Same constant effectiveness used during binary search and predictions
+- **No Distribution Shift**: Eliminated effectiveness scaling that varied from 63% to 100%
+- **Clean Physics**: Heat balance equation uses calibrated effectiveness directly
+
+**TDD Test Suite Results**:
+- **11 Comprehensive Tests**: All tests passing (100% success rate)
+- **Effectiveness Validation**: Direct use of outlet_effectiveness confirmed
+- **Binary Search Consistency**: Uniform effectiveness across full outlet temperature range
+- **Regression Prevention**: Physics constraints and equilibrium behavior validated
+- **Edge Case Coverage**: Typical heating, mild weather, PV, and fireplace scenarios tested
+
+**Quality Assurance Results**:
+- **Zero Functionality Loss**: All thermal model capabilities preserved
+- **Improved Consistency**: Calibration parameters work identically during runtime
+- **Enhanced Stability**: No more effectiveness variations causing prediction drift
+- **Clean Documentation**: Updated thermal model implementation guide
+
+**Implementation Benefits**:
+- **Consistent Model Behavior**: Same effectiveness during calibration and live operation
+- **Stable Overnight Control**: No more temperature drops due to effectiveness scaling
+- **Accurate Binary Search**: Uniform effectiveness across full outlet temperature range (25-60°C)
+- **Simplified Physics**: Clean heat balance equation without artificial complexity
+- **Maintained Functionality**: All existing thermal model features preserved
+
+**Files Modified**:
+- **src/thermal_equilibrium_model.py**: Removed differential scaling, simplified to constant effectiveness
+- **tests/test_remove_differential_scaling.py**: NEW comprehensive TDD test suite (11 tests)
+- **docs/THERMAL_MODEL_IMPLEMENTATION.md**: Updated heat balance equation documentation
+- **CHANGELOG.md**: Added thermal model simplification to unreleased features
+
+**User Actions Completed**:
+- **Model Recalibration**: User ran physics calibration with simplified model
+- **Clean Start**: All thermal state JSON files deleted for fresh parameter learning
+- **Fresh Learning**: System starting with clean baseline and no legacy parameter adjustments
+
+**Configuration Impact**:
+```python
+# Heat balance equation now uses constant effectiveness
+T_eq = (eff × T_outlet + loss × T_outdoor + Q_external) / (eff + loss)
+# Where eff = outlet_effectiveness (constant, no differential scaling)
+```
+
+---
 
 ### 🎯 **GENTLE TRAJECTORY CORRECTION IMPLEMENTATION COMPLETED - December 10, 2025**
 

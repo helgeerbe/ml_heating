@@ -205,7 +205,7 @@ Heat from outlet + External heat = Heat loss to outdoor
 Mathematically:
 
 ```
-eff × (T_outlet - T_eq) + Q_external = loss × (T_eq - T_outdoor)
+eff × T_outlet + Q_external = loss × (T_eq - T_outdoor)
 ```
 
 Solving for equilibrium temperature **T_eq**:
@@ -220,7 +220,7 @@ Where:
 - **T_eq** = Equilibrium temperature (what we're calculating)
 - **T_outlet** = Heat pump outlet temperature (°C)
 - **T_outdoor** = Outdoor temperature (°C)
-- **eff** = Outlet effectiveness (how efficiently heat transfers to the room)
+- **eff** = Outlet effectiveness (constant coefficient)
 - **loss** = Heat loss coefficient (how quickly heat escapes)
 - **Q_external** = External heat gains (solar, fireplace, electronics)
 

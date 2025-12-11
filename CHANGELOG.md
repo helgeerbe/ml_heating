@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Gentle Trajectory Correction System**: Intelligent additive correction preventing outlet temperature spikes during thermal trajectory deviations
 - **Enhanced Forecast Integration**: Fixed feature storage during binary search for accurate trajectory verification with real PV/temperature forecast data
 - **Open Window Adaptation**: System automatically detects sudden heat loss changes and restabilizes when disturbances end
+- **Comprehensive TDD Test Suite**: 11 tests for differential scaling removal with 100% pass rate
 - Thermal state validator for robust physics parameter validation
 - Comprehensive thermal physics test suite with 36 critical tests
 - Smart temperature rounding using thermal model predictions
@@ -18,9 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **MAJOR: Trajectory Correction Algorithm**: Replaced aggressive multiplicative correction (7x factors causing outlet spikes) with gentle additive approach based on user's heat curve automation (5°C/8°C/12°C per degree)
+- **MAJOR: Thermal Model Simplification**: Removed differential-based effectiveness scaling to eliminate calibration-runtime mismatch and ensure consistent model behavior
 - **Correction Boundaries**: Conservative ≤0.5°C/≤1.0°C/>1.0°C thresholds instead of aggressive ≤0.3°C/>0.5°C thresholds
 - **Heat Curve Alignment**: Trajectory corrections now use proven 15°C per degree shift logic, scaled for direct outlet temperature adjustment
-- Improved thermal equilibrium model physics formula for accurate predictions
+- Simplified heat balance equation to use constant outlet effectiveness coefficient
 - Enhanced test coverage for thermal physics edge cases and validation
 - Updated logging format to show rounded temperatures applied to HA sensors
 

@@ -203,26 +203,8 @@ class ThermalEquilibriumModel:
         Heat Balance at equilibrium:
         effective_heat_transfer + external_thermal_power = heat_loss_to_outdoor
         """
-        # Calculate outlet-indoor differential for effectiveness scaling
-        outlet_indoor_diff = outlet_temp - current_indoor
-        
-        # PHYSICS 3.3: Implement differential-based effectiveness scaling
-        base_effectiveness = self.outlet_effectiveness
-        
-        # PHYSICS 3.4: Add minimum differential threshold for effective heating
-        min_effective_diff = 3.0  # Below 3°C differential, heating becomes ineffective
-        
-        if abs(outlet_indoor_diff) < min_effective_diff:
-            # Very low differential - minimal heating effect
-            differential_factor = abs(outlet_indoor_diff) / min_effective_diff * 0.3  # Max 30% effectiveness
-        else:
-            # Normal differential - use physics-based scaling
-            # Heat transfer effectiveness increases with temperature differential
-            # Using logarithmic scaling to prevent unrealistic high values
-            differential_factor = min(1.0, 0.5 + 0.5 * (abs(outlet_indoor_diff) / 15.0))
-        
-        # Apply differential scaling to effectiveness
-        effective_effectiveness = base_effectiveness * differential_factor
+        # Use calibrated effectiveness directly (no differential scaling)
+        effective_effectiveness = self.outlet_effectiveness
         
         # External heat sources - these are thermal power contributions
         heat_from_pv = pv_power * self.external_source_weights.get('pv', 0.0)
@@ -254,12 +236,10 @@ class ThermalEquilibriumModel:
             # No temperature difference from outlet, only external heat contributes
             equilibrium_temp = outdoor_temp + external_thermal_power / loss if loss > 0 else outdoor_temp
         
-        # PHYSICS 3.5: Debug logging for low differential scenarios
-        if abs(outlet_indoor_diff) < 10.0:  # Log when differential is low
-            logging.debug(f"🔬 Low differential physics: outlet={outlet_temp:.1f}°C, "
-                         f"indoor={current_indoor:.1f}°C, diff={outlet_indoor_diff:.1f}°C, "
-                         f"base_eff={base_effectiveness:.3f}, effective_eff={eff:.3f}, "
-                         f"factor={differential_factor:.3f}, equilibrium={equilibrium_temp:.2f}°C")
+        # Simplified physics logging (differential scaling removed)
+        logging.debug(f"🔬 Equilibrium physics: outlet={outlet_temp:.1f}°C, "
+                     f"outdoor={outdoor_temp:.1f}°C, effectiveness={eff:.3f}, "
+                     f"equilibrium={equilibrium_temp:.2f}°C")
             
         return equilibrium_temp
 
@@ -832,7 +812,10 @@ class ThermalEquilibriumModel:
         Without this, all learning is lost on restart.
         """
         try:
-            from .unified_thermal_state import get_thermal_state_manager
+            try:
+                from .unified_thermal_state import get_thermal_state_manager
+            except ImportError:
+                from unified_thermal_state import get_thermal_state_manager
             
             # Get baseline parameters to calculate deltas
             state_manager = get_thermal_state_manager()
@@ -859,6 +842,7 @@ class ThermalEquilibriumModel:
                          
         except Exception as e:
             logging.error(f"❌ Failed to save learning to thermal state: {e}")
+
 
     def reset_adaptive_learning(self):
         """Reset adaptive learning state with aggressive initial settings."""
