@@ -189,7 +189,7 @@ class ThermalEquilibriumModel:
 
     def predict_equilibrium_temperature(self, outlet_temp: float, outdoor_temp: float,
                                        current_indoor: float, pv_power: float = 0, fireplace_on: float = 0,
-                                       tv_on: float = 0) -> float:
+                                       tv_on: float = 0, _suppress_logging: bool = False) -> float:
         """
         ENHANCED PHYSICS: Predict equilibrium using differential-based effectiveness model.
         
@@ -202,6 +202,9 @@ class ThermalEquilibriumModel:
         
         Heat Balance at equilibrium:
         effective_heat_transfer + external_thermal_power = heat_loss_to_outdoor
+        
+        Args:
+            _suppress_logging: If True, suppress debug logging (used in gradient calculations)
         """
         # Use calibrated effectiveness directly (no differential scaling)
         effective_effectiveness = self.outlet_effectiveness
@@ -236,10 +239,11 @@ class ThermalEquilibriumModel:
             # No temperature difference from outlet, only external heat contributes
             equilibrium_temp = outdoor_temp + external_thermal_power / loss if loss > 0 else outdoor_temp
         
-        # Simplified physics logging (differential scaling removed)
-        logging.debug(f"🔬 Equilibrium physics: outlet={outlet_temp:.1f}°C, "
-                     f"outdoor={outdoor_temp:.1f}°C, effectiveness={eff:.3f}, "
-                     f"equilibrium={equilibrium_temp:.2f}°C")
+        # Only log for primary predictions, not gradient calculations
+        if not _suppress_logging:
+            logging.info(f"🔬 Equilibrium physics: outlet={outlet_temp:.1f}°C, "
+                         f"outdoor={outdoor_temp:.1f}°C, effectiveness={eff:.3f}, "
+                         f"equilibrium={equilibrium_temp:.2f}°C")
             
         return equilibrium_temp
 
@@ -427,7 +431,8 @@ class ThermalEquilibriumModel:
                 context['current_indoor'],
                 pv_power=context.get('pv_power', 0),
                 fireplace_on=context.get('fireplace_on', 0),
-                tv_on=context.get('tv_on', 0)
+                tv_on=context.get('tv_on', 0),
+                _suppress_logging=True
             )
             
             # Backward difference
@@ -438,7 +443,8 @@ class ThermalEquilibriumModel:
                 context['current_indoor'],
                 pv_power=context.get('pv_power', 0),
                 fireplace_on=context.get('fireplace_on', 0),
-                tv_on=context.get('tv_on', 0)
+                tv_on=context.get('tv_on', 0),
+                _suppress_logging=True
             )
             
             # Restore original parameter
@@ -564,7 +570,8 @@ class ThermalEquilibriumModel:
                 current_indoor=current_temp,
                 pv_power=future_pv,
                 fireplace_on=fireplace_on,
-                tv_on=tv_on
+                tv_on=tv_on,
+                _suppress_logging=True
             )
             
             # Apply thermal dynamics - exponential approach to equilibrium
@@ -806,10 +813,10 @@ class ThermalEquilibriumModel:
     
     def _save_learning_to_thermal_state(self):
         """
-        CRITICAL FIX: Save learned parameter adjustments to unified thermal state.
+        FIXED: Save learned parameter adjustments to unified thermal state.
         
-        This bridges the gap between in-memory adaptive learning and persistent storage.
-        Without this, all learning is lost on restart.
+        BUGFIX: Properly accumulate parameter deltas instead of recalculating from baseline.
+        This prevents parameter drift during service restarts.
         """
         try:
             try:
@@ -817,28 +824,60 @@ class ThermalEquilibriumModel:
             except ImportError:
                 from unified_thermal_state import get_thermal_state_manager
             
-            # Get baseline parameters to calculate deltas
             state_manager = get_thermal_state_manager()
             baseline = state_manager.state["baseline_parameters"]
+            learning_state = state_manager.state.get("learning_state", {})
             
-            # Calculate parameter deltas from baseline
-            thermal_delta = self.thermal_time_constant - baseline["thermal_time_constant"]
-            heat_loss_delta = self.heat_loss_coefficient - baseline["heat_loss_coefficient"]
-            effectiveness_delta = self.outlet_effectiveness - baseline["outlet_effectiveness"]
+            # FIXED: Get current deltas and calculate incremental changes
+            current_deltas = learning_state.get("parameter_adjustments", {})
+            current_thermal_delta = current_deltas.get('thermal_time_constant_delta', 0.0)
+            current_heat_loss_delta = current_deltas.get('heat_loss_coefficient_delta', 0.0)
+            current_effectiveness_delta = current_deltas.get('outlet_effectiveness_delta', 0.0)
             
-            # Update learning state with parameter adjustments
-            state_manager.update_learning_state(
-                learning_confidence=self.learning_confidence,
-                parameter_adjustments={
-                    'thermal_time_constant_delta': thermal_delta,
-                    'heat_loss_coefficient_delta': heat_loss_delta,
-                    'outlet_effectiveness_delta': effectiveness_delta
-                }
-            )
+            # Calculate expected values from baseline + current deltas
+            expected_thermal = baseline["thermal_time_constant"] + current_thermal_delta
+            expected_heat_loss = baseline["heat_loss_coefficient"] + current_heat_loss_delta
+            expected_effectiveness = baseline["outlet_effectiveness"] + current_effectiveness_delta
             
-            logging.debug(f"💾 Saved learning state: thermal_Δ={thermal_delta:+.3f}, "
-                         f"heat_loss_Δ={heat_loss_delta:+.5f}, "
-                         f"effectiveness_Δ={effectiveness_delta:+.3f}")
+            # Calculate NEW adjustments since last save
+            new_thermal_adjustment = self.thermal_time_constant - expected_thermal
+            new_heat_loss_adjustment = self.heat_loss_coefficient - expected_heat_loss
+            new_effectiveness_adjustment = self.outlet_effectiveness - expected_effectiveness
+            
+            # FIXED: Accumulate deltas instead of recalculating from baseline
+            updated_thermal_delta = current_thermal_delta + new_thermal_adjustment
+            updated_heat_loss_delta = current_heat_loss_delta + new_heat_loss_adjustment
+            updated_effectiveness_delta = current_effectiveness_delta + new_effectiveness_adjustment
+            
+            # Only save if there are meaningful new adjustments
+            if (abs(new_thermal_adjustment) > 0.001 or 
+                abs(new_heat_loss_adjustment) > 0.00001 or 
+                abs(new_effectiveness_adjustment) > 0.0001):
+                
+                # Update learning state with accumulated deltas
+                state_manager.update_learning_state(
+                    learning_confidence=self.learning_confidence,
+                    parameter_adjustments={
+                        'thermal_time_constant_delta': updated_thermal_delta,
+                        'heat_loss_coefficient_delta': updated_heat_loss_delta,
+                        'outlet_effectiveness_delta': updated_effectiveness_delta
+                    }
+                )
+                
+                logging.debug(f"💾 FIXED: Accumulated learning deltas: "
+                             f"thermal_Δ={updated_thermal_delta:+.3f} "
+                             f"(+{new_thermal_adjustment:+.3f}), "
+                             f"heat_loss_Δ={updated_heat_loss_delta:+.5f} "
+                             f"(+{new_heat_loss_adjustment:+.5f}), "
+                             f"effectiveness_Δ={updated_effectiveness_delta:+.3f} "
+                             f"(+{new_effectiveness_adjustment:+.3f})")
+            else:
+                # Still update confidence even if parameters didn't change significantly
+                state_manager.update_learning_state(
+                    learning_confidence=self.learning_confidence
+                )
+                logging.debug(f"💾 Updated learning confidence: {self.learning_confidence:.3f} "
+                             f"(no significant parameter changes)")
                          
         except Exception as e:
             logging.error(f"❌ Failed to save learning to thermal state: {e}")
