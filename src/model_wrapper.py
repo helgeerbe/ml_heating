@@ -23,12 +23,14 @@ try:
     from .unified_thermal_state import get_thermal_state_manager
     from .influx_service import create_influx_service
     from .prediction_metrics import PredictionMetrics
+    from .prediction_context import prediction_context_manager
     from . import config
 except ImportError:
     from thermal_equilibrium_model import ThermalEquilibriumModel
     from unified_thermal_state import get_thermal_state_manager
     from influx_service import create_influx_service
     from prediction_metrics import PredictionMetrics
+    from prediction_context import prediction_context_manager
     import config
 
 

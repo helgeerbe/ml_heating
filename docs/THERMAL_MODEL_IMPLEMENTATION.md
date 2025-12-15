@@ -566,6 +566,47 @@ A useful rule of thumb: After **one time constant (τ)**, temperature reaches **
 - After 8 hours: 86% × 4°C = 3.4°C gained → at 21.4°C
 - After 12 hours: 95% × 4°C = 3.8°C gained → at 21.8°C
 
+### Unified Prediction Consistency
+
+All prediction systems (binary search, smart rounding, and trajectory prediction) use a unified prediction context to ensure consistent environmental conditions across all heating control calculations.
+
+#### Unified Approach
+
+The system uses `UnifiedPredictionContext` service (`src/prediction_context.py`) that:
+
+1. **Creates standardized environmental contexts** for all prediction systems
+2. **Integrates forecast data when available** (4-hour outdoor temp and PV forecasts)
+3. **Falls back gracefully** to current conditions when forecasts unavailable
+4. **Ensures identical parameters** across binary search, smart rounding, and trajectory prediction
+
+**Implementation Example:**
+
+```python
+from src.prediction_context import UnifiedPredictionContext
+
+# Create unified context (used by all systems)
+context = UnifiedPredictionContext.create_prediction_context(
+    features=features,                    # Contains forecast data
+    outdoor_temp=5.0,                    # Current conditions
+    pv_power=0.0,
+    thermal_features={'fireplace_on': 0.0, 'tv_on': 0.0}
+)
+
+# All systems use identical thermal model parameters
+thermal_params = UnifiedPredictionContext.get_thermal_model_params(context)
+# thermal_params['outdoor_temp'] = 8.0°C  # Uses forecast average
+# thermal_params['pv_power'] = 1000W      # Uses forecast average
+```
+
+**Benefits:**
+- **Consistent predictions**: All systems work with same environmental assumptions
+- **Better accuracy**: Forecast integration improves overnight and transition scenarios  
+- **Maintainable code**: Single source of truth for environmental conditions
+- **No more conflicts**: Binary search optimization aligns with smart rounding validation
+
+**Verification:**
+The unified approach is validated by `tests/test_unified_prediction_consistency.py`, which demonstrates both the old inconsistency problem and the new unified solution.
+
 ### Gentle Trajectory Correction
 
 When the predicted trajectory deviates from the target temperature path, the system applies **gentle additive corrections** to bring the system back on track.

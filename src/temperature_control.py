@@ -15,6 +15,7 @@ from .ha_client import HAClient, get_sensor_attributes
 from .physics_features import build_physics_features
 from .model_wrapper import simplified_outlet_prediction, get_enhanced_model_wrapper
 from .state_manager import save_state
+from .prediction_context import prediction_context_manager
 
 
 class TemperaturePredictor:
@@ -99,7 +100,10 @@ class SmartRounding:
                            features: Dict, fireplace_on: bool, 
                            target_indoor_temp: float) -> int:
         """
-        Apply smart rounding by testing floor vs ceiling temperatures
+        Apply smart rounding by testing floor vs ceiling temperatures.
+        
+        UNIFIED APPROACH: Uses the same forecast-based prediction context
+        as binary search to ensure consistency.
         
         Returns:
             Smart rounded temperature as integer
@@ -115,32 +119,42 @@ class SmartRounding:
         try:
             wrapper = get_enhanced_model_wrapper()
             
-            # Create test contexts for floor and ceiling temperatures
-            test_context_floor = {
-                'outlet_temp': floor_temp,
-                'outdoor_temp': outdoor_temp,
+            # UNIFIED: Create prediction context using the same method as binary search
+            prediction_context_manager.set_features(features)
+            
+            # Extract thermal features
+            thermal_features = {
                 'pv_power': features.get('pv_now', 0.0) if hasattr(features, 'get') else 0.0,
-                'fireplace_on': fireplace_on,
+                'fireplace_on': float(fireplace_on),
                 'tv_on': features.get('tv_on', 0.0) if hasattr(features, 'get') else 0.0
             }
             
-            test_context_ceiling = test_context_floor.copy()
-            test_context_ceiling['outlet_temp'] = ceiling_temp
+            # Create unified context (same as binary search uses)
+            unified_context = prediction_context_manager.create_context(
+                outdoor_temp=outdoor_temp,
+                pv_power=thermal_features['pv_power'],
+                thermal_features=thermal_features
+            )
             
-            # Get predictions for both temperatures
+            # Get thermal model parameters from unified context
+            thermal_params = prediction_context_manager.get_thermal_model_params()
+            
+            # Test floor temperature using UNIFIED context
             floor_predicted = wrapper.predict_indoor_temp(
                 outlet_temp=floor_temp,
-                outdoor_temp=outdoor_temp,
-                pv_power=test_context_floor['pv_power'],
-                fireplace_on=test_context_floor['fireplace_on'],
-                tv_on=test_context_floor['tv_on']
+                outdoor_temp=thermal_params['outdoor_temp'],  # Uses forecast average
+                pv_power=thermal_params['pv_power'],         # Uses forecast average
+                fireplace_on=thermal_params['fireplace_on'],
+                tv_on=thermal_params['tv_on']
             )
+            
+            # Test ceiling temperature using UNIFIED context
             ceiling_predicted = wrapper.predict_indoor_temp(
                 outlet_temp=ceiling_temp,
-                outdoor_temp=outdoor_temp,
-                pv_power=test_context_ceiling['pv_power'],
-                fireplace_on=test_context_ceiling['fireplace_on'],
-                tv_on=test_context_ceiling['tv_on']
+                outdoor_temp=thermal_params['outdoor_temp'],  # Uses forecast average
+                pv_power=thermal_params['pv_power'],         # Uses forecast average
+                fireplace_on=thermal_params['fireplace_on'],
+                tv_on=thermal_params['tv_on']
             )
             
             # Handle None returns from predict_indoor_temp
