@@ -941,22 +941,41 @@ def main(args):
                         test_context_ceiling = test_context_floor.copy()
                         test_context_ceiling['outlet_temp'] = ceiling_temp
                         
-                        # Get predictions for both temperatures
+                        # UNIFIED CONTEXT: Use same forecast-based conditions as binary search
+                        from .prediction_context import prediction_context_manager
+                        
+                        # Set up unified prediction context (same as binary search uses)
+                        thermal_features = {
+                            'pv_power': features.get('pv_now', 0.0) if hasattr(features, 'get') else 0.0,
+                            'fireplace_on': float(fireplace_on),
+                            'tv_on': features.get('tv_on', 0.0) if hasattr(features, 'get') else 0.0
+                        }
+                        
+                        prediction_context_manager.set_features(features)
+                        unified_context = prediction_context_manager.create_context(
+                            outdoor_temp=outdoor_temp,
+                            pv_power=thermal_features['pv_power'],
+                            thermal_features=thermal_features
+                        )
+                        
+                        thermal_params = prediction_context_manager.get_thermal_model_params()
+                        
+                        # Get predictions using UNIFIED forecast-based parameters
                         floor_predicted = wrapper.predict_indoor_temp(
                             outlet_temp=floor_temp,
-                            outdoor_temp=outdoor_temp,
+                            outdoor_temp=thermal_params['outdoor_temp'],  # Uses forecast average
                             current_indoor=prediction_indoor_temp,
-                            pv_power=test_context_floor['pv_power'],
-                            fireplace_on=test_context_floor['fireplace_on'],
-                            tv_on=test_context_floor['tv_on']
+                            pv_power=thermal_params['pv_power'],         # Uses forecast average
+                            fireplace_on=thermal_params['fireplace_on'],
+                            tv_on=thermal_params['tv_on']
                         )
                         ceiling_predicted = wrapper.predict_indoor_temp(
                             outlet_temp=ceiling_temp,
-                            outdoor_temp=outdoor_temp,
+                            outdoor_temp=thermal_params['outdoor_temp'],  # Uses forecast average
                             current_indoor=prediction_indoor_temp,
-                            pv_power=test_context_ceiling['pv_power'],
-                            fireplace_on=test_context_ceiling['fireplace_on'],
-                            tv_on=test_context_ceiling['tv_on']
+                            pv_power=thermal_params['pv_power'],         # Uses forecast average
+                            fireplace_on=thermal_params['fireplace_on'],
+                            tv_on=thermal_params['tv_on']
                         )
                         
                         # Handle None returns from predict_indoor_temp
