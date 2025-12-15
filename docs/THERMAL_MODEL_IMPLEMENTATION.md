@@ -723,6 +723,198 @@ predict_thermal_trajectory_with_forecasts(
 
 This gentle approach maintains effective thermal control while preventing the outlet temperature spikes and system stress that can occur with aggressive correction methods.
 
+### Enhanced Trajectory Course Correction
+
+The thermal model includes an advanced trajectory course correction system that verifies calculated outlet temperatures will reach the target temperature within an acceptable timeframe, using a simplified signed error approach.
+
+#### The Simplified Priority System
+
+The course correction uses a streamlined two-tier priority system:
+
+**PRIORITY 1: Fast Target Reaching (Time Constraint)**
+- **Condition**: Trajectory shows target will be reached ≤ 1.0 hour
+- **Action**: No correction needed - accept the calculated outlet temperature
+- **Rationale**: Users expect responsive heating, >1 hour response is too slow
+
+**PRIORITY 2: Trajectory Path Violations**
+- **Condition**: Temperature boundary violations during the journey to equilibrium
+- **Action**: Apply physics-based correction using signed error approach
+- **Focus**: Only trajectory path problems (redundant equilibrium checking removed)
+- **Covers**:
+  - **Temperature drops**: `min_temp ≤ target_temp - 0.1°C` during journey
+  - **Temperature rises**: `max_temp ≥ target_temp + 0.1°C` during journey
+
+#### Why Redundant Equilibrium Checking Was Removed
+
+The original system checked both equilibrium temperature and trajectory path violations, but this created redundancy:
+
+**Previous (Redundant) Approach:**
+```
+1. Binary search finds outlet temp that produces target equilibrium
+2. Trajectory verification checks if equilibrium matches target (redundant!)
+3. Also checks trajectory path for violations
+```
+
+**Current (Simplified) Approach:**
+```
+1. Binary search finds outlet temp that produces target equilibrium
+2. Trajectory verification ONLY checks journey path violations
+3. Much cleaner logic - each step has a distinct purpose
+```
+
+**Key Insight:** If binary search correctly calculated equilibrium = target, then checking equilibrium again in trajectory verification is redundant. The valuable check is whether the **journey** to equilibrium violates temperature boundaries.
+
+#### Bidirectional Temperature Change Detection
+
+The system detects both cooling and heating deviations during the trajectory path:
+
+**Temperature Drop Scenarios (Journey Problems):**
+```
+Examples requiring correction:
+- Temperature dips below target during warm-up journey
+- Overnight cooling when heat loss exceeds heating during transition
+- PV shutdown causing temporary temperature drop
+- Open windows causing rapid heat loss during heating cycle
+```
+
+**Temperature Rise Scenarios (Journey Problems):**
+```
+Examples requiring correction:
+- Temperature spikes above target during heating cycle
+- Unexpected solar gains causing overshoot during journey
+- Thermal mass releasing stored heat during transition
+- Fireplace activation causing temporary overshoot
+```
+
+#### Signed Error Approach
+
+The system uses a consistent signed error calculation that eliminates string matching confusion:
+
+**Signed Error Logic:**
+- **Positive temp_error** = need more heat (increase outlet temp)
+- **Negative temp_error** = need less heat (decrease outlet temp)
+
+**Calculations:**
+```
+# Temperature drops during journey
+if min_temp_over_time <= target_temp - 0.1:
+    temp_error = target_temp - min_temp_over_time  # POSITIVE (need more heat)
+
+# Temperature rises during journey  
+if max_temp_over_time >= target_temp + 0.1:
+    temp_error = -(max_temp_over_time - target_temp)  # NEGATIVE (need less heat)
+```
+
+#### Physics-Based Correction Calculation
+
+When trajectory path violations are detected, corrections use the signed error directly:
+
+```
+# Calculate physics-based correction
+physics_correction = temp_error / outlet_effectiveness
+
+# Apply signed correction directly (no string matching!)
+corrected_outlet = outlet_temp + physics_correction
+
+# Apply system bounds
+corrected_outlet = max(corrected_outlet, CLAMP_MIN_ABS)
+corrected_outlet = min(corrected_outlet, CLAMP_MAX_ABS)
+```
+
+**Correction Bounds:**
+- **Minimum magnitude**: 1.0°C (for meaningful thermal impact)
+- **Maximum magnitude**: 20.0°C (prevents extreme adjustments)
+- **Direction**: Automatically determined by sign of temp_error
+- **System bounds**: Final outlet clamped to system limits
+
+#### Time Constraint Logic
+
+The 1-hour response requirement addresses user experience concerns:
+
+**Acceptable Response Times:**
+- **≤ 1.0 hour**: Fast enough for user satisfaction → no correction
+- **> 1.0 hour**: Too slow for responsive heating → apply correction
+
+**Example Scenarios:**
+```
+Scenario A: Target reached at 0.8 hours
+- Result: No correction applied
+- Reasoning: Fast response meets user expectations
+
+Scenario B: Target reached at 2.5 hours  
+- Result: Correction applied to speed up heating
+- Reasoning: 2.5 hours too slow for responsive control
+```
+
+#### Integration with Forecast Data
+
+The trajectory correction integrates weather and PV forecasts for improved accuracy:
+
+```python
+# Enhanced trajectory with forecasts
+outdoor_forecast = [5°C, 7°C, 10°C, 12°C]  # Warming trend
+pv_forecast = [0W, 500W, 2000W, 3000W]     # Increasing solar
+
+# System anticipates conditions and adjusts outlet temperature
+# to account for future outdoor warming and solar gains
+```
+
+#### Correction Effectiveness Metrics
+
+The system tracks correction effectiveness for monitoring:
+
+| Metric | Good Performance | Monitoring Focus |
+|--------|------------------|------------------|
+| Trajectory Accuracy | > 85% predictions within ±0.3°C | Overall prediction quality |
+| Overshoot Prevention | > 90% scenarios prevented | Cooling/rise detection |
+| Time Compliance | > 95% targets reached ≤1h | Heating responsiveness |
+| Correction Magnitude | < 3°C average adjustment | Physics-based reasonableness |
+
+#### Practical Examples
+
+**Example 1: Overnight Temperature Drop**
+```
+Situation: 9°C outside, no PV, target 21°C
+Binary search suggests: 25.8°C outlet
+Trajectory shows: Temperature drops to 20.1°C (violation)
+
+Correction applied:
+- Thermal deficit: 21.0 - 20.1 = 0.9°C
+- Physics correction: 0.9°C / 0.65 effectiveness = 1.4°C
+- Final outlet: 25.8°C + 1.4°C = 27.2°C
+```
+
+**Example 2: Unexpected Solar Gain**
+```
+Situation: Clouds clear, PV jumps from 500W to 3000W
+Trajectory shows: Temperature rises to 22.3°C (violation)
+
+Correction applied:
+- Thermal excess: 22.3 - 21.0 = 1.3°C  
+- Physics correction: 1.3°C / 0.65 effectiveness = 2.0°C
+- Final outlet: 35.0°C - 2.0°C = 33.0°C
+```
+
+#### Configuration Options
+
+Key configuration parameters for trajectory course correction:
+
+```bash
+# Enable/disable trajectory prediction
+export TRAJECTORY_PREDICTION_ENABLED=true
+
+# Time constraint for acceptable response
+export TARGET_REACH_TIME_LIMIT=1.0  # hours
+
+# Trajectory prediction horizon
+export TRAJECTORY_STEPS=4  # hours
+
+# Sensor boundary alignment
+export TEMP_BOUNDARY_TOLERANCE=0.1  # °C
+```
+
+This enhanced trajectory correction system provides precise, responsive, bidirectional thermal control that adapts to unexpected temperature changes while maintaining user-acceptable response times and preventing both overheating and underheating scenarios.
+
 ---
 
 ## Parameters Reference

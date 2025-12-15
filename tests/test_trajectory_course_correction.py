@@ -130,20 +130,20 @@ class TestCourseCorrectionWhenDrifting:
 class TestNoOverCorrectionWhenTrajectoryGood:
     """Test 1.3: No over-correction when trajectory shows target will be reached."""
     
-    def test_maintains_outlet_when_trajectory_reaches_target(self):
+    def test_maintains_outlet_when_trajectory_reaches_target_quickly(self):
         """
-        When trajectory prediction shows target will be reached,
+        When trajectory prediction shows target will be reached within 1 hour,
         no additional correction should be applied.
         """
         from model_wrapper import EnhancedModelWrapper
         
         wrapper = EnhancedModelWrapper()
         
-        # Mock trajectory showing target will be reached
+        # Mock trajectory showing target will be reached quickly (within 1 hour)
         wrapper.thermal_model.predict_thermal_trajectory = MagicMock(return_value={
             'trajectory': [20.5, 20.8, 21.0, 21.1],  # Temperature rising to target
             'times': [1, 2, 3, 4],
-            'reaches_target_at': 3,  # Reaches target at hour 3
+            'reaches_target_at': 0.8,  # Reaches target at 0.8 hours (fast enough)
             'overshoot_predicted': False,
             'max_predicted': 21.1,
             'min_predicted': 20.5,
@@ -165,9 +165,48 @@ class TestNoOverCorrectionWhenTrajectoryGood:
             thermal_features=thermal_features
         )
         
-        # Should maintain original outlet temperature
+        # Should maintain original outlet temperature when target reached quickly
         assert corrected_outlet == outlet_temp, \
-            f"Expected outlet temp to remain at {outlet_temp}°C when trajectory is good"
+            f"Expected outlet temp to remain at {outlet_temp}°C when trajectory reaches target within 1h"
+    
+    def test_applies_correction_when_trajectory_too_slow(self):
+        """
+        When trajectory prediction shows target will be reached but too slowly (>1 hour),
+        correction should be applied to speed up the process.
+        """
+        from model_wrapper import EnhancedModelWrapper
+        
+        wrapper = EnhancedModelWrapper()
+        
+        # Mock trajectory showing target will be reached but too slowly
+        wrapper.thermal_model.predict_thermal_trajectory = MagicMock(return_value={
+            'trajectory': [20.5, 20.6, 20.7, 20.9],  # Temperature rising slowly
+            'times': [1, 2, 3, 4],
+            'reaches_target_at': 2.5,  # Reaches target at 2.5 hours (too slow)
+            'overshoot_predicted': False,
+            'max_predicted': 21.0,
+            'min_predicted': 20.5,
+            'equilibrium_temp': 21.0,
+            'final_error': 0.0
+        })
+        
+        outlet_temp = 35.0
+        current_indoor = 20.5
+        target_indoor = 21.0
+        outdoor_temp = 10.0
+        thermal_features = {'pv_power': 0.0}
+        
+        corrected_outlet = wrapper._verify_trajectory_and_correct(
+            outlet_temp=outlet_temp,
+            current_indoor=current_indoor,
+            target_indoor=target_indoor,
+            outdoor_temp=outdoor_temp,
+            thermal_features=thermal_features
+        )
+        
+        # Should apply correction when trajectory is too slow
+        assert corrected_outlet > outlet_temp, \
+            f"Expected outlet temp to be increased when trajectory reaches target too slowly"
 
 
 class TestTrajectoryRespectsBounds:

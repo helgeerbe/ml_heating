@@ -506,73 +506,75 @@ class EnhancedModelWrapper:
             temp_error = 0.0
             correction_reason = ""
             
-            # PRIORITY 1: If trajectory shows target will be reached, don't apply corrections
-            if trajectory['reaches_target_at'] is not None:
+            # PRIORITY 1: If trajectory shows target will be reached within reasonable time, don't apply corrections
+            if trajectory['reaches_target_at'] is not None and trajectory['reaches_target_at'] <= 1.0:
                 logging.info(f"✅ Trajectory shows target will be reached at {trajectory['reaches_target_at']}h - no correction needed")
                 return outlet_temp
+            elif trajectory['reaches_target_at'] is not None and trajectory['reaches_target_at'] > 1.0:
+                logging.info(f"⏰ Trajectory shows target will be reached at {trajectory['reaches_target_at']}h (too slow) - applying correction")
+                # Continue to check Priority 2 for correction
             
-            # PRIORITY 2: Target won't be reached at all
-            final_temp_predicted = trajectory['equilibrium_temp']
-            temp_error = target_indoor - final_temp_predicted
-            if temp_error > 0.1:
-                needs_correction = True
-                correction_reason = f"target_unreachable (equilibrium: {final_temp_predicted:.1f}°C)"
+            # PRIORITY 2: TRAJECTORY PATH VIOLATIONS
+            # Check trajectory path for boundary violations during the journey to equilibrium
+            # This is the valuable part - binary search can't predict journey problems
+            # Uses sensor-aligned boundaries (±0.1°C) for consistent behavior
             
-            # PRIORITY 3: OVERNIGHT SCENARIO: Check if temperature will drop below target over time
-            # This is the key fix for the overnight temperature drop issue
             trajectory_temps = trajectory.get('trajectory', [])
-            if trajectory_temps and not needs_correction:
+            if trajectory_temps:
                 min_temp_over_time = min(trajectory_temps)
-                if min_temp_over_time < target_indoor - 0.2:  # Will drop more than 0.2°C below target
-                    temp_error = target_indoor - min_temp_over_time
-                    needs_correction = True
-                    correction_reason = f"overnight_drop_predicted (min: {min_temp_over_time:.1f}°C)"
-                    
-            # PRIORITY 4: INADEQUATE MARGIN: Only in very cold conditions and no target reached
-            # In very cold conditions (outdoor < 10°C), we need a safety margin
-            if outdoor_temp < 10.0 and not needs_correction:
-                safety_margin = 0.5  # Need 0.5°C margin in very cold conditions
-                final_temp = trajectory.get('equilibrium_temp', current_indoor)
-                if final_temp < target_indoor + safety_margin:
-                    temp_error = (target_indoor + safety_margin) - final_temp
-                    needs_correction = True
-                    correction_reason = f"inadequate_margin_very_cold_conditions (final: {final_temp:.1f}°C)"
-                    
-            if needs_correction and temp_error > 0.05:
-                # PHYSICS-BASED TRAJECTORY CORRECTION
-                # When trajectory shows target won't be reached, apply physics-based correction
-                # This is NOT arbitrary - it's based on the actual thermal deficit predicted
+                max_temp_over_time = max(trajectory_temps)
                 
-                # Calculate physics-based correction proportional to thermal deficit
+                # SIGNED ERROR APPROACH: Positive = need more heat, Negative = need less heat
+                
+                # Check for trajectory DROPS during journey
+                if min_temp_over_time <= target_indoor - 0.1:
+                    temp_error = target_indoor - min_temp_over_time  # POSITIVE (need more heat)
+                    correction_reason = f"temperature_drop_predicted (min: {min_temp_over_time:.1f}°C)"
+                    needs_correction = True
+                
+                # Check for trajectory RISES during journey
+                elif max_temp_over_time >= target_indoor + 0.1:
+                    temp_error = -(max_temp_over_time - target_indoor)  # NEGATIVE (need less heat)
+                    correction_reason = f"temperature_rise_predicted (max: {max_temp_over_time:.1f}°C)"
+                    needs_correction = True
+                    
+                    
+            if needs_correction and abs(temp_error) > 0.05:
+                # PHYSICS-BASED TRAJECTORY CORRECTION WITH SIGNED ERRORS
+                # When trajectory shows target won't be reached, apply physics-based correction
+                # This is NOT arbitrary - it's based on the actual thermal deficit/excess predicted
+                
+                # Calculate physics-based correction proportional to thermal error
                 # Use the thermal model's own outlet effectiveness to determine correction
                 effectiveness = self.thermal_model.outlet_effectiveness
                 
                 if effectiveness > 0:
-                    # Physics: To make up for temp_error deficit, increase outlet proportionally
-                    # outlet_correction = thermal_deficit / outlet_effectiveness
+                    # Physics: To make up for temp_error, adjust outlet proportionally
+                    # Positive temp_error = need more heat, Negative = need less heat
                     physics_correction = temp_error / effectiveness
                     
                     # Apply reasonable bounds to prevent extreme corrections
-                    physics_correction = min(physics_correction, 20.0)  # Max 20°C correction
-                    physics_correction = max(physics_correction, 1.0)   # Min 1°C correction for meaningful impact
+                    physics_correction = max(physics_correction, -20.0)  # Min -20°C correction
+                    physics_correction = min(physics_correction, 20.0)   # Max +20°C correction
+                    
+                    # Ensure minimum meaningful correction magnitude
+                    if abs(physics_correction) < 1.0:
+                        physics_correction = 1.0 if temp_error > 0 else -1.0
                 else:
                     # Fallback if effectiveness is invalid
                     physics_correction = temp_error * 8.0  # Reasonable multiplier
                 
+                # SIMPLIFIED: Apply signed correction directly
                 corrected_outlet = outlet_temp + physics_correction
                 
                 # Apply system bounds
+                corrected_outlet = max(corrected_outlet, config.CLAMP_MIN_ABS)
                 corrected_outlet = min(corrected_outlet, config.CLAMP_MAX_ABS)
                 
-                logging.info(f"🎯 Physics-based trajectory correction: {outlet_temp:.1f}°C → {corrected_outlet:.1f}°C "
-                            f"(reason: {correction_reason}, thermal_deficit: {temp_error:.1f}°C, "
-                            f"physics_correction: +{physics_correction:.1f}°C, effectiveness: {effectiveness:.3f})")
-                
-                # NOTE: Trajectory correction is NOT recorded as learning feedback
-                # Trajectory correction applies exponential push for fast target reaching
-                # This is intentional aggressive control behavior, not a model error
-                logging.debug(f"🎯 Trajectory correction applies exponential push for fast control: "
-                            f"{outlet_temp:.1f}°C → {corrected_outlet:.1f}°C")
+                direction_str = "increase" if physics_correction > 0 else "decrease"
+                logging.info(f"🎯 Signed trajectory correction: {outlet_temp:.1f}°C → {corrected_outlet:.1f}°C "
+                            f"({direction_str}, reason: {correction_reason}, "
+                            f"temp_error: {temp_error:+.2f}°C, correction: {physics_correction:+.1f}°C)")
                 
                 return corrected_outlet
             else:
