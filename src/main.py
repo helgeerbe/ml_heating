@@ -945,13 +945,20 @@ def main(args):
                         from .prediction_context import prediction_context_manager
                         
                         # Set up unified prediction context (same as binary search uses)
+                        # Handle both DataFrame and dict features properly
+                        if isinstance(features, pd.DataFrame):
+                            # Convert DataFrame to dict for safe access
+                            features_dict = features.iloc[0].to_dict() if not features.empty else {}
+                        else:
+                            features_dict = features if isinstance(features, dict) else {}
+                        
                         thermal_features = {
-                            'pv_power': features.get('pv_now', 0.0) if hasattr(features, 'get') else 0.0,
+                            'pv_power': features_dict.get('pv_now', 0.0),
                             'fireplace_on': float(fireplace_on) if fireplace_on is not None else 0.0,
-                            'tv_on': features.get('tv_on', 0.0) if hasattr(features, 'get') else 0.0
+                            'tv_on': features_dict.get('tv_on', 0.0)
                         }
                         
-                        prediction_context_manager.set_features(features)
+                        prediction_context_manager.set_features(features_dict)
                         unified_context = prediction_context_manager.create_context(
                             outdoor_temp=outdoor_temp,
                             pv_power=thermal_features['pv_power'],
