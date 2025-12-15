@@ -20,7 +20,7 @@ class PredictionMetrics:
     Tracks MAE (Mean Absolute Error) and RMSE (Root Mean Square Error)
     over multiple time windows for comprehensive accuracy analysis.
     
-    FIXED: Now uses unified thermal state for persistence across service restarts.
+    Now uses unified thermal state for persistence across service restarts.
     """
     
     def __init__(self, max_history_size: int = 1000, state_manager=None):
@@ -47,7 +47,7 @@ class PredictionMetrics:
         self._cache_timestamp = None
         self._cache_valid_duration = 60  # Cache valid for 60 seconds
         
-        # FIXED: Load existing predictions from unified thermal state
+        # Load existing predictions from unified thermal state
         self._load_from_state()
         
         logging.info(f"🔢 PredictionMetrics initialized with {len(self.predictions)} existing predictions")
@@ -133,7 +133,7 @@ class PredictionMetrics:
         # Invalidate cache
         self._cache_timestamp = None
         
-        # FIXED: Auto-save to unified thermal state after adding prediction
+        # Auto-save to unified thermal state after adding prediction
         self._save_to_state()
         
         logging.debug(f"Added prediction: pred={predicted:.2f}, "
@@ -229,7 +229,7 @@ class PredictionMetrics:
     
     def _calculate_trends(self) -> Dict:
         """Calculate accuracy trends over time."""
-        if len(self.predictions) < 10:  # FIXED: Lower threshold from 20 to 10
+        if len(self.predictions) < 10:  # Require at least 10 predictions for trend analysis
             return {'insufficient_data': True}
         
         # Split into two halves for trend analysis

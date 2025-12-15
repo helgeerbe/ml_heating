@@ -112,7 +112,7 @@ class InfluxService:
         It retrieves data for a specified number of steps, with each step's
         duration defined in the config. The aggregation function used in the
         Flux `aggregateWindow` can be selected via `agg_fn` (e.g. "mean" or "max").
-        The output is padded/resampled to a fixed length if necessary.
+        The output is padded/resampled to a specified length if necessary.
         """
         minutes = steps * config.HISTORY_STEP_MINUTES
         entity_id_short = entity_id.split(".", 1)[-1]

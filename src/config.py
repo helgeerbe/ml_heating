@@ -264,7 +264,7 @@ OUTLET_EFFECTIVENESS: float = float(os.getenv("OUTLET_EFFECTIVENESS", "0.10"))  
 OUTDOOR_COUPLING: float = float(os.getenv("OUTDOOR_COUPLING", "0.3"))            # Outdoor temperature influence factor
 # THERMAL_BRIDGE_FACTOR removed in Phase 2: was not used in calculations
 
-# External Heat Source Weights (Priority 2 - Multi-Source Testing) - FIXED FOR TDD
+# External Heat Source Weights (Priority 2 - Multi-Source Testing)
 # Updated to physically reasonable ranges as defined by TDD tests:
 # - PV: 0.001-0.01 °C/W (1-10°C per kW)
 # - Fireplace: 2-10°C (significant heating)  

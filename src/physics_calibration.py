@@ -148,12 +148,12 @@ def validate_thermal_model():
         
         # Test monotonicity - higher outlet should mean higher equilibrium
         monotonic_check = []
-        outdoor_temp_test = 5.0  # Fixed test outdoor temperature
+        outdoor_temp_test = 5.0  # Test outdoor temperature
         for outlet_temp in [25, 30, 35, 40, 45, 50, 55, 60]:
             equilibrium = thermal_model.predict_equilibrium_temperature(
                 outlet_temp=outlet_temp,
                 outdoor_temp=outdoor_temp_test,
-                current_indoor=21.0,  # Fixed test indoor temperature
+                current_indoor=21.0,  # Test indoor temperature
                 pv_power=0,
                 fireplace_on=0,
                 tv_on=0,
@@ -620,7 +620,7 @@ def optimize_thermal_parameters(stable_periods):
     param_values = []
     param_bounds = []
     
-    # Always optimize core thermal parameters (EXCLUDE thermal_time_constant due to parameter coupling)
+    # Always optimize core thermal parameters (exclude thermal_time_constant due to parameter coupling)
     param_names.extend(['outlet_effectiveness', 'heat_loss_coefficient'])
     param_values.extend([
         current_params['outlet_effectiveness'],
@@ -680,7 +680,7 @@ def optimize_thermal_parameters(stable_periods):
                 test_model = ThermalEquilibriumModel()
                 test_model.outlet_effectiveness = param_dict['outlet_effectiveness']
                 test_model.heat_loss_coefficient = param_dict['heat_loss_coefficient']
-                test_model.thermal_time_constant = current_params['thermal_time_constant']  # FIXED: Use current value since not optimized
+                test_model.thermal_time_constant = current_params['thermal_time_constant']  # Use current value since not optimized
                 
                 # Set heat source weights (use original values for excluded params)
                 test_model.external_source_weights['pv'] = param_dict.get(

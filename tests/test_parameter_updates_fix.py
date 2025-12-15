@@ -353,9 +353,9 @@ class TestEdgeCases:
         """Test that parameter history is recorded even when gradients are zero."""
         model = fresh_thermal_model
         
-        with patch.object(model, '_calculate_thermal_time_constant_gradient_FIXED', return_value=0.0), \
-             patch.object(model, '_calculate_heat_loss_coefficient_gradient_FIXED', return_value=0.0), \
-             patch.object(model, '_calculate_outlet_effectiveness_gradient_FIXED', return_value=0.0):
+        with patch.object(model, '_calculate_thermal_time_constant_gradient', return_value=0.0), \
+             patch.object(model, '_calculate_heat_loss_coefficient_gradient', return_value=0.0), \
+             patch.object(model, '_calculate_outlet_effectiveness_gradient', return_value=0.0):
             
             # Add predictions that would normally calculate gradients
             for i in range(15):

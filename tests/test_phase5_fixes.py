@@ -160,9 +160,8 @@ class TestPhase5SmartRoundingNoneHandling(unittest.TestCase):
         with open(main_py_path, 'r') as f:
             main_content = f.read()
         
-        # Check for Phase 5 None handling components
+        # Check for None handling components (updated after cleanup)
         required_components = [
-            "PHASE 5 FIX: Handle None returns from predict_indoor_temp",
             "if floor_predicted is None or ceiling_predicted is None:",
             "using fallback",
             "smart_rounded_temp = round(final_temp)",
@@ -171,7 +170,7 @@ class TestPhase5SmartRoundingNoneHandling(unittest.TestCase):
         for component in required_components:
             self.assertIn(
                 component, main_content,
-                f"Phase 5 None handling component not found in main.py: {component}"
+                f"None handling component not found in main.py: {component}"
             )
 
 

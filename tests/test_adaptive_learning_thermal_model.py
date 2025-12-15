@@ -176,7 +176,7 @@ class TestAdaptiveLearningThermalModel(unittest.TestCase):
                 'avg_recent_error': 0.1
             })
         
-        adaptive_rate = self.model._calculate_adaptive_learning_rate_FIXED()
+        adaptive_rate = self.model._calculate_adaptive_learning_rate()
         self.assertLess(adaptive_rate, self.model.learning_rate * self.model.learning_confidence)
         
     def test_gradient_calculation_thermal_time_constant(self):
@@ -193,7 +193,7 @@ class TestAdaptiveLearningThermalModel(unittest.TestCase):
                 }
             })
         
-        gradient = self.model._calculate_thermal_time_constant_gradient_FIXED(recent_predictions)
+        gradient = self.model._calculate_thermal_time_constant_gradient(recent_predictions)
         
         # Gradient should be a finite number (not NaN or infinity)
         self.assertTrue(np.isfinite(gradient))
@@ -211,7 +211,7 @@ class TestAdaptiveLearningThermalModel(unittest.TestCase):
                 }
             })
         
-        gradient = self.model._calculate_heat_loss_coefficient_gradient_FIXED(recent_predictions)
+        gradient = self.model._calculate_heat_loss_coefficient_gradient(recent_predictions)
         
         # Gradient should be a finite number
         self.assertTrue(np.isfinite(gradient))
@@ -229,7 +229,7 @@ class TestAdaptiveLearningThermalModel(unittest.TestCase):
                 }
             })
         
-        gradient = self.model._calculate_outlet_effectiveness_gradient_FIXED(recent_predictions)
+        gradient = self.model._calculate_outlet_effectiveness_gradient(recent_predictions)
         
         # Gradient should be a finite number
         self.assertTrue(np.isfinite(gradient))

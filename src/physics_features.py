@@ -112,7 +112,7 @@ def build_physics_features(
         config.TV_STATUS_ENTITY_ID, all_states, is_binary=True
     ) or False
     
-    # FIXED: PV Forecasts with correct 'watts' attribute parsing
+    # PV Forecasts with correct 'watts' attribute parsing
     pv_forecasts = [0.0, 0.0, 0.0, 0.0]
     if config.PV_FORECAST_ENTITY_ID:
         try:

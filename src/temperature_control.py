@@ -246,7 +246,7 @@ class OnlineLearning:
         """Prepare features for online learning"""
         # Handle case where last_run_features might be stored as string
         if isinstance(last_run_features, str):
-            logging.error("CRITICAL: last_run_features corrupted as string - attempting to recover")
+            logging.error("ERROR: last_run_features corrupted as string - attempting to recover")
             try:
                 import json
                 last_run_features = json.loads(last_run_features)

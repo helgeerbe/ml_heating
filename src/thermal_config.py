@@ -28,7 +28,7 @@ class ThermalParameterConfig:
     # Default parameter values optimized for moderate insulation houses
     # UPDATED FOR TDD COMPLIANCE - physically reasonable ranges with realistic heat balance
     DEFAULTS = {
-        'thermal_time_constant': 4.0,      # hours - realistic for moderate insulation (FIXED VALUE)
+        'thermal_time_constant': 4.0,      # hours - realistic for moderate insulation 
         'heat_loss_coefficient': 0.2,      # 1/hour - increased for realistic heat balance (was 0.05)
         'outlet_effectiveness': 0.04,      # dimensionless - adjusted for realistic outlets
         'pv_heat_weight': 0.002,           # °C/W - 2°C per kW (TDD compliant: 0.001-0.01 range)

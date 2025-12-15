@@ -76,10 +76,10 @@ class EnhancedModelWrapper:
     def predict_indoor_temp(self, outlet_temp: float, 
                            outdoor_temp: float, **kwargs) -> float:
         """
-        FIXED METHOD: Predict indoor temperature for smart rounding.
+        Predict indoor temperature for smart rounding.
         
-        This method was missing and causing smart rounding to fail.
         Uses the thermal model's equilibrium prediction with proper parameter handling.
+        Provides robust conversion of pandas data types to scalar values.
         """
         try:
             # Extract heat source parameters from kwargs with safe defaults
@@ -88,7 +88,7 @@ class EnhancedModelWrapper:
             tv_on = kwargs.get('tv_on', 0.0)
             current_indoor = kwargs.get('current_indoor', outdoor_temp + 15.0)
             
-            # CRITICAL FIX: Convert pandas Series to scalar values
+            # Convert pandas Series to scalar values
             def to_scalar(value):
                 """Convert pandas Series or any value to scalar."""
                 if value is None:
@@ -134,7 +134,7 @@ class EnhancedModelWrapper:
                 _suppress_logging=True
             )
             
-            # CRITICAL FIX: Handle None return from predict_equilibrium_temperature
+            # Handle None return from predict_equilibrium_temperature
             if predicted_temp is None:
                 logging.warning(f"predict_equilibrium_temperature returned None for "
                                f"outlet={outlet_temp}, outdoor={outdoor_temp}")
@@ -286,7 +286,7 @@ class EnhancedModelWrapper:
             outdoor_temp, pv_power, thermal_features
         )
 
-        # Fix 1.4: Pre-check for unreachable targets to avoid futile searching (using forecast conditions)
+        # Pre-check for unreachable targets to avoid futile searching (using forecast conditions)
         try:
             # Check what minimum outlet temp produces
             min_prediction = self.thermal_model.predict_equilibrium_temperature(
@@ -335,7 +335,7 @@ class EnhancedModelWrapper:
                      f"current={current_indoor:.1f}°C, range={outlet_min:.1f}-{outlet_max:.1f}°C")
         
         for iteration in range(20):  # Max 20 iterations for efficiency
-            # Fix 1.3: Check if range has collapsed (early exit)
+            # Check if range has collapsed (early exit)
             range_size = outlet_max - outlet_min
             if range_size < 0.05:  # °C - range too small to matter
                 final_outlet = (outlet_min + outlet_max) / 2.0
@@ -358,7 +358,7 @@ class EnhancedModelWrapper:
                     _suppress_logging=True
                 )
                 
-                # PHASE 5 FIX: Handle None returns from predict_equilibrium_temperature
+                # Handle None returns from predict_equilibrium_temperature
                 if predicted_indoor is None:
                     logging.warning(f"   Iteration {iteration+1}: predict_equilibrium_temperature returned None "
                                   f"for outlet={outlet_mid:.1f}°C - using fallback")
@@ -371,7 +371,7 @@ class EnhancedModelWrapper:
             # Calculate error from target
             error = predicted_indoor - target_indoor
             
-            # PHASE 5 ENHANCEMENT: Detailed logging at each iteration
+            # Detailed logging at each iteration
             logging.debug(f"   Iteration {iteration+1}: outlet={outlet_mid:.1f}°C → "
                          f"predicted={predicted_indoor:.2f}°C, error={error:.3f}°C "
                          f"(range: {outlet_min:.1f}-{outlet_max:.1f}°C)")
@@ -429,7 +429,7 @@ class EnhancedModelWrapper:
                 _suppress_logging=True
             )
             
-            # PHASE 5 FIX: Handle None return for final prediction
+            # Handle None return for final prediction
             if final_predicted is None:
                 logging.warning(f"⚠️ Final prediction returned None, using fallback 35.0°C")
                 return 35.0
@@ -605,7 +605,7 @@ class EnhancedModelWrapper:
                 timestamp=timestamp or datetime.now().isoformat()
             )
             
-            # ✅ CRITICAL FIX: Add prediction to MAE/RMSE tracking!
+            # Add prediction to MAE/RMSE tracking
             self.prediction_metrics.add_prediction(
                 predicted=predicted_temp,
                 actual=actual_temp,
@@ -676,7 +676,7 @@ class EnhancedModelWrapper:
             logging.info("✅ Exported metrics to Home Assistant sensors successfully")
             
         except Exception as e:
-            # CRITICAL FIX: Better error logging for debugging sensor export issues
+            # Better error logging for debugging sensor export issues
             logging.error(f"❌ FAILED to export metrics to HA: {e}", exc_info=True)
             logging.error(f"   Attempted to export: {list(ha_metrics.keys()) if 'ha_metrics' in locals() else 'metrics not created'}")
             logging.error(f"   HA Client created: {'ha_client' in locals()}")
@@ -693,7 +693,7 @@ class EnhancedModelWrapper:
             metrics = self.thermal_model.get_adaptive_learning_metrics()
             # Check if we got valid metrics or just insufficient_data flag
             if isinstance(metrics, dict) and 'insufficient_data' not in metrics and len(metrics) > 1:
-                # CRITICAL FIX: Extract current parameters from nested structure if available
+                # Extract current parameters from nested structure if available
                 if 'current_parameters' in metrics:
                     current_params = metrics['current_parameters']
                     # Return flattened structure with actual loaded parameters
@@ -1028,9 +1028,3 @@ def _calculate_thermal_trust_metrics(
             'model_health': 'error',
             'learning_progress': 0.0
         }
-
-
-# Legacy functions completely removed - ThermalEquilibriumModel provides all needed functionality
-
-
-# No backward compatibility functions needed - clean slate approach

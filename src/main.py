@@ -293,9 +293,9 @@ def main(args):
 
                     # Create learning features with the actual outlet temp
                     # that was applied
-                    # Fix: Handle case where last_run_features might be stored as string
+                    # Handle case where last_run_features might be stored as string
                     if isinstance(last_run_features, str):
-                        logging.error("CRITICAL: last_run_features corrupted as string - attempting to recover")
+                        logging.error("ERROR: last_run_features corrupted as string - attempting to recover")
                         try:
                             # Try to parse as JSON if it's a string representation
                             import json
@@ -959,7 +959,7 @@ def main(args):
                             tv_on=test_context_ceiling['tv_on']
                         )
                         
-                        # PHASE 5 FIX: Handle None returns from predict_indoor_temp
+                        # Handle None returns from predict_indoor_temp
                         if floor_predicted is None or ceiling_predicted is None:
                             logging.warning("Smart rounding: predict_indoor_temp returned None, using fallback")
                             smart_rounded_temp = round(final_temp)
