@@ -947,7 +947,7 @@ def main(args):
                         # Set up unified prediction context (same as binary search uses)
                         thermal_features = {
                             'pv_power': features.get('pv_now', 0.0) if hasattr(features, 'get') else 0.0,
-                            'fireplace_on': float(fireplace_on),
+                            'fireplace_on': float(fireplace_on) if fireplace_on is not None else 0.0,
                             'tv_on': features.get('tv_on', 0.0) if hasattr(features, 'get') else 0.0
                         }
                         
