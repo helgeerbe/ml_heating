@@ -1125,6 +1125,26 @@ def main(args):
             # Use the actual rounded temperature that was applied to HA
             applied_temp = smart_rounded_temp if not config.SHADOW_MODE else final_temp
             
+            # Calculate what the applied temperature will actually predict
+            try:
+                if not config.SHADOW_MODE and 'wrapper' in locals():
+                    # Get prediction for the applied smart-rounded temperature
+                    applied_prediction = wrapper.predict_indoor_temp(
+                        outlet_temp=applied_temp,
+                        outdoor_temp=thermal_params.get('outdoor_temp', outdoor_temp),
+                        current_indoor=prediction_indoor_temp,
+                        pv_power=thermal_params.get('pv_power', features_dict.get('pv_now', 0.0)),
+                        fireplace_on=thermal_params.get('fireplace_on', fireplace_on),
+                        tv_on=thermal_params.get('tv_on', features_dict.get('tv_on', 0.0))
+                    )
+                    if applied_prediction is None:
+                        applied_prediction = predicted_indoor  # Fallback
+                else:
+                    applied_prediction = predicted_indoor  # Shadow mode or wrapper not available
+            except Exception as e:
+                logging.warning(f"Failed to get applied temperature prediction: {e}")
+                applied_prediction = predicted_indoor
+            
             log_message = (
                 "Target: %.1f°C | Suggested: %.1f°C | Applied: %.1f°C | "
                 "Actual Indoor: %.2f°C | Predicted Indoor: %.2f°C | "
@@ -1136,7 +1156,7 @@ def main(args):
                 suggested_temp,
                 applied_temp,
                 actual_indoor,
-                predicted_indoor,
+                applied_prediction,  # Now shows prediction for applied temp
                 confidence,
             )
 

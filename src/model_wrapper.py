@@ -940,9 +940,11 @@ def simplified_outlet_prediction(
         thermal_trust_metrics = _calculate_thermal_trust_metrics(wrapper, outlet_temp, current_temp, target_temp)
         metadata['thermal_trust_metrics'] = thermal_trust_metrics
         
+        # Log the calculated outlet temperature - smart rounding will be applied later in main.py
         logging.info(
-            f"🎯 Prediction: {current_temp:.2f}°C → {target_temp:.1f}°C "
-            f"requires {outlet_temp:.1f}°C (confidence: {confidence:.3f})"
+            f"🎯 Prediction: Current {current_temp:.2f}°C → Target {target_temp:.1f}°C | "
+            f"Calculated outlet: {outlet_temp:.1f}°C (before smart rounding) "
+            f"(confidence: {confidence:.3f})"
         )
         
         return outlet_temp, confidence, metadata

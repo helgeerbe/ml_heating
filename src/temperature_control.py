@@ -180,6 +180,13 @@ class SmartRounding:
                 f"target={target_indoor_temp:.1f}°C)"
             )
             
+            # Log final prediction with the applied smart-rounded temperature
+            applied_prediction = floor_predicted if chosen == "floor" else ceiling_predicted
+            logging.info(
+                f"🎯 FINAL: Applied outlet {smart_rounded_temp}°C → Predicted indoor {applied_prediction:.2f}°C "
+                f"(target: {target_indoor_temp:.1f}°C, error: {abs(applied_prediction - target_indoor_temp):.3f}°C)"
+            )
+            
             return smart_rounded_temp
             
         except Exception as e:
