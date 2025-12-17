@@ -76,13 +76,27 @@ class BlockingStateManager:
         
         return False  # Continue with cycle
     
-    def handle_grace_period(self, ha_client: HAClient, state: Dict) -> bool:
+    def handle_grace_period(self, ha_client: HAClient, state: Dict, shadow_mode: bool = None) -> bool:
         """
         Handle grace period after blocking events end
+        
+        Args:
+            ha_client: Home Assistant client
+            state: Current system state
+            shadow_mode: Dynamic shadow mode state (overrides config.SHADOW_MODE if provided)
         
         Returns:
             True if in grace period (skip cycle)
         """
+        # SHADOW MODE OPTIMIZATION: Skip grace period entirely in shadow mode
+        # since ML heating is only observing and not controlling equipment.
+        # Use dynamic shadow_mode if provided, otherwise fall back to config
+        is_shadow_mode = shadow_mode if shadow_mode is not None else config.SHADOW_MODE
+        
+        if is_shadow_mode:
+            logging.info("⏭️ SHADOW MODE: Skipping grace period (observation mode only)")
+            return False  # No grace period needed in shadow mode
+            
         last_is_blocking = state.get("last_is_blocking", False)
         last_blocking_end_time = state.get("last_blocking_end_time")
         

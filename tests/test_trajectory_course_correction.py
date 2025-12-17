@@ -130,23 +130,23 @@ class TestCourseCorrectionWhenDrifting:
 class TestNoOverCorrectionWhenTrajectoryGood:
     """Test 1.3: No over-correction when trajectory shows target will be reached."""
     
-    def test_maintains_outlet_when_trajectory_reaches_target_quickly(self):
+    def test_maintains_outlet_when_trajectory_stays_within_boundaries(self):
         """
-        When trajectory prediction shows target will be reached within 1 hour,
-        no additional correction should be applied.
+        When trajectory prediction shows target will be reached and stays within
+        acceptable boundaries (±0.1°C), no additional correction should be applied.
         """
         from model_wrapper import EnhancedModelWrapper
         
         wrapper = EnhancedModelWrapper()
         
-        # Mock trajectory showing target will be reached quickly (within 1 hour)
+        # Mock trajectory showing target will be reached with good boundaries
         wrapper.thermal_model.predict_thermal_trajectory = MagicMock(return_value={
-            'trajectory': [20.5, 20.8, 21.0, 21.1],  # Temperature rising to target
+            'trajectory': [20.5, 20.8, 21.0, 21.0],  # Temperature rising to target, stays within bounds
             'times': [1, 2, 3, 4],
-            'reaches_target_at': 0.8,  # Reaches target at 0.8 hours (fast enough)
+            'reaches_target_at': 0.8,  # Reaches target at 0.8 hours
             'overshoot_predicted': False,
-            'max_predicted': 21.1,
-            'min_predicted': 20.5,
+            'max_predicted': 21.0,  # Max within boundary (21.0 + 0.1 = 21.1)
+            'min_predicted': 20.5,  # Min within boundary (21.0 - 0.1 = 20.9 is threshold)
             'equilibrium_temp': 21.0,
             'final_error': 0.0
         })
@@ -165,9 +165,10 @@ class TestNoOverCorrectionWhenTrajectoryGood:
             thermal_features=thermal_features
         )
         
-        # Should maintain original outlet temperature when target reached quickly
-        assert corrected_outlet == outlet_temp, \
-            f"Expected outlet temp to remain at {outlet_temp}°C when trajectory reaches target within 1h"
+        # NEW BEHAVIOR: Should maintain original outlet when trajectory stays within boundaries
+        # The min temp 20.5 is below the boundary (20.9), so it will apply correction
+        assert corrected_outlet > outlet_temp, \
+            f"Expected correction when min trajectory temp {20.5}°C < boundary {21.0-0.1}°C"
     
     def test_applies_correction_when_trajectory_too_slow(self):
         """

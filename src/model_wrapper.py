@@ -215,47 +215,81 @@ class EnhancedModelWrapper:
     def _get_forecast_conditions(self, outdoor_temp: float, pv_power: float, 
                                 thermal_features: Dict) -> Tuple[float, float, list, list]:
         """
-        UNIFIED forecast condition calculation for consistent predictions.
+        CYCLE-TIME-ALIGNED forecast condition calculation for consistent predictions.
         
-        Returns both averages (for binary search) and arrays (for trajectory prediction).
-        Eliminates code duplication between binary search and trajectory verification.
+        Uses cycle-appropriate forecast timing instead of 1-4h averaging to eliminate
+        timing mismatch between control cycles and forecast horizons.
+        
+        Returns both cycle-aligned averages and arrays for trajectory prediction.
         """
         features = getattr(self, '_current_features', {})
         
+        # Get cycle time from config and validate
+        cycle_minutes = config.CYCLE_INTERVAL_MINUTES
+        cycle_hours = cycle_minutes / 60.0
+        
+        # Validate cycle time against reasonable limits (max 180min for good control)
+        max_reasonable_cycle = 180  # 3 hours maximum for responsive control
+        if cycle_minutes > max_reasonable_cycle:
+            logging.warning(f"⚠️ Cycle time {cycle_minutes}min exceeds recommended maximum "
+                          f"{max_reasonable_cycle}min. Using 180min limit for forecast alignment.")
+            cycle_hours = max_reasonable_cycle / 60.0
+        
         if features:
-            # Extract forecast arrays
-            outdoor_forecast = [
-                features.get('temp_forecast_1h', outdoor_temp),
-                features.get('temp_forecast_2h', outdoor_temp),
-                features.get('temp_forecast_3h', outdoor_temp),
-                features.get('temp_forecast_4h', outdoor_temp)
-            ]
+            # Extract available forecast data
+            forecast_1h_outdoor = features.get('temp_forecast_1h', outdoor_temp)
+            forecast_1h_pv = features.get('pv_forecast_1h', pv_power)
+            forecast_2h_outdoor = features.get('temp_forecast_2h', outdoor_temp)
+            forecast_2h_pv = features.get('pv_forecast_2h', pv_power)
+            forecast_3h_outdoor = features.get('temp_forecast_3h', outdoor_temp)
+            forecast_3h_pv = features.get('pv_forecast_3h', pv_power)
+            forecast_4h_outdoor = features.get('temp_forecast_4h', outdoor_temp)
+            forecast_4h_pv = features.get('pv_forecast_4h', pv_power)
             
-            pv_forecast = [
-                features.get('pv_forecast_1h', pv_power),
-                features.get('pv_forecast_2h', pv_power),
-                features.get('pv_forecast_3h', pv_power),
-                features.get('pv_forecast_4h', pv_power)
-            ]
+            # Calculate cycle-aligned forecast using appropriate interpolation/selection
+            if cycle_hours <= 0.5:  # 0-30min cycles: interpolate between current and 1h
+                weight = cycle_hours / 1.0  # 0.0 to 0.5
+                cycle_outdoor = outdoor_temp * (1 - weight) + forecast_1h_outdoor * weight
+                cycle_pv = pv_power * (1 - weight) + forecast_1h_pv * weight
+                method = f"interpolated ({cycle_minutes}min)"
+            elif cycle_hours <= 1.0:  # 30-60min cycles: use 1h forecast directly
+                cycle_outdoor = forecast_1h_outdoor
+                cycle_pv = forecast_1h_pv
+                method = "1h forecast"
+            elif cycle_hours <= 2.0:  # 60-120min cycles: use 2h forecast
+                cycle_outdoor = forecast_2h_outdoor
+                cycle_pv = forecast_2h_pv
+                method = "2h forecast"
+            elif cycle_hours <= 3.0:  # 120-180min cycles: use 3h forecast
+                cycle_outdoor = forecast_3h_outdoor
+                cycle_pv = forecast_3h_pv
+                method = "3h forecast"
+            else:  # >180min cycles: cap at 4h forecast with warning
+                cycle_outdoor = forecast_4h_outdoor
+                cycle_pv = forecast_4h_pv
+                method = "4h forecast (capped)"
+                
+            # For trajectory prediction, still provide full forecast arrays
+            outdoor_forecast = [forecast_1h_outdoor, forecast_2h_outdoor, 
+                              forecast_3h_outdoor, forecast_4h_outdoor]
+            pv_forecast = [forecast_1h_pv, forecast_2h_pv, 
+                          forecast_3h_pv, forecast_4h_pv]
             
-            # Calculate averages for binary search
-            avg_outdoor = sum(outdoor_forecast) / len(outdoor_forecast)
-            avg_pv = sum(pv_forecast) / len(pv_forecast)
-            
-            logging.info(f"🌡️ Using forecast conditions: outdoor={avg_outdoor:.1f}°C "
-                        f"(vs current {outdoor_temp:.1f}°C), PV={avg_pv:.0f}W "
-                        f"(vs current {pv_power:.0f}W)")
+            logging.info(f"⏱️ Cycle-aligned forecast ({method}): outdoor={cycle_outdoor:.1f}°C "
+                        f"(vs current {outdoor_temp:.1f}°C), PV={cycle_pv:.0f}W "
+                        f"(vs current {pv_power:.0f}W) [cycle: {cycle_minutes}min]")
         else:
             # No forecast data available, use current values
-            avg_outdoor = outdoor_temp
-            avg_pv = pv_power
+            cycle_outdoor = outdoor_temp
+            cycle_pv = pv_power
             outdoor_forecast = [outdoor_temp] * 4
             pv_forecast = [pv_power] * 4
+            method = "current (no forecasts)"
             
-            logging.debug(f"🌡️ Using current conditions (no forecasts): "
+            logging.debug(f"⏱️ Cycle-aligned conditions ({method}): "
                         f"outdoor={outdoor_temp:.1f}°C, PV={pv_power:.0f}W")
         
-        return avg_outdoor, avg_pv, outdoor_forecast, pv_forecast
+        return cycle_outdoor, cycle_pv, outdoor_forecast, pv_forecast
     
     def _calculate_required_outlet_temp(self, current_indoor: float, target_indoor: float, 
                                       outdoor_temp: float, thermal_features: Dict) -> float:
@@ -346,13 +380,13 @@ class EnhancedModelWrapper:
             
             outlet_mid = (outlet_min + outlet_max) / 2.0
             
-            # Predict indoor temperature with this outlet temperature using forecast conditions
+            # Predict indoor temperature with this outlet temperature using cycle-aligned conditions
             try:
                 predicted_indoor = self.thermal_model.predict_equilibrium_temperature(
                     outlet_temp=outlet_mid,
-                    outdoor_temp=avg_outdoor,  # Use forecast average for consistency
+                    outdoor_temp=avg_outdoor,  # Use cycle-aligned forecast for consistency
                     current_indoor=current_indoor,
-                    pv_power=avg_pv,  # Use forecast average for consistency
+                    pv_power=avg_pv,  # Use cycle-aligned forecast for consistency  
                     fireplace_on=fireplace_on,
                     tv_on=tv_on,
                     _suppress_logging=True
@@ -391,6 +425,14 @@ class EnhancedModelWrapper:
                     fireplace_on=fireplace_on,
                     tv_on=tv_on,
                     _suppress_logging=False  # Show the equilibrium physics logging
+                )
+                
+                # MULTI-HORIZON FORECAST LOGGING: Show predictions with different forecast horizons
+                self._log_multi_horizon_predictions(
+                    current_indoor=current_indoor,
+                    target_indoor=target_indoor,
+                    outdoor_temp=outdoor_temp,
+                    thermal_features=thermal_features
                 )
                 
                 # NEW: Trajectory verification and course correction
@@ -456,15 +498,207 @@ class EnhancedModelWrapper:
         
         return final_outlet
     
+    def _log_multi_horizon_predictions(self, current_indoor: float, target_indoor: float, 
+                                      outdoor_temp: float, thermal_features: Dict) -> None:
+        """
+        Log predicted outlet temperatures using different forecast horizons.
+        
+        This helps diagnose which forecast horizon is causing high outlet temp predictions
+        during evening/overnight scenarios when outdoor temperature drops.
+        """
+        try:
+            # Extract thermal features
+            pv_power = thermal_features.get('pv_power', 0.0)
+            fireplace_on = thermal_features.get('fireplace_on', 0.0)
+            tv_on = thermal_features.get('tv_on', 0.0)
+            features = getattr(self, '_current_features', {})
+            
+            if not features:
+                logging.debug("🔍 Multi-horizon: No forecast data available")
+                return
+            
+            # Get cycle time and calculate cycle-aligned forecast
+            cycle_minutes = config.CYCLE_INTERVAL_MINUTES
+            cycle_hours = cycle_minutes / 60.0
+            max_reasonable_cycle = 180
+            if cycle_minutes > max_reasonable_cycle:
+                cycle_hours = max_reasonable_cycle / 60.0
+
+            # Calculate cycle-aligned forecast conditions (same logic as _get_forecast_conditions)
+            forecast_1h_outdoor = features.get('temp_forecast_1h', outdoor_temp)
+            forecast_1h_pv = features.get('pv_forecast_1h', pv_power)
+            
+            if cycle_hours <= 0.5:  # 0-30min cycles: interpolate between current and 1h
+                weight = cycle_hours / 1.0
+                cycle_outdoor = outdoor_temp * (1 - weight) + forecast_1h_outdoor * weight
+                cycle_pv = pv_power * (1 - weight) + forecast_1h_pv * weight
+                cycle_method = f"cycle({cycle_minutes}min)"
+            elif cycle_hours <= 1.0:  # 30-60min cycles: use 1h forecast directly
+                cycle_outdoor = forecast_1h_outdoor
+                cycle_pv = forecast_1h_pv
+                cycle_method = f"cycle(1h)"
+            elif cycle_hours <= 2.0:  # 60-120min cycles: use 2h forecast
+                cycle_outdoor = features.get('temp_forecast_2h', outdoor_temp)
+                cycle_pv = features.get('pv_forecast_2h', pv_power)
+                cycle_method = f"cycle(2h)"
+            elif cycle_hours <= 3.0:  # 120-180min cycles: use 3h forecast
+                cycle_outdoor = features.get('temp_forecast_3h', outdoor_temp)
+                cycle_pv = features.get('pv_forecast_3h', pv_power)
+                cycle_method = f"cycle(3h)"
+            else:  # >180min cycles: cap at 4h forecast
+                cycle_outdoor = features.get('temp_forecast_4h', outdoor_temp)
+                cycle_pv = features.get('pv_forecast_4h', pv_power)
+                cycle_method = f"cycle(4h-cap)"
+
+            # Extract individual forecast horizons including cycle-aligned
+            forecasts = {
+                'current': {
+                    'outdoor': outdoor_temp,
+                    'pv': pv_power
+                },
+                cycle_method: {
+                    'outdoor': cycle_outdoor,
+                    'pv': cycle_pv
+                },
+                '1h': {
+                    'outdoor': features.get('temp_forecast_1h', outdoor_temp),
+                    'pv': features.get('pv_forecast_1h', pv_power)
+                },
+                '2h': {
+                    'outdoor': features.get('temp_forecast_2h', outdoor_temp),
+                    'pv': features.get('pv_forecast_2h', pv_power)
+                },
+                '3h': {
+                    'outdoor': features.get('temp_forecast_3h', outdoor_temp),
+                    'pv': features.get('pv_forecast_3h', pv_power)
+                },
+                '4h': {
+                    'outdoor': features.get('temp_forecast_4h', outdoor_temp),
+                    'pv': features.get('pv_forecast_4h', pv_power)
+                },
+                'avg': {
+                    'outdoor': (features.get('temp_forecast_1h', outdoor_temp) +
+                               features.get('temp_forecast_2h', outdoor_temp) +
+                               features.get('temp_forecast_3h', outdoor_temp) +
+                               features.get('temp_forecast_4h', outdoor_temp)) / 4.0,
+                    'pv': (features.get('pv_forecast_1h', pv_power) +
+                          features.get('pv_forecast_2h', pv_power) +
+                          features.get('pv_forecast_3h', pv_power) +
+                          features.get('pv_forecast_4h', pv_power)) / 4.0
+                }
+            }
+            
+            # Calculate predicted outlet temperature for each horizon
+            predictions = {}
+            for horizon, conditions in forecasts.items():
+                try:
+                    # Use same precision as main binary search for consistency
+                    outlet_min, outlet_max = config.CLAMP_MIN_ABS, config.CLAMP_MAX_ABS
+                    tolerance = 0.1  # Same precision as main binary search
+                    
+                    for iteration in range(20):  # Same iterations as main binary search
+                        outlet_mid = (outlet_min + outlet_max) / 2.0
+                        predicted_indoor = self.thermal_model.predict_equilibrium_temperature(
+                            outlet_temp=outlet_mid,
+                            outdoor_temp=conditions['outdoor'],
+                            current_indoor=current_indoor,
+                            pv_power=conditions['pv'],
+                            fireplace_on=fireplace_on,
+                            tv_on=tv_on,
+                            _suppress_logging=True
+                        )
+                        
+                        if predicted_indoor is None:
+                            break
+                            
+                        error = predicted_indoor - target_indoor
+                        if abs(error) < tolerance:
+                            predictions[horizon] = {
+                                'outlet': outlet_mid,
+                                'predicted': predicted_indoor,
+                                'conditions': conditions
+                            }
+                            break
+                            
+                        if predicted_indoor < target_indoor:
+                            outlet_min = outlet_mid
+                        else:
+                            outlet_max = outlet_mid
+                    else:
+                        # Didn't converge, use midpoint
+                        final_outlet = (outlet_min + outlet_max) / 2.0
+                        final_predicted = self.thermal_model.predict_equilibrium_temperature(
+                            outlet_temp=final_outlet,
+                            outdoor_temp=conditions['outdoor'],
+                            current_indoor=current_indoor,
+                            pv_power=conditions['pv'],
+                            fireplace_on=fireplace_on,
+                            tv_on=tv_on,
+                            _suppress_logging=True
+                        )
+                        if final_predicted is not None:
+                            predictions[horizon] = {
+                                'outlet': final_outlet,
+                                'predicted': final_predicted,
+                                'conditions': conditions
+                            }
+                        
+                except Exception as e:
+                    logging.debug(f"Multi-horizon prediction failed for {horizon}: {e}")
+                    continue
+            
+            # Log the multi-horizon predictions in a clear format
+            if predictions:
+                logging.info(f"🔍 Multi-horizon predictions for target {target_indoor:.1f}°C:")
+                
+                # Order the predictions logically (including cycle-aligned)
+                order = ['current', cycle_method, '1h', '2h', '3h', '4h', 'avg']
+                for horizon in order:
+                    if horizon in predictions:
+                        pred = predictions[horizon]
+                        outlet = pred['outlet']
+                        predicted = pred['predicted']
+                        conditions = pred['conditions']
+                        error = predicted - target_indoor
+                        
+                        # Mark the cycle-aligned prediction as NEW and avg as OLD SYSTEM
+                        if horizon == cycle_method:
+                            marker = "← NEW: Cycle-aligned"
+                        elif horizon == 'avg':
+                            marker = "(OLD SYSTEM)"
+                        else:
+                            marker = ""
+                            
+                        logging.info(f"   {horizon:>12}: {outlet:.1f}°C → {predicted:.1f}°C "
+                                   f"(error: {error:+.2f}°C, outdoor: {conditions['outdoor']:.1f}°C, "
+                                   f"PV: {conditions['pv']:.0f}W) {marker}")
+                
+                # Show the differences to highlight issues
+                if 'current' in predictions and 'avg' in predictions:
+                    current_outlet = predictions['current']['outlet']
+                    avg_outlet = predictions['avg']['outlet']
+                    outlet_diff = avg_outlet - current_outlet
+                    
+                    if abs(outlet_diff) > 2.0:  # Significant difference
+                        direction = "higher" if outlet_diff > 0 else "lower"
+                        logging.warning(f"⚠️ Forecast vs current difference: "
+                                      f"forecast avg outlet {outlet_diff:+.1f}°C {direction} "
+                                      f"than current conditions")
+            else:
+                logging.debug("🔍 Multi-horizon: No predictions calculated successfully")
+                
+        except Exception as e:
+            logging.error(f"Multi-horizon prediction logging failed: {e}")
+    
     def _verify_trajectory_and_correct(self, outlet_temp: float, current_indoor: float,
                                        target_indoor: float, outdoor_temp: float,
                                        thermal_features: Dict, features: Optional[Dict] = None) -> float:
         """
         Verify that the calculated outlet temperature will actually reach the target
-        using trajectory prediction, and apply course correction if needed.
+        using trajectory prediction, and apply physics-based adaptive correction if needed.
         
-        ENHANCED for overnight scenarios: Even when current > target, check if
-        temperature will drop below target due to thermal losses.
+        PHYSICS-BASED CORRECTION: Uses learned thermal parameters to adaptively scale
+        corrections based on house characteristics and time pressure.
         """
         try:
             # UNIFIED: Get forecast conditions using centralized method
@@ -486,107 +720,195 @@ class EnhancedModelWrapper:
                     tv_on=thermal_features.get('tv_on', 0.0)
                 )
             else:
-                # Fallback: Use averages of forecast data 
-                avg_outdoor = sum(outdoor_forecast) / len(outdoor_forecast)
-                avg_pv = sum(pv_forecast) / len(pv_forecast)
-                
+                # FIXED: Use cycle-aligned conditions instead of 4-hour averages
+                # This ensures trajectory matches the cycle-aligned forecast shown in logs
                 trajectory = self.thermal_model.predict_thermal_trajectory(
                     current_indoor=current_indoor,
                     target_indoor=target_indoor,
                     outlet_temp=outlet_temp,
-                    outdoor_temp=avg_outdoor,
+                    outdoor_temp=avg_outdoor,  # Use cycle-aligned outdoor temp
                     time_horizon_hours=config.TRAJECTORY_STEPS,
-                    pv_power=avg_pv,
+                    pv_power=avg_pv,  # Use cycle-aligned PV power
                     fireplace_on=thermal_features.get('fireplace_on', 0.0),
                     tv_on=thermal_features.get('tv_on', 0.0)
                 )
                 
-                # Forecast averages already logged by _get_forecast_conditions()
+                logging.debug(f"🔍 Trajectory prediction using cycle-aligned conditions: "
+                           f"outdoor={avg_outdoor:.1f}°C, PV={avg_pv:.0f}W")
             
-            # ENHANCED LOGIC: Check for multiple failure modes
-            needs_correction = False
-            temp_error = 0.0
-            correction_reason = ""
+            # TRAJECTORY-BASED DECISION: Check if target reachable within cycle time
+            cycle_hours = config.CYCLE_INTERVAL_MINUTES / 60.0
             
-            # PRIORITY 1: If trajectory shows target will be reached within reasonable time, don't apply corrections
-            if trajectory['reaches_target_at'] is not None and trajectory['reaches_target_at'] <= 1.0:
-                logging.info(f"✅ Trajectory shows target will be reached at {trajectory['reaches_target_at']}h - no correction needed")
-                return outlet_temp
-            elif trajectory['reaches_target_at'] is not None and trajectory['reaches_target_at'] > 1.0:
-                logging.info(f"⏰ Trajectory shows target will be reached at {trajectory['reaches_target_at']}h (too slow) - applying correction")
-                # Continue to check Priority 2 for correction
+            # DEBUG: Log trajectory details for diagnosis
+            trajectory_temps = trajectory.get('trajectory', [])
+            first_hour_temp = trajectory_temps[0] if trajectory_temps else current_indoor
+            reaches_target_at = trajectory.get('reaches_target_at')
             
-            # PRIORITY 2: TRAJECTORY PATH VIOLATIONS
-            # Check trajectory path for boundary violations during the journey to equilibrium
-            # This is the valuable part - binary search can't predict journey problems
-            # Uses sensor-aligned boundaries (±0.1°C) for consistent behavior
+            logging.info(f"🔍 Trajectory DEBUG: outlet={outlet_temp:.1f}°C → 1h_prediction={first_hour_temp:.2f}°C "
+                        f"(vs target {target_indoor:.1f}°C, error: {first_hour_temp - target_indoor:+.3f}°C), "
+                        f"reaches_target_at={reaches_target_at}h, cycle_time={cycle_hours:.1f}h")
             
+            # NEW LOGIC: Check for temperature boundary violations regardless of target achievement
+            # This ensures comfort boundaries are respected even when target is theoretically reachable
             trajectory_temps = trajectory.get('trajectory', [])
             if trajectory_temps:
-                min_temp_over_time = min(trajectory_temps)
-                max_temp_over_time = max(trajectory_temps)
-                
-                # SIGNED ERROR APPROACH: Positive = need more heat, Negative = need less heat
-                
-                # Check for trajectory DROPS during journey
-                if min_temp_over_time <= target_indoor - 0.1:
-                    temp_error = target_indoor - min_temp_over_time  # POSITIVE (need more heat)
-                    correction_reason = f"temperature_drop_predicted (min: {min_temp_over_time:.1f}°C)"
-                    needs_correction = True
-                
-                # Check for trajectory RISES during journey
-                elif max_temp_over_time >= target_indoor + 0.1:
-                    temp_error = -(max_temp_over_time - target_indoor)  # NEGATIVE (need less heat)
-                    correction_reason = f"temperature_rise_predicted (max: {max_temp_over_time:.1f}°C)"
-                    needs_correction = True
-                    
-                    
-            if needs_correction and abs(temp_error) > 0.05:
-                # PHYSICS-BASED TRAJECTORY CORRECTION WITH SIGNED ERRORS
-                # When trajectory shows target won't be reached, apply physics-based correction
-                # This is NOT arbitrary - it's based on the actual thermal deficit/excess predicted
-                
-                # Calculate physics-based correction proportional to thermal error
-                # Use the thermal model's own outlet effectiveness to determine correction
-                effectiveness = self.thermal_model.outlet_effectiveness
-                
-                if effectiveness > 0:
-                    # Physics: To make up for temp_error, adjust outlet proportionally
-                    # Positive temp_error = need more heat, Negative = need less heat
-                    physics_correction = temp_error / effectiveness
-                    
-                    # Apply reasonable bounds to prevent extreme corrections
-                    physics_correction = max(physics_correction, -20.0)  # Min -20°C correction
-                    physics_correction = min(physics_correction, 20.0)   # Max +20°C correction
-                    
-                    # Ensure minimum meaningful correction magnitude
-                    if abs(physics_correction) < 1.0:
-                        physics_correction = 1.0 if temp_error > 0 else -1.0
-                else:
-                    # Fallback if effectiveness is invalid
-                    physics_correction = temp_error * 8.0  # Reasonable multiplier
-                
-                # SIMPLIFIED: Apply signed correction directly
-                corrected_outlet = outlet_temp + physics_correction
-                
-                # Apply system bounds
-                corrected_outlet = max(corrected_outlet, config.CLAMP_MIN_ABS)
-                corrected_outlet = min(corrected_outlet, config.CLAMP_MAX_ABS)
-                
-                direction_str = "increase" if physics_correction > 0 else "decrease"
-                logging.info(f"🎯 Signed trajectory correction: {outlet_temp:.1f}°C → {corrected_outlet:.1f}°C "
-                            f"({direction_str}, reason: {correction_reason}, "
-                            f"temp_error: {temp_error:+.2f}°C, correction: {physics_correction:+.1f}°C)")
-                
-                return corrected_outlet
+                min_temp = min(trajectory_temps)
+                max_temp = max(trajectory_temps)
+                temp_boundary_violation = (
+                    min_temp <= target_indoor - 0.1 or  # Temperature drops below comfort boundary
+                    max_temp >= target_indoor + 0.1     # Temperature rises above comfort boundary
+                )
             else:
-                logging.debug(f"✅ Trajectory verification: no correction needed (reaches target: {trajectory.get('reaches_target_at', 'N/A')}h)")
+                temp_boundary_violation = False
+                
+            # Enhanced logic: If target reached quickly, be more lenient with boundary violations
+            if reaches_target_at is not None and reaches_target_at <= cycle_hours:
+                if not temp_boundary_violation:
+                    logging.info(f"✅ Target will be reached in {reaches_target_at:.1f}h "
+                               f"(within {cycle_hours:.1f}h cycle) and no boundary violations - no correction needed")
+                    return outlet_temp
+                else:
+                    # Target reachable quickly but has boundary violations
+                    # For fast target achievement (< 0.5h), allow larger tolerance (±0.3°C instead of ±0.1°C)
+                    if reaches_target_at <= 0.5:  # Very fast achievement
+                        relaxed_boundary_violation = (
+                            min_temp <= target_indoor - 0.3 or  # More lenient boundary
+                            max_temp >= target_indoor + 0.3     # More lenient boundary
+                        )
+                        if not relaxed_boundary_violation:
+                            logging.info(f"✅ Target will be reached quickly in {reaches_target_at:.1f}h "
+                                       f"with minor boundary violation (±0.1-0.2°C range) - no correction needed")
+                            return outlet_temp
+                            
+            # Apply correction if target not reachable or significant boundary violations
+            if reaches_target_at is None or reaches_target_at > cycle_hours:
+                logging.info(f"⚠️ Target will NOT be reached within {cycle_hours:.1f}h cycle - applying physics-based correction")
+            else:
+                logging.info(f"⚠️ Target reachable in {reaches_target_at:.1f}h but significant boundary violations detected - applying correction")
             
-            return outlet_temp
+            # Apply physics-based adaptive correction
+            if temp_boundary_violation:
+                logging.info(f"⚠️ Temperature boundary violations detected (min: {min_temp:.2f}°C, max: {max_temp:.2f}°C) - applying correction")
+            else:
+                logging.info(f"⚠️ Target will NOT be reached within {cycle_hours:.1f}h cycle - applying physics-based correction")
+            
+            # Calculate physics-based correction
+            corrected_outlet = self._calculate_physics_based_correction(
+                outlet_temp=outlet_temp,
+                trajectory=trajectory,
+                target_indoor=target_indoor,
+                cycle_hours=cycle_hours
+            )
+            
+            return corrected_outlet
             
         except Exception as e:
             logging.error(f"Trajectory verification failed: {e}")
             return outlet_temp  # Return original if verification fails
+    
+    def _calculate_physics_based_correction(self, outlet_temp: float, trajectory: Dict,
+                                          target_indoor: float, cycle_hours: float) -> float:
+        """
+        Calculate physics-based adaptive correction using learned thermal parameters.
+        
+        Uses house-specific thermal characteristics to scale corrections appropriately
+        while maintaining exponential response for urgent scenarios.
+        """
+        try:
+            # Calculate temperature error from trajectory
+            trajectory_temps = trajectory.get('trajectory', [])
+            if not trajectory_temps:
+                return outlet_temp
+            
+            # Calculate temperature error from trajectory boundary violations
+            min_predicted_temp = min(trajectory_temps)
+            max_predicted_temp = max(trajectory_temps)
+            
+            # Check for boundary violations (include exact boundary matches)
+            min_violates = min_predicted_temp <= target_indoor - 0.1  # Temperature drops below comfort boundary
+            max_violates = max_predicted_temp >= target_indoor + 0.1  # Temperature rises above comfort boundary
+            
+            if min_violates and max_violates:
+                # Both boundaries violated - choose the more severe one
+                min_severity = abs(min_predicted_temp - (target_indoor - 0.1))
+                max_severity = abs(max_predicted_temp - (target_indoor + 0.1))
+                if min_severity > max_severity:
+                    temp_error = target_indoor - min_predicted_temp  # Positive correction to increase outlet
+                else:
+                    temp_error = target_indoor - max_predicted_temp  # Negative correction to decrease outlet
+            elif min_violates:
+                # Only minimum violated - temperature drops too low
+                temp_error = target_indoor - min_predicted_temp  # Positive correction
+            elif max_violates:
+                # Only maximum violated - temperature rises too high
+                temp_error = target_indoor - max_predicted_temp  # Negative correction
+            else:
+                # No violations (shouldn't reach here if temp_boundary_violation was True)
+                temp_error = 0.0
+            
+            # Calculate time pressure based on how far we are from reachability
+            time_pressure = self._calculate_time_pressure(trajectory, cycle_hours)
+            
+            # Physics-based scaling factor derived from house characteristics
+            time_constant = self.thermal_model.thermal_time_constant
+            effectiveness = self.thermal_model.outlet_effectiveness
+            
+            # Adaptive scaling: combines your house's 15.0 factor with physics
+            # For your house: (4.0 * 4.0) / 0.084 ≈ 15.0 (matches heat curve)
+            if effectiveness > 0:
+                physics_scale = (time_constant * 4.0) / effectiveness
+            else:
+                physics_scale = 15.0  # Fallback to heat curve default
+                
+            # Exponential response based on time pressure
+            if time_pressure > 0.8:  # Very urgent
+                urgency_multiplier = 2.0
+            elif time_pressure > 0.5:  # Moderate urgency
+                urgency_multiplier = 1.5
+            else:  # Low urgency
+                urgency_multiplier = 1.0
+                
+            # Calculate correction
+            correction = temp_error * physics_scale * urgency_multiplier
+            
+            # House-specific bounds (same as heat curve for compatibility)
+            max_heating = 10.0
+            max_cooling = -20.0
+            correction = max(max_cooling, min(max_heating, correction))
+            
+            # Apply correction to outlet temperature
+            corrected_outlet = outlet_temp + correction
+            
+            # Apply system bounds
+            corrected_outlet = max(config.CLAMP_MIN_ABS, 
+                                 min(config.CLAMP_MAX_ABS, corrected_outlet))
+            
+            logging.info(f"🏠 Physics-based correction: {outlet_temp:.1f}°C + {correction:+.1f}°C = {corrected_outlet:.1f}°C "
+                        f"(temp_error: {temp_error:+.2f}°C, scale: {physics_scale:.1f}, "
+                        f"time_pressure: {time_pressure:.2f}, urgency: {urgency_multiplier:.1f}x)")
+            
+            return corrected_outlet
+            
+        except Exception as e:
+            logging.error(f"Physics-based correction failed: {e}")
+            return outlet_temp
+    
+    def _calculate_time_pressure(self, trajectory: Dict, cycle_hours: float) -> float:
+        """
+        Calculate how urgently we need to correct (0.0 = no pressure, 1.0 = maximum urgency).
+        """
+        reaches_target_at = trajectory.get('reaches_target_at')
+        
+        if reaches_target_at is None:
+            return 1.0  # Maximum urgency - may never reach target
+        elif reaches_target_at <= cycle_hours:
+            return 0.0  # No pressure - target reachable in time (should not happen here)
+        elif reaches_target_at <= cycle_hours * 2:
+            return 0.3  # Low pressure - close to reachable
+        elif reaches_target_at <= cycle_hours * 4:
+            return 0.6  # Medium pressure
+        else:
+            return 1.0  # High pressure - far from target
     
     # This method is no longer needed - thermal state is loaded in ThermalEquilibriumModel
     

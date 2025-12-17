@@ -331,6 +331,177 @@ def render_prediction_accuracy():
         ]['prediction_accuracy'].mean()
         st.metric("Optimal Range Accuracy", f"{optimal_range:.1f}%")
 
+def render_shadow_mode_benchmarks():
+    """Render shadow mode ML vs Heat Curve benchmarking analysis"""
+    st.subheader("🎯 Shadow Mode: ML vs Heat Curve Benchmarks")
+    st.caption("Comparing ML predictions against heat curve performance in shadow mode")
+    
+    # Load shadow mode benchmark data (would come from InfluxDB in production)
+    benchmark_data = generate_demo_shadow_benchmarks()
+    
+    if not benchmark_data:
+        st.warning("Shadow mode benchmarking data not available. Enable SHADOW_MODE to collect benchmarks.")
+        return
+    
+    df = pd.DataFrame(benchmark_data)
+    
+    # Main comparison chart
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=('Outlet Temperature Comparison', 'Efficiency Advantage Over Time',
+                       'Target Achievement Accuracy', 'Energy Savings Distribution'),
+        specs=[[{"secondary_y": False}, {"secondary_y": False}],
+               [{"secondary_y": False}, {"secondary_y": False}]]
+    )
+    
+    # Outlet temperature comparison
+    fig.add_trace(
+        go.Scatter(x=df['timestamp'], y=df['ml_outlet_prediction'],
+                  name='ML Prediction', line=dict(color='blue')),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=df['timestamp'], y=df['heat_curve_outlet_actual'],
+                  name='Heat Curve Actual', line=dict(color='red')),
+        row=1, col=1
+    )
+    
+    # Efficiency advantage over time
+    fig.add_trace(
+        go.Scatter(x=df['timestamp'], y=df['efficiency_advantage'],
+                  name='Efficiency Advantage', 
+                  line=dict(color='green'),
+                  fill='tonexty' if df['efficiency_advantage'].mean() > 0 else None),
+        row=1, col=2
+    )
+    
+    # Target achievement accuracy
+    fig.add_trace(
+        go.Scatter(x=df['timestamp'], y=df['target_achievement_accuracy'],
+                  name='Achievement Accuracy', line=dict(color='purple')),
+        row=2, col=1
+    )
+    
+    # Energy savings distribution
+    fig.add_trace(
+        go.Histogram(x=df['energy_savings_pct'], name='Energy Savings %',
+                    marker_color='lightgreen', nbinsx=20),
+        row=2, col=2
+    )
+    
+    fig.update_layout(height=600, showlegend=True,
+                     title_text="Shadow Mode Benchmarking Analysis")
+    fig.update_xaxes(title_text="Time", row=1, col=1)
+    fig.update_xaxes(title_text="Time", row=1, col=2)
+    fig.update_xaxes(title_text="Time", row=2, col=1)
+    fig.update_xaxes(title_text="Energy Savings (%)", row=2, col=2)
+    fig.update_yaxes(title_text="Outlet Temp (°C)", row=1, col=1)
+    fig.update_yaxes(title_text="Advantage (°C)", row=1, col=2)
+    fig.update_yaxes(title_text="Accuracy (%)", row=2, col=1)
+    fig.update_yaxes(title_text="Frequency", row=2, col=2)
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    avg_ml_outlet = df['ml_outlet_prediction'].mean()
+    avg_hc_outlet = df['heat_curve_outlet_actual'].mean()
+    avg_efficiency = df['efficiency_advantage'].mean()
+    avg_savings = df['energy_savings_pct'].mean()
+    
+    with col1:
+        st.metric("Avg ML Outlet", f"{avg_ml_outlet:.1f}°C")
+    with col2:
+        st.metric("Avg Heat Curve", f"{avg_hc_outlet:.1f}°C")
+    with col3:
+        delta = avg_efficiency
+        st.metric("Efficiency Advantage", f"{avg_efficiency:+.1f}°C", 
+                 f"{'Lower outlet = more efficient' if delta < 0 else 'Higher outlet needed'}")
+    with col4:
+        st.metric("Energy Savings", f"{avg_savings:.1f}%",
+                 f"{'Savings' if avg_savings > 0 else 'No savings'}")
+    
+    # Insights and recommendations
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.info("**Benchmarking Insights:**")
+        if avg_efficiency < 0:
+            st.write(f"• ML predicts **{abs(avg_efficiency):.1f}°C lower** outlet temps on average")
+            st.write("• ML system shows potential for energy savings")
+            st.write(f"• Estimated **{avg_savings:.1f}%** energy reduction possible")
+        else:
+            st.write(f"• Heat curve operates **{avg_efficiency:.1f}°C lower** than ML would predict")
+            st.write("• Current heat curve already optimized")
+            st.write("• Consider switching to active ML mode")
+    
+    with col2:
+        if avg_efficiency < -2.0:
+            st.success("**Recommendation: Switch to Active Mode**")
+            st.write("• ML shows significant efficiency potential")
+            st.write("• Shadow mode learning appears sufficient")
+            st.write("• Consider enabling ML control")
+        elif abs(avg_efficiency) < 1.0:
+            st.warning("**Recommendation: Continue Shadow Mode**")
+            st.write("• Performance similar between systems")
+            st.write("• Allow more learning time")
+            st.write("• Monitor trend development")
+        else:
+            st.info("**Recommendation: Review Configuration**")
+            st.write("• Check heat curve settings")
+            st.write("• Verify sensor calibration")
+            st.write("• Monitor learning progress")
+
+def generate_demo_shadow_benchmarks():
+    """Generate demo shadow mode benchmark data"""
+    np.random.seed(42)
+    
+    # Generate 7 days of shadow mode benchmark data
+    timestamps = pd.date_range(
+        start=datetime.now() - timedelta(days=7),
+        end=datetime.now(),
+        freq='H'
+    )
+    
+    benchmark_data = []
+    
+    for i, ts in enumerate(timestamps):
+        # Simulate outdoor temperature cycle
+        hour_of_day = ts.hour
+        outdoor_temp = 5 + 10 * np.sin((hour_of_day - 6) * np.pi / 12) + np.random.normal(0, 2)
+        
+        # Heat curve typically sets higher outlet temps
+        heat_curve_outlet = 35 + (10 - outdoor_temp) * 0.8 + np.random.normal(0, 1)
+        heat_curve_outlet = max(25, min(55, heat_curve_outlet))
+        
+        # ML learns to be more efficient over time
+        learning_progress = min(1.0, i / (len(timestamps) * 0.7))
+        ml_efficiency_gain = learning_progress * 3.5  # Up to 3.5°C lower
+        ml_outlet = heat_curve_outlet - ml_efficiency_gain + np.random.normal(0, 0.5)
+        ml_outlet = max(20, min(50, ml_outlet))
+        
+        # Calculate derived metrics
+        efficiency_advantage = heat_curve_outlet - ml_outlet  # Positive = ML more efficient
+        energy_savings_pct = max(0, efficiency_advantage * 2.5)  # Rough conversion
+        
+        # Target achievement accuracy (both systems good at maintaining temperature)
+        target_accuracy = 85 + learning_progress * 10 + np.random.normal(0, 3)
+        target_accuracy = max(70, min(98, target_accuracy))
+        
+        benchmark_data.append({
+            'timestamp': ts,
+            'ml_outlet_prediction': ml_outlet,
+            'heat_curve_outlet_actual': heat_curve_outlet,
+            'efficiency_advantage': efficiency_advantage,
+            'energy_savings_pct': energy_savings_pct,
+            'target_achievement_accuracy': target_accuracy,
+            'outdoor_temp': outdoor_temp,
+            'learning_progress': learning_progress * 100
+        })
+    
+    return benchmark_data
+
 def render_energy_efficiency():
     """Render energy efficiency analysis"""
     st.subheader("⚡ Energy Efficiency Analysis")
@@ -530,6 +701,11 @@ def render_performance():
     
     with col2:
         render_energy_efficiency()
+    
+    st.divider()
+    
+    # Add shadow mode benchmarking section
+    render_shadow_mode_benchmarks()
     
     st.divider()
     

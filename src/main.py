@@ -30,15 +30,7 @@ from .physics_calibration import (
     validate_thermal_model,
 )
 from .state_manager import load_state, save_state
-from .heating_controller import (
-    BlockingStateManager,
-    SensorDataManager, 
-    HeatingSystemStateChecker
-)
-from .temperature_control import (
-    TemperatureControlManager,
-    OnlineLearning
-)
+from .heating_controller import BlockingStateManager
 
 
 def poll_for_blocking(ha_client, state, blocking_entities):
@@ -225,6 +217,29 @@ def main(args):
             # Fetch all states from Home Assistant at once to minimize API calls.
             all_states = ha_client.get_all_states()
 
+            # --- Determine Shadow Mode Early (needed for grace period) ---
+            # Read input_boolean.ml_heating to determine control mode
+            ml_heating_enabled = None
+            if all_states:
+                ml_heating_enabled = ha_client.get_state(
+                    config.ML_HEATING_CONTROL_ENTITY_ID, 
+                    all_states, 
+                    is_binary=True
+                )
+            
+            # Shadow mode is active when:
+            # - Config SHADOW_MODE=true (override), OR
+            # - ML heating boolean is OFF/unavailable
+            if ml_heating_enabled is None:
+                if all_states:  # Only warn if we could fetch states
+                    logging.warning(
+                        "Cannot read %s, defaulting to shadow mode for safety",
+                        config.ML_HEATING_CONTROL_ENTITY_ID
+                    )
+                ml_heating_enabled = False
+            
+            effective_shadow_mode = config.SHADOW_MODE or not ml_heating_enabled
+
             if not all_states:
                 logging.warning("Could not fetch states from HA, skipping cycle.")
                 # Emit NETWORK_ERROR state to Home Assistant
@@ -339,13 +354,34 @@ def main(args):
                             'tv_on': learning_features.get('tv_on', 0.0)
                         }
                         
-                        # Calculate what the model predicted vs actual result
-                        predicted_change = 0.0  # Model's prediction for indoor temp change
-                        actual_change = actual_indoor_change
+                        # Calculate what the thermal model would have actually predicted
+                        # for this outlet temperature and conditions
+                        try:
+                            predicted_indoor_temp = wrapper.thermal_model.predict_equilibrium_temperature(
+                                outlet_temp=actual_applied_temp,
+                                outdoor_temp=prediction_context.get('outdoor_temp', 10.0),
+                                current_indoor=last_indoor_temp,
+                                pv_power=prediction_context.get('pv_power', 0.0),
+                                fireplace_on=prediction_context.get('fireplace_on', 0.0),
+                                tv_on=prediction_context.get('tv_on', 0.0),
+                                _suppress_logging=True
+                            )
+                            
+                            if predicted_indoor_temp is not None:
+                                # Use actual thermal model prediction instead of hardcoded 0.0
+                                model_predicted_temp = predicted_indoor_temp
+                            else:
+                                # Fallback: no learning if prediction failed
+                                logging.warning("Skipping online learning: thermal model prediction failed")
+                                continue
+                                
+                        except Exception as e:
+                            logging.warning(f"Skipping online learning: thermal model prediction error: {e}")
+                            continue
                         
-                        # Call the learning feedback method that was missing!
+                        # Call the learning feedback method with actual model prediction
                         wrapper.learn_from_prediction_feedback(
-                            predicted_temp=last_indoor_temp + predicted_change,
+                            predicted_temp=model_predicted_temp,
                             actual_temp=current_indoor,
                             prediction_context=prediction_context,
                             timestamp=datetime.now().isoformat()
@@ -405,208 +441,10 @@ def main(args):
             is_blocking = bool(blocking_reasons)
 
             # --- Grace Period after Blocking ---
-            # If a blocking event recently ended, enter a grace period to allow
-            # the system to stabilize before resuming ML control. We persist the
-            # blocking end time so the grace period can expire if the event is
-            # too far in the past. Also abort the grace immediately if blocking
-            # reappears while waiting.
-            last_is_blocking = state.get("last_is_blocking", False)
-            last_blocking_end_time = state.get("last_blocking_end_time")
-            if last_is_blocking and not is_blocking:
-                # Mark the blocking end time if not already set (this happens when
-                # we detect the transition from blocking->not-blocking).
-                if last_blocking_end_time is None:
-                    last_blocking_end_time = time.time()
-                    try:
-                        save_state(last_blocking_end_time=last_blocking_end_time)
-                    except Exception:
-                        logging.debug("Failed to persist last_blocking_end_time.", exc_info=True)
-
-                # If the blocking end is older than GRACE_PERIOD_MAX_MINUTES, skip grace.
-                age = time.time() - last_blocking_end_time
-                if age > config.GRACE_PERIOD_MAX_MINUTES * 60:
-                    logging.info(
-                        "Grace period expired (ended %.1f min ago); skipping restore/wait.",
-                        age / 60.0,
-                    )
-                else:
-                    logging.info("--- Grace Period Started ---")
-                    logging.info(
-                        "Blocking event ended %.1f min ago. Entering grace period to allow system to stabilize.",
-                        age / 60.0,
-                    )
-                    last_final_temp = state.get("last_final_temp")
-
-                    if last_final_temp is not None:
-                        # Determine whether the outlet is currently hotter or colder than
-                        # the last target. For DHW-like events the outlet will be hotter;
-                        # for defrost it can be colder due to reversed flow.
-                        actual_outlet_temp_start = ha_client.get_state(
-                            config.ACTUAL_OUTLET_TEMP_ENTITY_ID,
-                            ha_client.get_all_states(),
-                        )
-                        if actual_outlet_temp_start is None:
-                            logging.warning(
-                                "Cannot read actual_outlet_temp at grace start; skipping wait."
-                            )
-                        else:
-                            delta0 = actual_outlet_temp_start - last_final_temp
-                            if delta0 == 0:
-                                logging.info(
-                                    "Actual outlet equals the restored target (%.1f°C); no wait needed.",
-                                    last_final_temp,
-                                )
-                            else:
-                                # Choose wait condition based on initial direction.
-                                wait_for_cooling = delta0 > 0
-                                if wait_for_cooling:
-                                    # Outlet hot (DHW): use aggressive cool-down target
-                                    # to speed up recovery without overshooting
-                                    grace_target = (
-                                        last_final_temp +
-                                        config.MAX_TEMP_CHANGE_PER_CYCLE
-                                    )
-                                else:
-                                    # Outlet cold (defrost): restore exact pre-defrost
-                                    # target and wait for full recovery to prevent
-                                    # sawtooth patterns
-                                    grace_target = last_final_temp
-                                
-                                logging.info(
-                                    "Restoring outlet target: %.1f°C "
-                                    "(last=%.1f°C, actual=%.1f°C, %s)",
-                                    grace_target,
-                                    last_final_temp,
-                                    actual_outlet_temp_start,
-                                    (
-                                        "cool-down"
-                                        if wait_for_cooling
-                                        else "warm-up"
-                                    ),
-                                )
-                                ha_client.set_state(
-                                    config.TARGET_OUTLET_TEMP_ENTITY_ID,
-                                    grace_target,
-                                    get_sensor_attributes(
-                                        config.TARGET_OUTLET_TEMP_ENTITY_ID
-                                    ),
-                                    round_digits=0,
-                                )
-
-                                start_time = time.time()
-                                max_seconds = config.GRACE_PERIOD_MAX_MINUTES * 60
-                                logging.info(
-                                    "Grace period: initial outlet delta %.1f°C "
-                                    "-> waiting for %s (timeout %d min).",
-                                    delta0,
-                                    (
-                                        "actual <= target"
-                                        if wait_for_cooling
-                                        else "actual >= target"
-                                    ),
-                                    config.GRACE_PERIOD_MAX_MINUTES,
-                                )
-
-                                while True:
-                                    # During the grace wait we also poll for blocking
-                                    # reappearance. If blocking appears we abort the
-                                    # grace and reset the blocking timer.
-                                    all_states_poll = ha_client.get_all_states()
-                                    blocking_now_poll = any(
-                                        ha_client.get_state(e, all_states_poll, is_binary=True)
-                                        for e in blocking_entities
-                                    )
-                                    if blocking_now_poll:
-                                        logging.info(
-                                            "Blocking reappeared during grace; aborting wait and preserving blocking state."
-                                        )
-                                        try:
-                                            blocking_reasons_now = [
-                                                e
-                                                for e in blocking_entities
-                                                if ha_client.get_state(e, all_states_poll, is_binary=True)
-                                            ]
-                                            save_state(
-                                                last_is_blocking=True,
-                                                last_final_temp=state.get("last_final_temp"),
-                                                last_blocking_reasons=blocking_reasons_now,
-                                                last_blocking_end_time=None,
-                                            )
-                                        except Exception:
-                                            logging.debug("Failed to persist blocking restart.", exc_info=True)
-                                        break
-
-                                    actual_outlet_temp = ha_client.get_state(
-                                        config.ACTUAL_OUTLET_TEMP_ENTITY_ID,
-                                        all_states_poll,
-                                    )
-                                    if actual_outlet_temp is None:
-                                        logging.warning(
-                                            "Cannot read actual_outlet_temp, exiting grace period."
-                                        )
-                                        break
-                                    # If outlet started hotter than target, wait until it cools
-                                    # to <= grace_target. If it started colder (defrost), wait until
-                                    # it warms to >= grace_target.
-                                    if wait_for_cooling and actual_outlet_temp <= grace_target:
-                                        logging.info(
-                                            "Actual outlet temp (%.1f°C) has cooled to or below"
-                                            " grace target (%.1f°C). Resuming control.",
-                                            actual_outlet_temp,
-                                            grace_target,
-                                        )
-                                        break
-                                    if (not wait_for_cooling) and actual_outlet_temp >= grace_target:
-                                        logging.info(
-                                            "Actual outlet temp (%.1f°C) has warmed to or above"
-                                            " grace target (%.1f°C). Resuming control.",
-                                            actual_outlet_temp,
-                                            grace_target,
-                                        )
-                                        break
-                                    elapsed = time.time() - start_time
-                                    if elapsed > max_seconds:
-                                        logging.warning(
-                                            "Grace period timed out after %d minutes; proceeding.",
-                                            config.GRACE_PERIOD_MAX_MINUTES,
-                                        )
-                                        break
-                                    logging.info(
-                                        "Waiting for outlet to %s grace target "
-                                        "(current: %.1f°C, target: %.1f°C). "
-                                        "Elapsed: %d/%d min",
-                                        (
-                                            "cool to"
-                                            if wait_for_cooling
-                                            else "warm to"
-                                        ),
-                                        actual_outlet_temp,
-                                        grace_target,
-                                        int(elapsed / 60),
-                                        config.GRACE_PERIOD_MAX_MINUTES,
-                                    )
-                                    time.sleep(config.BLOCKING_POLL_INTERVAL_SECONDS)
-
-                    else:
-                        logging.info(
-                            "No last_final_temp found in persisted state; skipping restore/wait."
-                        )
-
-                    logging.info("--- Grace Period Ended ---")
-                    try:
-                        save_state(last_is_blocking=False, last_blocking_end_time=None)
-                    except Exception:
-                        logging.debug("Failed to persist cleared blocking state.", exc_info=True)
-                    # skip the rest of this cycle so restored last_final_temp stays in HA while sensors settle
-                    continue
-                    # Refresh HA states after the grace period so subsequent sensor reads
-                    # (used for prediction and clamping) reflect the current system state.
-                    try:
-                        all_states = ha_client.get_all_states()
-                    except Exception:
-                        logging.debug(
-                            "Failed to refresh HA states after grace period.", exc_info=True
-                        )
+            # Use modular blocking state manager for cleaner code organization
+            blocking_manager = BlockingStateManager()
+            if blocking_manager.handle_grace_period(ha_client, state, shadow_mode=effective_shadow_mode):
+                continue  # Skip cycle due to grace period
 
             # --- Check if heating system is active ---
             # Skip if the climate entity is not in 'heat' mode
@@ -1071,26 +909,7 @@ def main(args):
             else:
                 logging.debug("🔍 SHADOW MODE: Skipping ML state sensor updates")
 
-            # --- Shadow Mode Control via HA Boolean ---
-            # Read input_boolean.ml_heating to determine control mode
-            ml_heating_enabled = ha_client.get_state(
-                config.ML_HEATING_CONTROL_ENTITY_ID, 
-                all_states, 
-                is_binary=True
-            )
-            
-            # Shadow mode is active when:
-            # - Config SHADOW_MODE=true (override), OR
-            # - ML heating boolean is OFF/unavailable
-            if ml_heating_enabled is None:
-                logging.warning(
-                    "Cannot read %s, defaulting to shadow mode for safety",
-                    config.ML_HEATING_CONTROL_ENTITY_ID
-                )
-                ml_heating_enabled = False
-            
-            effective_shadow_mode = config.SHADOW_MODE or not ml_heating_enabled
-            
+            # --- Shadow Mode Status Logging ---
             if config.SHADOW_MODE:
                 logging.info("🔍 SHADOW MODE: Enabled via config (SHADOW_MODE=true)")
             elif not ml_heating_enabled:

@@ -34,16 +34,53 @@ Get your ML Heating Control system up and running in 15 minutes.
 - **Sidebar**: Look for "ML Heating Control" panel
 - **Direct**: `http://homeassistant:3001`
 
-### 3. Monitor Learning (Ongoing)
+### 3. Choose Your Path
 
-**Week 1:** Shadow mode - Confidence 0.3→0.7  
-**Week 2-4:** Active learning - Confidence 0.7→0.9  
-**Month 2+:** Mature operation - Confidence 0.9+  
+#### Option A: Shadow Mode (Recommended)
+Safe learning while heat curve controls heating:
+```yaml
+SHADOW_MODE: true  # Add to configuration
+```
+- ✅ **No heating disruption** - Heat curve continues operating
+- ✅ **Pure physics learning** - Learns building characteristics
+- ✅ **Efficiency insights** - ML vs heat curve comparison
+- ✅ **Risk-free** - Only observes, never controls
 
-### 4. Go Active (When Ready)
+**Timeline:**
+- **Week 1-2:** Physics learning and benchmarking
+- **Week 3-4:** Efficiency comparison analysis  
+- **Month 1+:** Ready for active mode transition
 
-When confidence > 0.9 and MAE < 0.2°C:
-- Dashboard → Control → Toggle "Active Control Mode"
+#### Option B: Direct Active Mode
+Immediate ML control (requires existing calibration):
+- Only recommended if you have `thermal_state.json`
+- Monitor closely for first 48 hours
+- Revert to heat curve if issues arise
+
+### 4. Monitor Progress
+
+#### Shadow Mode Indicators
+- **Learning Confidence**: 3.0 → 7.0+
+- **Efficiency Advantage**: Track ML vs heat curve (°C)
+- **Energy Savings**: Potential percentage improvement
+
+#### Active Mode Indicators  
+- **Confidence**: > 0.9
+- **MAE**: < 0.2°C
+- **State**: "OK"
+- **Temperature stability**: Improved vs. baseline
+
+### 5. Switch to Active Mode
+
+When shadow mode shows good results:
+- **Learning confidence > 7.0**
+- **Efficiency advantage > 2°C**  
+- **Stable for 2+ weeks**
+
+```yaml
+SHADOW_MODE: false  # Disable shadow mode
+```
+Then restart the add-on.
 
 ## 🎯 Success Indicators
 

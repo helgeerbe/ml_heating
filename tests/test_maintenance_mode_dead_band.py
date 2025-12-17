@@ -7,6 +7,7 @@ for different temperature scenarios.
 import pandas as pd
 
 from src.model_wrapper import simplified_outlet_prediction
+from src import config
 
 
 class TestMaintenanceModeDeadBand:
@@ -36,9 +37,10 @@ class TestMaintenanceModeDeadBand:
         prediction_method = metadata.get('prediction_method', 'SIMPLIFIED')
         
         # Should return reasonable outlet temperature
-        assert 15.0 <= final_outlet_temp <= 65.0  # Within reasonable bounds
+        assert config.CLAMP_MIN_ABS <= final_outlet_temp <= config.CLAMP_MAX_ABS
         assert confidence > 0.0  # Should have positive confidence
-        assert prediction_method in ['SIMPLIFIED', 'ThermalEquilibrium', 'thermal_equilibrium_single_prediction']
+        assert prediction_method in ['SIMPLIFIED', 'ThermalEquilibrium', 
+                                   'thermal_equilibrium_single_prediction']
         
     def test_small_temperature_difference(self):
         """Test outlet prediction for small temperature differences."""
@@ -62,7 +64,7 @@ class TestMaintenanceModeDeadBand:
         )
         
         # Should return reasonable values
-        assert 15.0 <= final_outlet_temp <= 65.0
+        assert config.CLAMP_MIN_ABS <= final_outlet_temp <= config.CLAMP_MAX_ABS
         assert confidence > 0.0
         
     def test_heating_scenario(self):
@@ -87,7 +89,7 @@ class TestMaintenanceModeDeadBand:
         )
         
         # Should return reasonable heating temperature
-        assert 15.0 <= final_outlet_temp <= 65.0
+        assert config.CLAMP_MIN_ABS <= final_outlet_temp <= config.CLAMP_MAX_ABS
         assert confidence > 0.0
         # For heating scenario, might expect higher outlet temperature
         assert final_outlet_temp >= 25.0  # Should be reasonable for heating
@@ -114,7 +116,7 @@ class TestMaintenanceModeDeadBand:
         )
         
         # Should return reasonable cooling temperature
-        assert 15.0 <= final_outlet_temp <= 65.0
+        assert config.CLAMP_MIN_ABS <= final_outlet_temp <= config.CLAMP_MAX_ABS
         assert confidence > 0.0
         
     def test_boundary_temperature_scenarios(self):
@@ -143,6 +145,6 @@ class TestMaintenanceModeDeadBand:
             )
             
             # All scenarios should return reasonable results
-            assert 15.0 <= final_outlet_temp <= 65.0
+            assert config.CLAMP_MIN_ABS <= final_outlet_temp <= config.CLAMP_MAX_ABS
             assert confidence > 0.0
             assert isinstance(metadata, dict)

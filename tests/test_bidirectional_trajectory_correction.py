@@ -138,15 +138,15 @@ class TestBidirectionalTrajectoryCorrection:
         assert result == 35.0, "Should not apply correction when within boundaries"
     
     @patch('model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
-    def test_priority_1_overrides_boundary_checks_when_fast(self):
-        """Test that PRIORITY 1 (target reached within 1h) overrides boundary checks."""
-        # Mock trajectory that reaches target quickly (should override boundary checks)
+    def test_cycle_aligned_trajectory_checking_with_violations(self):
+        """Test that cycle-time aligned logic checks for violations regardless of target achievement."""
+        # Mock trajectory that reaches target but has boundary violations
         mock_trajectory = {
-            'reaches_target_at': 0.8,  # Target reached at 0.8 hours (fast enough)
+            'reaches_target_at': 0.8,  # Target reached at 0.8 hours
             'equilibrium_temp': 21.0,
-            'trajectory': [21.0, 20.8, 20.9, 21.0]  # Contains boundary violation
+            'trajectory': [21.0, 20.8, 20.9, 21.0]  # Contains boundary violation (20.8 <= 20.9)
         }
-        
+
         with patch.object(self.wrapper.thermal_model, 'predict_thermal_trajectory', return_value=mock_trajectory):
             result = self.wrapper._verify_trajectory_and_correct(
                 outlet_temp=35.0,
@@ -155,9 +155,9 @@ class TestBidirectionalTrajectoryCorrection:
                 outdoor_temp=5.0,
                 thermal_features=self.base_thermal_features
             )
-            
-        # Should NOT apply correction due to PRIORITY 1
-        assert result == 35.0, "PRIORITY 1 should override boundary checks when target reached quickly"
+
+        # NEW BEHAVIOR: Cycle-time logic checks for violations even with fast target achievement
+        assert result > 35.0, "Should apply correction for trajectory violations despite fast target achievement"
     
     @patch('model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
     def test_priority_1_does_not_override_when_too_slow(self):

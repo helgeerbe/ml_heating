@@ -739,6 +739,81 @@ class InfluxService:
         except Exception as e:
             logging.exception("Failed to write trajectory prediction metrics to InfluxDB: %s", e)
 
+    def write_shadow_mode_benchmarks(
+        self,
+        benchmark_data: dict,
+        bucket: str = None,
+        org: str = None,
+        timestamp: datetime = None,
+    ) -> None:
+        """
+        Write shadow mode ML vs Heat Curve benchmark data to InfluxDB.
+        
+        Exports comparison data showing ML predictions vs actual heat curve
+        settings for energy efficiency analysis and model validation.
+        
+        Args:
+            benchmark_data: Dict with ML vs heat curve comparison data
+            bucket: Target bucket name. If None, uses config.INFLUX_BUCKET.
+            org: Influx organization. If None, uses config.INFLUX_ORG.
+            timestamp: Optional datetime for the point timestamp.
+        """
+        if not benchmark_data:
+            logging.debug("No shadow mode benchmark data to write to InfluxDB.")
+            return
+
+        write_bucket = bucket or config.INFLUX_BUCKET
+        write_org = org or getattr(config, "INFLUX_ORG", None)
+
+        try:
+            point_time = timestamp if timestamp else datetime.now(timezone.utc)
+            
+            p = Point("ml_heating_shadow_benchmark").tag("source", "ml_heating").tag("mode", "shadow").time(point_time)
+            
+            # Core benchmark metrics
+            p = p.field("ml_outlet_prediction", float(benchmark_data.get('ml_outlet_prediction', 0.0)))
+            p = p.field("heat_curve_outlet_actual", float(benchmark_data.get('heat_curve_outlet_actual', 0.0)))
+            p = p.field("efficiency_advantage", float(benchmark_data.get('efficiency_advantage', 0.0)))
+            
+            # Additional contextual data if available
+            if 'target_temp' in benchmark_data:
+                p = p.field("target_temp", float(benchmark_data['target_temp']))
+            if 'outdoor_temp' in benchmark_data:
+                p = p.field("outdoor_temp", float(benchmark_data['outdoor_temp']))
+            
+            # Calculate efficiency metrics
+            ml_prediction = benchmark_data.get('ml_outlet_prediction', 0.0)
+            hc_actual = benchmark_data.get('heat_curve_outlet_actual', 0.0)
+            
+            if hc_actual > 0:
+                # Energy savings percentage (positive = ML more efficient)
+                energy_savings_pct = ((hc_actual - ml_prediction) / hc_actual) * 100
+                p = p.field("energy_savings_pct", float(energy_savings_pct))
+                
+                # Efficiency comparison category
+                if energy_savings_pct > 5:
+                    efficiency_category = "ml_much_better"
+                elif energy_savings_pct > 1:
+                    efficiency_category = "ml_better"
+                elif energy_savings_pct > -1:
+                    efficiency_category = "similar"
+                elif energy_savings_pct > -5:
+                    efficiency_category = "hc_better"
+                else:
+                    efficiency_category = "hc_much_better"
+                    
+                p = p.tag("efficiency_category", efficiency_category)
+
+            self.write_api.write(bucket=write_bucket, org=write_org, record=p)
+            
+            logging.debug(
+                "Wrote shadow mode benchmark to InfluxDB: ML=%.1f°C, HC=%.1f°C, advantage=%+.1f°C",
+                ml_prediction, hc_actual, benchmark_data.get('efficiency_advantage', 0.0)
+            )
+            
+        except Exception as e:
+            logging.exception("Failed to write shadow mode benchmark data to InfluxDB: %s", e)
+
 
 def create_influx_service():
     """
@@ -749,3 +824,36 @@ def create_influx_service():
     return InfluxService(
         config.INFLUX_URL, config.INFLUX_TOKEN, config.INFLUX_ORG
     )
+
+
+# Singleton instance for global access
+_influx_service_instance = None
+
+
+def get_influx_service():
+    """
+    Get the global InfluxService instance.
+    
+    Creates a singleton instance on first call for efficient resource usage.
+    Used by benchmarking and other systems that need InfluxDB access.
+    
+    Returns:
+        InfluxService instance or None if configuration is missing
+    """
+    global _influx_service_instance
+    
+    if _influx_service_instance is None:
+        try:
+            _influx_service_instance = create_influx_service()
+            logging.debug("Created InfluxService singleton instance")
+        except Exception as e:
+            logging.warning(f"Failed to create InfluxService: {e}")
+            _influx_service_instance = None
+    
+    return _influx_service_instance
+
+
+def reset_influx_service():
+    """Reset the singleton instance (useful for testing)."""
+    global _influx_service_instance
+    _influx_service_instance = None

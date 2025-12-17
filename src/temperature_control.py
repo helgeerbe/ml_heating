@@ -283,37 +283,68 @@ class OnlineLearning:
         try:
             wrapper = get_enhanced_model_wrapper()
             
-            # Prepare prediction context for learning
-            prediction_context = {
-                'outlet_temp': actual_applied_temp,
-                'outdoor_temp': learning_features.get('outdoor_temp', 10.0),
-                'pv_power': learning_features.get('pv_now', 0.0),
-                'fireplace_on': learning_features.get('fireplace_on', 0.0),
-                'tv_on': learning_features.get('tv_on', 0.0)
-            }
-            
-            # Calculate what the model predicted vs actual result
-            predicted_change = 0.0  # Model's prediction for indoor temp change
-            
-            # Call the learning feedback method
-            wrapper.learn_from_prediction_feedback(
-                predicted_temp=current_indoor - actual_indoor_change + predicted_change,
-                actual_temp=current_indoor,
-                prediction_context=prediction_context,
-                timestamp=datetime.now().isoformat()
-            )
-            
-            logging.info(
-                "✅ Online learning: applied_temp=%.1f°C, actual_change=%.3f°C, cycle=%d",
-                actual_applied_temp, actual_indoor_change, wrapper.cycle_count
-            )
+            # Shadow mode vs Active mode learning context
+            if config.SHADOW_MODE:
+                # Shadow mode: Learn pure physics (heat curve outlet → actual indoor)
+                prediction_context = {
+                    'outlet_temp': actual_applied_temp,  # Heat curve's actual setting
+                    'outdoor_temp': learning_features.get('outdoor_temp', 10.0),
+                    'pv_power': learning_features.get('pv_now', 0.0),
+                    'fireplace_on': learning_features.get('fireplace_on', 0.0),
+                    'tv_on': learning_features.get('tv_on', 0.0)
+                    # NO target temperature in shadow mode learning context!
+                }
+                
+                # Previous indoor temperature (what we're learning to predict)
+                previous_indoor = current_indoor - actual_indoor_change
+                
+                # Learn: heat curve outlet → actual indoor (pure physics)
+                wrapper.learn_from_prediction_feedback(
+                    predicted_temp=previous_indoor,  # Starting indoor temp
+                    actual_temp=current_indoor,      # Actual result indoor temp
+                    prediction_context=prediction_context,
+                    timestamp=datetime.now().isoformat()
+                )
+                
+                logging.info(
+                    "🔬 Shadow mode physics learning: heat_curve_outlet=%.1f°C → "
+                    "indoor_change=%.3f°C (%.1f→%.1f°C), cycle=%d",
+                    actual_applied_temp, actual_indoor_change, 
+                    previous_indoor, current_indoor, wrapper.cycle_count
+                )
+                
+            else:
+                # Active mode: Normal learning from ML's own predictions
+                prediction_context = {
+                    'outlet_temp': actual_applied_temp,  # ML's own prediction that was applied
+                    'outdoor_temp': learning_features.get('outdoor_temp', 10.0),
+                    'pv_power': learning_features.get('pv_now', 0.0),
+                    'fireplace_on': learning_features.get('fireplace_on', 0.0),
+                    'tv_on': learning_features.get('tv_on', 0.0)
+                }
+                
+                # Calculate what the model predicted vs actual result
+                predicted_change = 0.0  # Model's prediction for indoor temp change
+                
+                # Call the learning feedback method
+                wrapper.learn_from_prediction_feedback(
+                    predicted_temp=current_indoor - actual_indoor_change + predicted_change,
+                    actual_temp=current_indoor,
+                    prediction_context=prediction_context,
+                    timestamp=datetime.now().isoformat()
+                )
+                
+                logging.info(
+                    "✅ Active mode learning: ml_outlet=%.1f°C, actual_change=%.3f°C, cycle=%d",
+                    actual_applied_temp, actual_indoor_change, wrapper.cycle_count
+                )
             
         except Exception as e:
             logging.warning("Online learning failed: %s", e, exc_info=True)
     
     def _log_shadow_mode_comparison(self, actual_applied_temp: float, 
                                   last_final_temp_stored: float) -> None:
-        """Log shadow mode comparison if applicable"""
+        """Log shadow mode comparison and benchmarking if applicable"""
         # Only log comparison when actually in shadow mode (not active mode)
         # In active mode, ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID reads what ML itself set
         effective_shadow_mode = (
@@ -322,10 +353,108 @@ class OnlineLearning:
         )
         
         if effective_shadow_mode and actual_applied_temp != last_final_temp_stored:
+            # Calculate efficiency advantage (lower outlet = more efficient)
+            efficiency_advantage = actual_applied_temp - last_final_temp_stored
+            
+            # Enhanced benchmarking logging
             logging.info(
-                "Shadow mode: ML would have set %.1f°C, HC set %.1f°C",
-                last_final_temp_stored, actual_applied_temp
+                "🎯 Shadow Benchmark: ML would predict %.1f°C, "
+                "Heat Curve set %.1f°C (difference: %+.1f°C)",
+                last_final_temp_stored, actual_applied_temp, efficiency_advantage
             )
+            
+            # Export benchmark data to InfluxDB if available
+            self._export_shadow_benchmark_data(
+                ml_outlet_prediction=last_final_temp_stored,
+                heat_curve_outlet_actual=actual_applied_temp,
+                efficiency_advantage=efficiency_advantage
+            )
+
+    def calculate_ml_benchmark_prediction(self, target_indoor_temp: float, 
+                                        current_indoor_temp: float, 
+                                        context: Dict) -> float:
+        """
+        Calculate what ML would predict for current target temperature.
+        
+        This implements Task 2.1 from the TODO - provides the missing ML 
+        prediction calculation for proper benchmarking against heat curve.
+        
+        Args:
+            target_indoor_temp: Target temperature to achieve
+            current_indoor_temp: Current indoor temperature
+            context: Environmental context (outdoor_temp, pv_power, etc.)
+            
+        Returns:
+            ML's predicted optimal outlet temperature for the target
+        """
+        try:
+            wrapper = get_enhanced_model_wrapper()
+            
+            # Extract environmental context
+            outdoor_temp = context.get('outdoor_temp', 10.0)
+            pv_power = context.get('pv_power', 0.0)
+            fireplace_on = context.get('fireplace_on', 0.0)
+            tv_on = context.get('tv_on', 0.0)
+            
+            # Get ML's prediction for achieving target temperature
+            ml_optimal_result = wrapper.calculate_optimal_outlet_temperature(
+                target_indoor=target_indoor_temp,
+                current_indoor=current_indoor_temp,
+                outdoor_temp=outdoor_temp,
+                pv_power=pv_power,
+                fireplace_on=fireplace_on,
+                tv_on=tv_on
+            )
+            
+            if ml_optimal_result is None:
+                logging.warning("ML optimal calculation failed, using fallback prediction")
+                return 40.0  # Fallback
+                
+            ml_predicted_outlet = ml_optimal_result.get('optimal_outlet_temp', 40.0)
+            
+            logging.debug(
+                "ML benchmark prediction: target=%.1f°C, current=%.1f°C, "
+                "outdoor=%.1f°C → ML predicts %.1f°C outlet",
+                target_indoor_temp, current_indoor_temp, outdoor_temp, ml_predicted_outlet
+            )
+            
+            return ml_predicted_outlet
+            
+        except Exception as e:
+            logging.warning("ML benchmark prediction failed: %s, using fallback", e)
+            return 40.0  # Safe fallback
+    
+    def _export_shadow_benchmark_data(self, ml_outlet_prediction: float,
+                                    heat_curve_outlet_actual: float,
+                                    efficiency_advantage: float) -> None:
+        """Export shadow mode benchmark data to InfluxDB"""
+        try:
+            # Import here to avoid circular imports
+            from .influx_service import get_influx_service
+            
+            influx_service = get_influx_service()
+            if influx_service is None:
+                logging.debug("No InfluxDB service available for benchmark export")
+                return
+                
+            benchmark_data = {
+                'ml_outlet_prediction': ml_outlet_prediction,
+                'heat_curve_outlet_actual': heat_curve_outlet_actual,
+                'efficiency_advantage': efficiency_advantage,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            # Write benchmark data point
+            influx_service.write_shadow_mode_benchmarks(benchmark_data)
+            
+            logging.debug(
+                "📊 Exported shadow benchmark: ML=%.1f°C, HC=%.1f°C, "
+                "efficiency_advantage=%+.1f°C",
+                ml_outlet_prediction, heat_curve_outlet_actual, efficiency_advantage
+            )
+            
+        except Exception as e:
+            logging.warning("Failed to export shadow mode benchmark data: %s", e)
 
 
 class TemperatureControlManager:

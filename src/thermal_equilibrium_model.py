@@ -253,13 +253,61 @@ class ThermalEquilibriumModel:
                                   prediction_context: Dict, timestamp: str = None):
         """
         Update the model with real-world feedback to enable adaptive learning.
+        
+        ENHANCED Shadow Mode Learning:
+        - In SHADOW_MODE: Learn pure physics (outlet_temp → actual_indoor_temp)
+        - Track learning during ALL scenarios (equilibrium + correction periods)
+        - Label learning context to understand correction vs equilibrium learning
         """
         if not self.adaptive_learning_enabled:
             return
+
+        # Enhanced shadow mode physics learning
+        if config.SHADOW_MODE:
+            # In shadow mode, we learn pure physics: outlet → indoor temp prediction
+            # The prediction_context should contain the heat curve's outlet setting
+            outlet_temp = prediction_context.get('outlet_temp')
+            if outlet_temp is None:
+                logging.warning("Shadow mode: No outlet_temp in prediction context, skipping learning")
+                return
             
-        prediction_error = actual_temp - predicted_temp
+            # Create pure physics prediction using heat curve's outlet setting
+            physics_prediction = self.predict_equilibrium_temperature(
+                outlet_temp=outlet_temp,
+                outdoor_temp=prediction_context.get('outdoor_temp', 10.0),
+                current_indoor=predicted_temp,  # Use current indoor as reference
+                pv_power=prediction_context.get('pv_power', 0),
+                fireplace_on=prediction_context.get('fireplace_on', 0),
+                tv_on=prediction_context.get('tv_on', 0),
+                _suppress_logging=True
+            )
+            
+            # Learn from heat curve outlet → actual indoor (pure physics)
+            physics_error = actual_temp - physics_prediction
+            
+            # Determine system state for learning context
+            was_correcting = prediction_context.get('trajectory_correction_applied', False)
+            temp_change_rate = abs(prediction_context.get('indoor_temp_gradient', 0.0))
+            
+            system_state = 'equilibrium'
+            if was_correcting:
+                system_state = 'trajectory_correction'
+            elif temp_change_rate > 0.1:  # °C per hour
+                system_state = 'thermal_transition'
+            
+            logging.debug(f"Shadow mode physics learning ({system_state}): "
+                         f"outlet={outlet_temp:.1f}°C → predicted_indoor={physics_prediction:.2f}°C, "
+                         f"actual_indoor={actual_temp:.2f}°C, error={physics_error:.3f}°C")
+            
+            # Use physics prediction and error for learning
+            predicted_temp = physics_prediction
+            prediction_error = physics_error
+        else:
+            # Active mode: Normal learning from ML's own predictions
+            prediction_error = actual_temp - predicted_temp
+            system_state = 'active_mode'
         
-        # Store prediction for error analysis
+        # Store prediction for error analysis with enhanced context
         prediction_record = {
             'timestamp': timestamp,
             'predicted': predicted_temp,
@@ -270,7 +318,10 @@ class ThermalEquilibriumModel:
                 'thermal_time_constant': self.thermal_time_constant,
                 'heat_loss_coefficient': self.heat_loss_coefficient,
                 'outlet_effectiveness': self.outlet_effectiveness
-            }
+            },
+            'shadow_mode': config.SHADOW_MODE,  # Track learning mode
+            'system_state': system_state,  # Track whether system was correcting/equilibrium
+            'learning_quality': self._assess_learning_quality(prediction_context, prediction_error)
         }
         
         self.prediction_history.append(prediction_record)
@@ -303,6 +354,34 @@ class ThermalEquilibriumModel:
             
         logging.debug(f"Prediction feedback: error={prediction_error:.3f}°C, "
                      f"confidence={self.learning_confidence:.3f}")
+
+    def _assess_learning_quality(self, prediction_context: Dict, prediction_error: float) -> str:
+        """
+        Assess the quality of this learning opportunity.
+        
+        Helps identify when learning conditions are ideal vs when they might be noisy.
+        """
+        try:
+            # Check for stable conditions (good for learning)
+            temp_gradient = abs(prediction_context.get('indoor_temp_gradient', 0.0))
+            is_stable = temp_gradient < 0.1  # °C/hour
+            
+            # Check error magnitude
+            error_magnitude = abs(prediction_error)
+            
+            if error_magnitude < 0.1 and is_stable:
+                return 'excellent'  # Small error, stable conditions
+            elif error_magnitude < 0.5 and is_stable:
+                return 'good'       # Moderate error, stable conditions
+            elif error_magnitude < 0.1:
+                return 'fair'       # Small error, unstable conditions
+            elif is_stable:
+                return 'fair'       # Large error, but stable conditions
+            else:
+                return 'poor'       # Large error, unstable conditions
+                
+        except Exception:
+            return 'unknown'
 
     def _adapt_parameters_from_recent_errors(self):
         """
@@ -594,12 +673,40 @@ class ThermalEquilibriumModel:
             current_temp = current_temp + temp_change
             trajectory.append(current_temp)
         
-        # Analyze trajectory for key metrics
+        # Analyze trajectory for key metrics  
         reaches_target_at = None
-        for i, temp in enumerate(trajectory):
-            if abs(temp - target_indoor) < self.safety_margin:
-                reaches_target_at = i + 1  # Hours from now
-                break
+        # Use sensor precision tolerance: error must be < 0.1°C to be "on target"
+        # 20.9°C vs 21.0°C = 0.1°C error = off target
+        # 20.91°C vs 21.0°C = 0.09°C error = on target  
+        sensor_precision_tolerance = 0.1  # °C - error must be LESS than this
+        
+        # Check if we're already at target (immediate check based on equilibrium)
+        # Use current conditions to see if outlet temp would achieve target immediately
+        equilibrium_temp = self.predict_equilibrium_temperature(
+            outlet_temp=outlet_temp,
+            outdoor_temp=outdoor_temp,
+            current_indoor=current_indoor,
+            pv_power=external_sources.get('pv_power', 0),
+            fireplace_on=external_sources.get('fireplace_on', 0),
+            tv_on=external_sources.get('tv_on', 0),
+            _suppress_logging=True
+        )
+        
+        # If equilibrium prediction is on target, consider it immediately reachable
+        if equilibrium_temp is not None and abs(equilibrium_temp - target_indoor) < sensor_precision_tolerance:
+            reaches_target_at = 0.1  # Immediately reachable (0.1h = 6 minutes)
+        else:
+            # Otherwise check trajectory points
+            for i, temp in enumerate(trajectory):
+                if abs(temp - target_indoor) < sensor_precision_tolerance:  # < not <=
+                    reaches_target_at = i + 1  # Hours from now
+                    break
+            
+            # CYCLE-SPECIFIC CHECK: If first trajectory point is on target, check cycle timing
+            if trajectory and abs(trajectory[0] - target_indoor) < sensor_precision_tolerance:
+                # First hour prediction is on target, so target reachable within cycle
+                cycle_hours = 0.5  # 30-minute cycle
+                reaches_target_at = min(reaches_target_at or float('inf'), cycle_hours)
         
         # Check for overshoot prediction
         overshoot_predicted = False
