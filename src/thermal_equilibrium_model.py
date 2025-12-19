@@ -1,57 +1,64 @@
 """
 Thermal Equilibrium Model with Adaptive Learning.
 
-This module defines the core physics-based model for predicting thermal equilibrium
-and adapting its parameters in real-time based on prediction accuracy. It combines
-a heat balance equation with a gradient-based learning mechanism to continuously
-improve its accuracy.
+This module defines the core physics-based model for predicting thermal
+equilibrium and adapting its parameters in real-time based on prediction
+accuracy. It combines a heat balance equation with a gradient-based
+learning mechanism to continuously improve its accuracy.
 """
 
 import numpy as np
 import logging
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # MIGRATION: Use unified thermal parameter system
 try:
     from .thermal_parameters import thermal_params  # Package-relative import
     from .thermal_constants import PhysicsConstants
+
     # Keep config import for backward compatibility during migration
     from . import config  # Fallback for non-migrated parameters
 except ImportError:
-    from thermal_parameters import thermal_params  # Direct import fallback for notebooks
+    from thermal_parameters import (
+        thermal_params,
+    )  # Direct import fallback for notebooks
     from thermal_constants import PhysicsConstants
     import config  # Direct import fallback
 
 # Singleton pattern for ThermalEquilibriumModel to prevent excessive instantiation
 _thermal_equilibrium_model_instance = None
 
+
 class ThermalEquilibriumModel:
     """
     A physics-based thermal model that predicts indoor temperature equilibrium
     and adapts its parameters based on real-world feedback.
-    
+
     Implements singleton pattern to prevent excessive logging during calibration.
     """
-    
+
     def __new__(cls):
         global _thermal_equilibrium_model_instance
         if _thermal_equilibrium_model_instance is None:
-            _thermal_equilibrium_model_instance = super(ThermalEquilibriumModel, cls).__new__(cls)
+            _thermal_equilibrium_model_instance = super(
+                ThermalEquilibriumModel, cls
+            ).__new__(cls)
             _thermal_equilibrium_model_instance._initialized = False
         return _thermal_equilibrium_model_instance
-    
+
     def __init__(self):
         # Only initialize once due to singleton pattern
-        if not getattr(self, '_initialized', False):
+        if not getattr(self, "_initialized", False):
             # Load calibrated parameters first, fallback to config defaults
             self._load_thermal_parameters()
-            
+
             self.outdoor_coupling = config.OUTDOOR_COUPLING
             # thermal_bridge_factor removed in Phase 2: was not used in calculations
             self._initialized = True
         else:
             # Singleton instance already initialized, skip redundant initialization
             pass
+
     def _load_thermal_parameters(self):
         """
         Load thermal parameters with proper baseline + adjustments.
@@ -63,175 +70,232 @@ class ThermalEquilibriumModel:
                 from .unified_thermal_state import get_thermal_state_manager
             except ImportError:
                 from unified_thermal_state import get_thermal_state_manager
-            
+
             state_manager = get_thermal_state_manager()
             thermal_state = state_manager.get_current_parameters()
-            
+
             # Check for calibrated parameters in baseline_parameters section
-            baseline_params = thermal_state.get('baseline_parameters', {})
-            if baseline_params.get('source') == 'calibrated':
+            baseline_params = thermal_state.get("baseline_parameters", {})
+            if baseline_params.get("source") == "calibrated":
                 # Load baseline + adjustments for trained parameters
-                learning_state = thermal_state.get('learning_state', {})
-                adjustments = learning_state.get('parameter_adjustments', {})
-                
+                learning_state = thermal_state.get("learning_state", {})
+                adjustments = learning_state.get("parameter_adjustments", {})
+
                 # Apply learning adjustments to baseline for actual trained values
-                self.thermal_time_constant = baseline_params['thermal_time_constant'] + adjustments.get('thermal_time_constant_delta', 0.0)
-                self.heat_loss_coefficient = baseline_params['heat_loss_coefficient'] + adjustments.get('heat_loss_coefficient_delta', 0.0)
-                self.outlet_effectiveness = baseline_params['outlet_effectiveness'] + adjustments.get('outlet_effectiveness_delta', 0.0)
-                
+                self.thermal_time_constant = baseline_params[
+                    "thermal_time_constant"
+                ] + adjustments.get("thermal_time_constant_delta", 0.0)
+                self.heat_loss_coefficient = baseline_params[
+                    "heat_loss_coefficient"
+                ] + adjustments.get("heat_loss_coefficient_delta", 0.0)
+                self.outlet_effectiveness = baseline_params[
+                    "outlet_effectiveness"
+                ] + adjustments.get("outlet_effectiveness_delta", 0.0)
+
                 self.external_source_weights = {
-                    'pv': baseline_params.get('pv_heat_weight', config.PV_HEAT_WEIGHT),
-                    'fireplace': baseline_params.get('fireplace_heat_weight', config.FIREPLACE_HEAT_WEIGHT),
-                    'tv': baseline_params.get('tv_heat_weight', config.TV_HEAT_WEIGHT)
+                    "pv": baseline_params.get("pv_heat_weight", config.PV_HEAT_WEIGHT),
+                    "fireplace": baseline_params.get(
+                        "fireplace_heat_weight", config.FIREPLACE_HEAT_WEIGHT
+                    ),
+                    "tv": baseline_params.get("tv_heat_weight", config.TV_HEAT_WEIGHT),
                 }
-                
-                logging.info("🎯 Loading CALIBRATED thermal parameters (baseline + learning adjustments):")
-                logging.info(f"   thermal_time_constant: {baseline_params['thermal_time_constant']:.2f} + {adjustments.get('thermal_time_constant_delta', 0.0):.3f} = {self.thermal_time_constant:.2f}h")
-                logging.info(f"   heat_loss_coefficient: {baseline_params['heat_loss_coefficient']:.4f} + {adjustments.get('heat_loss_coefficient_delta', 0.0):.5f} = {self.heat_loss_coefficient:.4f}")
-                logging.info(f"   outlet_effectiveness: {baseline_params['outlet_effectiveness']:.3f} + {adjustments.get('outlet_effectiveness_delta', 0.0):.3f} = {self.outlet_effectiveness:.3f}")
-                logging.info(f"   pv_heat_weight: {self.external_source_weights['pv']:.4f}")
-                
+
+                logging.info(
+                    "🎯 Loading CALIBRATED thermal parameters (baseline + learning adjustments):"
+                )
+                logging.info(
+                    "   thermal_time_constant: %.2f + %.3f = %.2f h",
+                    baseline_params["thermal_time_constant"],
+                    adjustments.get("thermal_time_constant_delta", 0.0),
+                    self.thermal_time_constant,
+                )
+                logging.info(
+                    "   heat_loss_coefficient: %.4f + %.5f = %.4f",
+                    baseline_params["heat_loss_coefficient"],
+                    adjustments.get("heat_loss_coefficient_delta", 0.0),
+                    self.heat_loss_coefficient,
+                )
+                logging.info(
+                    "   outlet_effectiveness: %.3f + %.3f = %.3f",
+                    baseline_params["outlet_effectiveness"],
+                    adjustments.get("outlet_effectiveness_delta", 0.0),
+                    self.outlet_effectiveness,
+                )
+                logging.info(
+                    "   pv_heat_weight: %.4f", self.external_source_weights["pv"]
+                )
+
                 # Validate parameters using schema validator
                 try:
                     from .thermal_state_validator import validate_thermal_state_safely
+
                     if not validate_thermal_state_safely(thermal_state):
-                        logging.warning("⚠️ Thermal state validation failed, using config defaults")
+                        logging.warning(
+                            "⚠️ Thermal state validation failed, using config defaults"
+                        )
                         self._load_config_defaults()
                         return
                 except ImportError:
                     logging.debug("Schema validation not available")
-                
+
                 # Initialize learning attributes for calibrated parameters too
                 self._initialize_learning_attributes()
-                
+
                 # Restore learning history from saved state
-                self.learning_confidence = learning_state.get('learning_confidence', 3.0)
-                self.prediction_history = learning_state.get('prediction_history', [])
-                self.parameter_history = learning_state.get('parameter_history', [])
-                
-                logging.info(f"   - Restored learning confidence: {self.learning_confidence:.3f}")
-                logging.info(f"   - Restored prediction history: {len(self.prediction_history)} records")
-                logging.info(f"   - Restored parameter history: {len(self.parameter_history)} records")
-                
+                self.learning_confidence = learning_state.get(
+                    "learning_confidence", 3.0
+                )
+                self.prediction_history = learning_state.get("prediction_history", [])
+                self.parameter_history = learning_state.get("parameter_history", [])
+
+                logging.info(
+                    f"   - Restored learning confidence: {self.learning_confidence:.3f}"
+                )
+                logging.info(
+                    f"   - Restored prediction history: {len(self.prediction_history)} records"
+                )
+                logging.info(
+                    f"   - Restored parameter history: {len(self.parameter_history)} records"
+                )
+
             else:
                 # Use config defaults
                 self._load_config_defaults()
-                logging.info("⚙️ Loading DEFAULT config parameters (no calibration found)")
-                
+                logging.info(
+                    "⚙️ Loading DEFAULT config parameters (no calibration found)"
+                )
+
         except Exception as e:
             # Fallback to config defaults if thermal state unavailable
             logging.warning(f"⚠️ Failed to load calibrated parameters: {e}")
             self._load_config_defaults()
             logging.info("⚙️ Using config defaults as fallback")
-    
+
     def _load_config_defaults(self):
         """MIGRATED: Load thermal parameters from unified parameter system."""
         # MIGRATION: Use unified thermal parameter system
-        self.thermal_time_constant = thermal_params.get('thermal_time_constant')
-        self.heat_loss_coefficient = thermal_params.get('heat_loss_coefficient')
-        self.outlet_effectiveness = thermal_params.get('outlet_effectiveness')
+        self.thermal_time_constant = thermal_params.get("thermal_time_constant")
+        self.heat_loss_coefficient = thermal_params.get("heat_loss_coefficient")
+        self.outlet_effectiveness = thermal_params.get("outlet_effectiveness")
 
         self.external_source_weights = {
-            'pv': thermal_params.get('pv_heat_weight'),
-            'fireplace': thermal_params.get('fireplace_heat_weight'),
-            'tv': thermal_params.get('tv_heat_weight')
+            "pv": thermal_params.get("pv_heat_weight"),
+            "fireplace": thermal_params.get("fireplace_heat_weight"),
+            "tv": thermal_params.get("tv_heat_weight"),
         }
-        
+
         # Initialize remaining attributes
         self._initialize_learning_attributes()
-        
+
     def _initialize_learning_attributes(self):
         """Initialize adaptive learning and other attributes (called from both parameter loading paths)."""
         self.adaptive_learning_enabled = True
         self.safety_margin = PhysicsConstants.DEFAULT_SAFETY_MARGIN
         self.prediction_horizon_hours = PhysicsConstants.DEFAULT_PREDICTION_HORIZON
         self.momentum_decay_rate = PhysicsConstants.MOMENTUM_DECAY_RATE
-        
+
         # Dynamic threshold bounds for safety (legacy - may be removed)
         # Deprecated charging/balancing thresholds removed in Phase 3 cleanup
         # These were replaced by the heat balance controller in model_wrapper.py
-        
+
         # Learning and adaptation (now configurable via config.py)
         self.learning_rate = config.ADAPTIVE_LEARNING_RATE
         self.equilibrium_samples = []
         self.trajectory_samples = []
         self.overshoot_events = []
-        
+
         # Performance tracking
         self.prediction_errors = []
         self.mode_switch_history = []
         self.overshoot_prevention_count = 0
-        
+
         # Real-time adaptive learning - DISABLED to prevent unrealistic parameter drift
         self.prediction_history = []  # Store recent predictions vs actual
-        self.parameter_history = []   # Track parameter changes over time
+        self.parameter_history = []  # Track parameter changes over time
         self.learning_confidence = config.LEARNING_CONFIDENCE
         self.min_learning_rate = config.MIN_LEARNING_RATE
         self.max_learning_rate = config.MAX_LEARNING_RATE
         self.confidence_decay_rate = PhysicsConstants.CONFIDENCE_DECAY_RATE
         self.confidence_boost_rate = PhysicsConstants.CONFIDENCE_BOOST_RATE
         self.recent_errors_window = config.RECENT_ERRORS_WINDOW
-        
+
         # Parameter bounds for stability
         # Import centralized thermal configuration for bounds
         try:
             from .thermal_config import ThermalParameterConfig
         except ImportError:
             from thermal_config import ThermalParameterConfig
-        
-        self.thermal_time_constant_bounds = ThermalParameterConfig.get_bounds('thermal_time_constant')
-        self.heat_loss_coefficient_bounds = ThermalParameterConfig.get_bounds('heat_loss_coefficient')
-        self.outlet_effectiveness_bounds = ThermalParameterConfig.get_bounds('outlet_effectiveness')
-        
+
+        self.thermal_time_constant_bounds = ThermalParameterConfig.get_bounds(
+            "thermal_time_constant"
+        )
+        self.heat_loss_coefficient_bounds = ThermalParameterConfig.get_bounds(
+            "heat_loss_coefficient"
+        )
+        self.outlet_effectiveness_bounds = ThermalParameterConfig.get_bounds(
+            "outlet_effectiveness"
+        )
+
         # Learning rate scheduling
         self.parameter_stability_threshold = 0.1  # When to reduce learning rate
-        self.error_improvement_threshold = 0.05   # When to increase learning rate
+        self.error_improvement_threshold = 0.05  # When to increase learning rate
 
-    def predict_equilibrium_temperature(self, outlet_temp: float, outdoor_temp: float,
-                                       current_indoor: float, pv_power: float = 0, fireplace_on: float = 0,
-                                       tv_on: float = 0, _suppress_logging: bool = False) -> float:
+    def predict_equilibrium_temperature(
+        self,
+        outlet_temp: float,
+        outdoor_temp: float,
+        current_indoor: float,
+        pv_power: float = 0,
+        fireplace_on: float = 0,
+        tv_on: float = 0,
+        _suppress_logging: bool = False,
+    ) -> float:
         """
         Predict equilibrium temperature using standard heat balance physics.
-        
+
         Uses a heat balance equation where:
         Heat Balance at equilibrium:
         effective_heat_transfer + external_thermal_power = heat_loss_to_outdoor
-        
+
         Args:
             outlet_temp: Heat pump outlet temperature (°C)
-            outdoor_temp: Outdoor temperature (°C)  
+            outdoor_temp: Outdoor temperature (°C)
             current_indoor: Current indoor temperature (°C)
             pv_power: PV power generation (W, default: 0)
             fireplace_on: Fireplace status (0/1, default: 0)
             tv_on: TV status (0/1, default: 0)
             _suppress_logging: If True, suppress debug logging (used in gradient calculations)
-            
+
         Returns:
             Predicted equilibrium temperature (°C)
         """
         # Use calibrated effectiveness directly
         effective_effectiveness = self.outlet_effectiveness
-        
+
         # External heat sources - these are thermal power contributions
-        heat_from_pv = pv_power * self.external_source_weights.get('pv', 0.0)
-        heat_from_fireplace = fireplace_on * self.external_source_weights.get('fireplace', 0.0) 
-        heat_from_tv = tv_on * self.external_source_weights.get('tv', 0.0)
-        
+        heat_from_pv = pv_power * self.external_source_weights.get("pv", 0.0)
+        heat_from_fireplace = fireplace_on * self.external_source_weights.get(
+            "fireplace", 0.0
+        )
+        heat_from_tv = tv_on * self.external_source_weights.get("tv", 0.0)
+
         # Total external thermal power
         external_thermal_power = heat_from_pv + heat_from_fireplace + heat_from_tv
-        
+
         # Physics parameters
         eff = effective_effectiveness
         loss = self.heat_loss_coefficient
-        
+
         # Prevent division by zero
         denominator = eff + loss
         if denominator <= 0:
             return outdoor_temp  # Fallback to outdoor temperature
-        
+
         # Standard heat balance equation
-        equilibrium_temp = (eff * outlet_temp + loss * outdoor_temp + external_thermal_power) / denominator
-        
+        equilibrium_temp = (
+            eff * outlet_temp + loss * outdoor_temp + external_thermal_power
+        ) / denominator
+
         # Physical constraints for obviously impossible scenarios only
         if outlet_temp > outdoor_temp:  # Heating mode (normal case)
             equilibrium_temp = max(outdoor_temp, equilibrium_temp)
@@ -239,21 +303,34 @@ class ThermalEquilibriumModel:
             equilibrium_temp = min(outdoor_temp, equilibrium_temp)
         else:  # outlet_temp == outdoor_temp
             # No temperature difference from outlet, only external heat contributes
-            equilibrium_temp = outdoor_temp + external_thermal_power / loss if loss > 0 else outdoor_temp
-        
+            if loss > 0:
+                equilibrium_temp = outdoor_temp + external_thermal_power / loss
+            else:
+                equilibrium_temp = outdoor_temp
+
         # Only log for primary predictions, not gradient calculations
         if not _suppress_logging:
-            logging.info(f"🔬 Equilibrium physics: outlet={outlet_temp:.1f}°C, "
-                         f"outdoor={outdoor_temp:.1f}°C, effectiveness={eff:.3f}, "
-                         f"equilibrium={equilibrium_temp:.2f}°C")
-            
+            logging.debug(
+                "🔬 Equilibrium physics: outlet=%.1f°C, outdoor=%.1f°C, "
+                "effectiveness=%.3f, equilibrium=%.2f°C",
+                outlet_temp,
+                outdoor_temp,
+                eff,
+                equilibrium_temp,
+            )
+
         return equilibrium_temp
 
-    def update_prediction_feedback(self, predicted_temp: float, actual_temp: float, 
-                                  prediction_context: Dict, timestamp: str = None):
+    def update_prediction_feedback(
+        self,
+        predicted_temp: float,
+        actual_temp: float,
+        prediction_context: Dict,
+        timestamp: Optional[str] = None,
+    ):
         """
         Update the model with real-world feedback to enable adaptive learning.
-        
+
         ENHANCED Shadow Mode Learning:
         - In SHADOW_MODE: Learn pure physics (outlet_temp → actual_indoor_temp)
         - Track learning during ALL scenarios (equilibrium + correction periods)
@@ -266,75 +343,87 @@ class ThermalEquilibriumModel:
         if config.SHADOW_MODE:
             # In shadow mode, we learn pure physics: outlet → indoor temp prediction
             # The prediction_context should contain the heat curve's outlet setting
-            outlet_temp = prediction_context.get('outlet_temp')
+            outlet_temp = prediction_context.get("outlet_temp")
             if outlet_temp is None:
-                logging.warning("Shadow mode: No outlet_temp in prediction context, skipping learning")
+                logging.warning(
+                    "Shadow mode: No outlet_temp in prediction context, skipping learning"
+                )
                 return
-            
+
             # Create pure physics prediction using heat curve's outlet setting
             physics_prediction = self.predict_equilibrium_temperature(
                 outlet_temp=outlet_temp,
-                outdoor_temp=prediction_context.get('outdoor_temp', 10.0),
+                outdoor_temp=prediction_context.get("outdoor_temp", 10.0),
                 current_indoor=predicted_temp,  # Use current indoor as reference
-                pv_power=prediction_context.get('pv_power', 0),
-                fireplace_on=prediction_context.get('fireplace_on', 0),
-                tv_on=prediction_context.get('tv_on', 0),
-                _suppress_logging=True
+                pv_power=prediction_context.get("pv_power", 0),
+                fireplace_on=prediction_context.get("fireplace_on", 0),
+                tv_on=prediction_context.get("tv_on", 0),
+                _suppress_logging=True,
             )
-            
+
             # Learn from heat curve outlet → actual indoor (pure physics)
             physics_error = actual_temp - physics_prediction
-            
+
             # Determine system state for learning context
-            was_correcting = prediction_context.get('trajectory_correction_applied', False)
-            temp_change_rate = abs(prediction_context.get('indoor_temp_gradient', 0.0))
-            
-            system_state = 'equilibrium'
+            was_correcting = prediction_context.get(
+                "trajectory_correction_applied", False
+            )
+            temp_change_rate = abs(prediction_context.get("indoor_temp_gradient", 0.0))
+
+            system_state = "equilibrium"
             if was_correcting:
-                system_state = 'trajectory_correction'
+                system_state = "trajectory_correction"
             elif temp_change_rate > 0.1:  # °C per hour
-                system_state = 'thermal_transition'
-            
-            logging.debug(f"Shadow mode physics learning ({system_state}): "
-                         f"outlet={outlet_temp:.1f}°C → predicted_indoor={physics_prediction:.2f}°C, "
-                         f"actual_indoor={actual_temp:.2f}°C, error={physics_error:.3f}°C")
-            
+                system_state = "thermal_transition"
+
+            logging.debug(
+                "Shadow mode physics learning (%s): "
+                "outlet=%.1f°C → predicted_indoor=%.2f°C, "
+                "actual_indoor=%.2f°C, error=%.3f°C",
+                system_state,
+                outlet_temp,
+                physics_prediction,
+                actual_temp,
+                physics_error,
+            )
+
             # Use physics prediction and error for learning
             predicted_temp = physics_prediction
             prediction_error = physics_error
         else:
             # Active mode: Normal learning from ML's own predictions
             prediction_error = actual_temp - predicted_temp
-            system_state = 'active_mode'
-        
+            system_state = "active_mode"
+
         # Store prediction for error analysis with enhanced context
         prediction_record = {
-            'timestamp': timestamp,
-            'predicted': predicted_temp,
-            'actual': actual_temp,
-            'error': prediction_error,
-            'context': prediction_context.copy(),
-            'parameters_at_prediction': {
-                'thermal_time_constant': self.thermal_time_constant,
-                'heat_loss_coefficient': self.heat_loss_coefficient,
-                'outlet_effectiveness': self.outlet_effectiveness
+            "timestamp": timestamp,
+            "predicted": predicted_temp,
+            "actual": actual_temp,
+            "error": prediction_error,
+            "context": prediction_context.copy(),
+            "parameters_at_prediction": {
+                "thermal_time_constant": self.thermal_time_constant,
+                "heat_loss_coefficient": self.heat_loss_coefficient,
+                "outlet_effectiveness": self.outlet_effectiveness,
             },
-            'shadow_mode': config.SHADOW_MODE,  # Track learning mode
-            'system_state': system_state,  # Track whether system was correcting/equilibrium
-            'learning_quality': self._assess_learning_quality(prediction_context, prediction_error)
+            "shadow_mode": config.SHADOW_MODE,  # Track learning mode
+            "system_state": system_state,  # Track whether system was correcting/equilibrium
+            "learning_quality": self._assess_learning_quality(
+                prediction_context, prediction_error
+            ),
         }
-        
+
         self.prediction_history.append(prediction_record)
-        
+
         # Keep manageable history
         if len(self.prediction_history) > 200:
             self.prediction_history = self.prediction_history[-100:]
-            
+
         # Update learning confidence based on recent accuracy
-        recent_errors = [abs(p['error']) for p in self.prediction_history[-10:]]
+        recent_errors = [abs(p["error"]) for p in self.prediction_history[-10:]]
         if recent_errors:
-            avg_recent_error = np.mean(recent_errors)
-            
+
             # Boost confidence if accuracy is improving
             if len(recent_errors) >= 5:
                 older_errors = recent_errors[:5]
@@ -344,229 +433,276 @@ class ThermalEquilibriumModel:
                         self.learning_confidence *= self.confidence_boost_rate
                     else:
                         self.learning_confidence *= self.confidence_decay_rate
-                    
+
             # Bound confidence
-            self.learning_confidence = max(0.1, min(5.0, self.learning_confidence))  # Higher upper bound for better learning
-        
+            self.learning_confidence = max(
+                0.1, min(5.0, self.learning_confidence)
+            )  # Higher upper bound for better learning
+
         # Perform parameter updates if we have enough recent data
         if len(self.prediction_history) >= self.recent_errors_window:
             self._adapt_parameters_from_recent_errors()
-            
-        logging.debug(f"Prediction feedback: error={prediction_error:.3f}°C, "
-                     f"confidence={self.learning_confidence:.3f}")
 
-    def _assess_learning_quality(self, prediction_context: Dict, prediction_error: float) -> str:
+        logging.debug(
+            "Prediction feedback: error=%.3f°C, confidence=%.3f",
+            prediction_error,
+            self.learning_confidence,
+        )
+
+    def _assess_learning_quality(
+        self, prediction_context: Dict, prediction_error: float
+    ) -> str:
         """
         Assess the quality of this learning opportunity.
-        
+
         Helps identify when learning conditions are ideal vs when they might be noisy.
         """
         try:
             # Check for stable conditions (good for learning)
-            temp_gradient = abs(prediction_context.get('indoor_temp_gradient', 0.0))
+            temp_gradient = abs(prediction_context.get("indoor_temp_gradient", 0.0))
             is_stable = temp_gradient < 0.1  # °C/hour
-            
+
             # Check error magnitude
             error_magnitude = abs(prediction_error)
-            
+
             if error_magnitude < 0.1 and is_stable:
-                return 'excellent'  # Small error, stable conditions
+                return "excellent"  # Small error, stable conditions
             elif error_magnitude < 0.5 and is_stable:
-                return 'good'       # Moderate error, stable conditions
+                return "good"  # Moderate error, stable conditions
             elif error_magnitude < 0.1:
-                return 'fair'       # Small error, unstable conditions
+                return "fair"  # Small error, unstable conditions
             elif is_stable:
-                return 'fair'       # Large error, but stable conditions
+                return "fair"  # Large error, but stable conditions
             else:
-                return 'poor'       # Large error, unstable conditions
-                
+                return "poor"  # Large error, unstable conditions
+
         except Exception:
-            return 'unknown'
+            return "unknown"
 
     def _adapt_parameters_from_recent_errors(self):
         """
         Adapt model parameters with corrected gradient calculations.
         """
-        recent_predictions = self.prediction_history[-self.recent_errors_window:]
-        
+        recent_predictions = self.prediction_history[-self.recent_errors_window :]
+
         if len(recent_predictions) < self.recent_errors_window:
             return
-            
+
         # Calculate parameter gradients using refined methods
-        thermal_gradient = self._calculate_thermal_time_constant_gradient(recent_predictions)
-        heat_loss_gradient = self._calculate_heat_loss_coefficient_gradient(recent_predictions)
-        effectiveness_gradient = self._calculate_outlet_effectiveness_gradient(recent_predictions)
-        
+        thermal_gradient = self._calculate_thermal_time_constant_gradient(
+            recent_predictions
+        )
+        heat_loss_gradient = self._calculate_heat_loss_coefficient_gradient(
+            recent_predictions
+        )
+        effectiveness_gradient = self._calculate_outlet_effectiveness_gradient(
+            recent_predictions
+        )
+
         # Calculate adaptive learning rate based on current model performance
         current_learning_rate = self._calculate_adaptive_learning_rate()
-        
+
         # Update parameters with bounds checking
         old_thermal_time_constant = self.thermal_time_constant
         old_heat_loss_coefficient = self.heat_loss_coefficient
         old_outlet_effectiveness = self.outlet_effectiveness
-        
+
         # Apply gradient updates
         thermal_update = current_learning_rate * thermal_gradient
         heat_loss_update = current_learning_rate * heat_loss_gradient
         effectiveness_update = current_learning_rate * effectiveness_gradient
-        
+
         # Update with bounds
         self.thermal_time_constant = np.clip(
             self.thermal_time_constant - thermal_update,  # Gradient descent
             self.thermal_time_constant_bounds[0],
-            self.thermal_time_constant_bounds[1]
+            self.thermal_time_constant_bounds[1],
         )
-        
+
         self.heat_loss_coefficient = np.clip(
             self.heat_loss_coefficient - heat_loss_update,  # Gradient descent
             self.heat_loss_coefficient_bounds[0],
-            self.heat_loss_coefficient_bounds[1]
+            self.heat_loss_coefficient_bounds[1],
         )
-        
+
         self.outlet_effectiveness = np.clip(
             self.outlet_effectiveness - effectiveness_update,  # Gradient descent
             self.outlet_effectiveness_bounds[0],
-            self.outlet_effectiveness_bounds[1]
+            self.outlet_effectiveness_bounds[1],
         )
-        
+
         # Log parameter changes and track history
         thermal_change = abs(self.thermal_time_constant - old_thermal_time_constant)
         heat_loss_change = abs(self.heat_loss_coefficient - old_heat_loss_coefficient)
         effectiveness_change = abs(self.outlet_effectiveness - old_outlet_effectiveness)
-        
+
         # Always record parameter state for tracking parameter updates
         # This ensures parameter_updates increments even with small changes
-        self.parameter_history.append({
-            'timestamp': recent_predictions[-1]['timestamp'],
-            'thermal_time_constant': self.thermal_time_constant,
-            'heat_loss_coefficient': self.heat_loss_coefficient,
-            'outlet_effectiveness': self.outlet_effectiveness,
-            'learning_rate': current_learning_rate,
-            'learning_confidence': self.learning_confidence,
-            'avg_recent_error': np.mean([abs(p['error']) for p in recent_predictions]),
-            'gradients': {
-                'thermal': thermal_gradient,
-                'heat_loss': heat_loss_gradient,
-                'effectiveness': effectiveness_gradient
-            },
-            'changes': {
-                'thermal': thermal_change,
-                'heat_loss': heat_loss_change,
-                'effectiveness': effectiveness_change
+        self.parameter_history.append(
+            {
+                "timestamp": recent_predictions[-1]["timestamp"],
+                "thermal_time_constant": self.thermal_time_constant,
+                "heat_loss_coefficient": self.heat_loss_coefficient,
+                "outlet_effectiveness": self.outlet_effectiveness,
+                "learning_rate": current_learning_rate,
+                "learning_confidence": self.learning_confidence,
+                "avg_recent_error": np.mean(
+                    [abs(p["error"]) for p in recent_predictions]
+                ),
+                "gradients": {
+                    "thermal": thermal_gradient,
+                    "heat_loss": heat_loss_gradient,
+                    "effectiveness": effectiveness_gradient,
+                },
+                "changes": {
+                    "thermal": thermal_change,
+                    "heat_loss": heat_loss_change,
+                    "effectiveness": effectiveness_change,
+                },
             }
-        })
-        
+        )
+
         # Keep manageable history
         if len(self.parameter_history) > 500:
             self.parameter_history = self.parameter_history[-250:]
-        
+
         # Lower thresholds for significant change logging (allows smaller meaningful changes)
         # This allows smaller but meaningful changes to be logged and saved
-        if thermal_change > 0.001 or heat_loss_change > 0.00001 or effectiveness_change > 0.0001:
-            logging.info(f"Adaptive learning update: "
-                        f"thermal: {old_thermal_time_constant:.2f}→{self.thermal_time_constant:.2f} (Δ{thermal_change:+.3f}), "
-                        f"heat_loss: {old_heat_loss_coefficient:.4f}→{self.heat_loss_coefficient:.4f} (Δ{heat_loss_change:+.5f}), "
-                        f"effectiveness: {old_outlet_effectiveness:.3f}→{self.outlet_effectiveness:.3f} (Δ{effectiveness_change:+.3f})")
-            
+        if (
+            thermal_change > 0.001
+            or heat_loss_change > 0.00001
+            or effectiveness_change > 0.0001
+        ):
+            logging.info(
+                "Adaptive learning update: "
+                "thermal: %.2f→%.2f (Δ%+.3f), "
+                "heat_loss: %.4f→%.4f (Δ%+.5f), "
+                "effectiveness: %.3f→%.3f (Δ%+.3f)",
+                old_thermal_time_constant,
+                self.thermal_time_constant,
+                thermal_change,
+                old_heat_loss_coefficient,
+                self.heat_loss_coefficient,
+                heat_loss_change,
+                old_outlet_effectiveness,
+                self.outlet_effectiveness,
+                effectiveness_change,
+            )
+
             # Save learned parameter adjustments to unified thermal state
             self._save_learning_to_thermal_state()
         else:
             # Log micro-updates for diagnostics
-            logging.debug(f"Micro learning update: thermal_Δ={thermal_change:+.5f}, "
-                         f"heat_loss_Δ={heat_loss_change:+.7f}, "
-                         f"effectiveness_Δ={effectiveness_change:+.5f}")
+            logging.debug(
+                "Micro learning update: thermal_Δ=%+.5f, "
+                "heat_loss_Δ=%+.7f, effectiveness_Δ=%+.5f",
+                thermal_change,
+                heat_loss_change,
+                effectiveness_change,
+            )
 
-    def _calculate_parameter_gradient(self, parameter_name: str, epsilon: float, recent_predictions: List[Dict]) -> float:
+    def _calculate_parameter_gradient(
+        self, parameter_name: str, epsilon: float, recent_predictions: List[Dict]
+    ) -> float:
         """
         Generic finite-difference gradient calculation for any parameter.
-        
+
         This refactored method eliminates code duplication by providing a unified
         approach to gradient calculation for all thermal parameters.
-        
+
         Args:
             parameter_name: Name of the parameter to calculate gradient for
             epsilon: Step size for finite difference calculation
             recent_predictions: List of recent prediction records
-            
+
         Returns:
             Average gradient across all valid predictions
         """
         gradient_sum = 0.0
         count = 0
-        
+
         # Get current parameter value
         original_value = getattr(self, parameter_name)
-        
+
         for pred in recent_predictions:
-            context = pred['context']
-            
+            context = pred["context"]
+
             # Validate required context data
-            if not all(key in context for key in ['outlet_temp', 'outdoor_temp', 'current_indoor']):
+            if not all(
+                key in context
+                for key in ["outlet_temp", "outdoor_temp", "current_indoor"]
+            ):
                 continue
-                
+
             # Forward difference
             setattr(self, parameter_name, original_value + epsilon)
             pred_plus = self.predict_equilibrium_temperature(
-                context['outlet_temp'],
-                context['outdoor_temp'],
-                context['current_indoor'],
-                pv_power=context.get('pv_power', 0),
-                fireplace_on=context.get('fireplace_on', 0),
-                tv_on=context.get('tv_on', 0),
-                _suppress_logging=True
+                context["outlet_temp"],
+                context["outdoor_temp"],
+                context["current_indoor"],
+                pv_power=context.get("pv_power", 0),
+                fireplace_on=context.get("fireplace_on", 0),
+                tv_on=context.get("tv_on", 0),
+                _suppress_logging=True,
             )
-            
+
             # Backward difference
             setattr(self, parameter_name, original_value - epsilon)
             pred_minus = self.predict_equilibrium_temperature(
-                context['outlet_temp'],
-                context['outdoor_temp'],
-                context['current_indoor'],
-                pv_power=context.get('pv_power', 0),
-                fireplace_on=context.get('fireplace_on', 0),
-                tv_on=context.get('tv_on', 0),
-                _suppress_logging=True
+                context["outlet_temp"],
+                context["outdoor_temp"],
+                context["current_indoor"],
+                pv_power=context.get("pv_power", 0),
+                fireplace_on=context.get("fireplace_on", 0),
+                tv_on=context.get("tv_on", 0),
+                _suppress_logging=True,
             )
-            
+
             # Restore original parameter
             setattr(self, parameter_name, original_value)
-            
+
             # Calculate gradient using chain rule for error minimization
             finite_diff = (pred_plus - pred_minus) / (2 * epsilon)
-            gradient = finite_diff * pred['error']
+            gradient = finite_diff * pred["error"]
             gradient_sum += gradient
             count += 1
-            
+
         return gradient_sum / count if count > 0 else 0.0
 
-    def _calculate_thermal_time_constant_gradient(self, recent_predictions: List[Dict]) -> float:
+    def _calculate_thermal_time_constant_gradient(
+        self, recent_predictions: List[Dict]
+    ) -> float:
         """
         Calculate thermal time constant gradient using refactored generic method.
         """
         return self._calculate_parameter_gradient(
-            'thermal_time_constant', 
-            PhysicsConstants.THERMAL_TIME_CONSTANT_EPSILON, 
-            recent_predictions
+            "thermal_time_constant",
+            PhysicsConstants.THERMAL_TIME_CONSTANT_EPSILON,
+            recent_predictions,
         )
 
-    def _calculate_heat_loss_coefficient_gradient(self, recent_predictions: List[Dict]) -> float:
+    def _calculate_heat_loss_coefficient_gradient(
+        self, recent_predictions: List[Dict]
+    ) -> float:
         """
         Calculate heat loss coefficient gradient using refactored generic method.
         """
         return self._calculate_parameter_gradient(
-            'heat_loss_coefficient', 
-            PhysicsConstants.HEAT_LOSS_COEFFICIENT_EPSILON, 
-            recent_predictions
+            "heat_loss_coefficient",
+            PhysicsConstants.HEAT_LOSS_COEFFICIENT_EPSILON,
+            recent_predictions,
         )
 
-    def _calculate_outlet_effectiveness_gradient(self, recent_predictions: List[Dict]) -> float:
+    def _calculate_outlet_effectiveness_gradient(
+        self, recent_predictions: List[Dict]
+    ) -> float:
         """
         Calculate outlet effectiveness gradient using refactored generic method.
         """
         return self._calculate_parameter_gradient(
-            'outlet_effectiveness', 
-            PhysicsConstants.OUTLET_EFFECTIVENESS_EPSILON, 
-            recent_predictions
+            "outlet_effectiveness",
+            PhysicsConstants.OUTLET_EFFECTIVENESS_EPSILON,
+            recent_predictions,
         )
 
     def _calculate_adaptive_learning_rate(self) -> float:
@@ -574,76 +710,104 @@ class ThermalEquilibriumModel:
         Calculate adaptive learning rate based on current model performance and stability.
         """
         # Start with aggressive base rate, don't reduce too much
-        base_rate = max(self.learning_rate, self.min_learning_rate) * self.learning_confidence
-        
+        base_rate = (
+            max(self.learning_rate, self.min_learning_rate) * self.learning_confidence
+        )
+
         # Less aggressive stability reduction
         if len(self.parameter_history) >= 3:  # Reduced from 5
             recent_params = self.parameter_history[-3:]
-            thermal_std = np.std([p['thermal_time_constant'] for p in recent_params])
-            heat_loss_std = np.std([p['heat_loss_coefficient'] for p in recent_params])
-            effectiveness_std = np.std([p['outlet_effectiveness'] for p in recent_params])
-            
+            thermal_std = np.std([p["thermal_time_constant"] for p in recent_params])
+            heat_loss_std = np.std([p["heat_loss_coefficient"] for p in recent_params])
+            effectiveness_std = np.std(
+                [p["outlet_effectiveness"] for p in recent_params]
+            )
+
             # Only reduce if parameters are VERY stable
-            if (thermal_std < 0.05 and heat_loss_std < 0.0005 and effectiveness_std < 0.005):
+            if (
+                thermal_std < 0.05
+                and heat_loss_std < 0.0005
+                and effectiveness_std < 0.005
+            ):
                 base_rate *= 0.8  # Less aggressive reduction
-                
+
         # More aggressive scaling for large errors
         if len(self.prediction_history) >= 5:  # Reduced from 10
-            recent_errors = [abs(p['error']) for p in self.prediction_history[-5:]]
+            recent_errors = [abs(p["error"]) for p in self.prediction_history[-5:]]
             avg_error = np.mean(recent_errors)
-            
+
             if avg_error > 2.0:  # Very large errors
                 base_rate *= 3.0  # More aggressive boost
             elif avg_error > 1.0:  # Large errors
-                base_rate *= 2.0  
+                base_rate *= 2.0
             elif avg_error > 0.5:  # Medium errors
                 base_rate *= 1.5
-                
+
         # Respect the aggressive bounds properly
         return np.clip(base_rate, self.min_learning_rate, self.max_learning_rate)
 
     # Physics-based trajectory prediction implementation
-    def predict_thermal_trajectory(self, current_indoor, target_indoor, outlet_temp, outdoor_temp, 
-                                 time_horizon_hours=None, weather_forecasts=None, pv_forecasts=None, 
-                                 **external_sources):
+    def predict_thermal_trajectory(
+        self,
+        current_indoor,
+        target_indoor,
+        outlet_temp,
+        outdoor_temp,
+        time_horizon_hours=None,
+        weather_forecasts=None,
+        pv_forecasts=None,
+        **external_sources,
+    ):
         """
         Predict temperature trajectory over time horizon using physics-based thermal dynamics.
-        
+
         Uses exponential approach to equilibrium based on thermal time constant and heat balance.
-        
+
         Args:
             current_indoor: Current indoor temperature (°C)
-            target_indoor: Target indoor temperature (°C) 
+            target_indoor: Target indoor temperature (°C)
             outlet_temp: Heat pump outlet temperature (°C)
             outdoor_temp: Current outdoor temperature (°C)
             time_horizon_hours: Prediction horizon in hours (default: 4)
             weather_forecasts: List of forecast outdoor temps [1h, 2h, 3h, 4h]
             pv_forecasts: List of forecast PV power [1h, 2h, 3h, 4h]
             **external_sources: fireplace_on, tv_on, etc.
-            
+
         Returns:
             Dict with trajectory, times, reaches_target_at, overshoot_predicted, etc.
         """
         if time_horizon_hours is None:
             time_horizon_hours = int(self.prediction_horizon_hours)
-            
+
         trajectory = []
         current_temp = current_indoor
-        
+
         # Extract external heat sources
-        pv_power = external_sources.get('pv_power', 0)
-        fireplace_on = external_sources.get('fireplace_on', 0)
-        tv_on = external_sources.get('tv_on', 0)
-        
+        pv_power = external_sources.get("pv_power", 0)
+        fireplace_on = external_sources.get("fireplace_on", 0)
+        tv_on = external_sources.get("tv_on", 0)
+
         # Use forecasts if available, otherwise use current values
-        outdoor_forecasts = weather_forecasts if weather_forecasts else [outdoor_temp] * time_horizon_hours
-        pv_power_forecasts = pv_forecasts if pv_forecasts else [pv_power] * time_horizon_hours
-        
+        if weather_forecasts:
+            outdoor_forecasts = weather_forecasts
+        else:
+            outdoor_forecasts = [outdoor_temp] * time_horizon_hours
+        if pv_forecasts:
+            pv_power_forecasts = pv_forecasts
+        else:
+            pv_power_forecasts = [pv_power] * time_horizon_hours
+
         for hour in range(time_horizon_hours):
             # Use forecast values for this hour if available
-            future_outdoor = outdoor_forecasts[hour] if hour < len(outdoor_forecasts) else outdoor_temp
-            future_pv = pv_power_forecasts[hour] if hour < len(pv_power_forecasts) else pv_power
-            
+            future_outdoor = (
+                outdoor_forecasts[hour]
+                if hour < len(outdoor_forecasts)
+                else outdoor_temp
+            )
+            future_pv = (
+                pv_power_forecasts[hour] if hour < len(pv_power_forecasts) else pv_power
+            )
+
             # Calculate equilibrium temperature for this future point
             equilibrium_temp = self.predict_equilibrium_temperature(
                 outlet_temp=outlet_temp,
@@ -652,109 +816,110 @@ class ThermalEquilibriumModel:
                 pv_power=future_pv,
                 fireplace_on=fireplace_on,
                 tv_on=tv_on,
-                _suppress_logging=True
+                _suppress_logging=True,
             )
-            
+
             # Apply thermal dynamics - exponential approach to equilibrium
             # Based on first-order thermal system: dT/dt = (T_eq - T) / τ
             time_constant_hours = self.thermal_time_constant
-            
+
             # Calculate temperature change over 1 hour
             approach_factor = 1 - np.exp(-1.0 / time_constant_hours)
             temp_change = (equilibrium_temp - current_temp) * approach_factor
-            
+
             # Apply thermal momentum decay for more realistic predictions
             if hour > 0:
                 # Reduce sudden changes based on momentum decay
                 momentum_factor = np.exp(-hour * self.momentum_decay_rate)
-                temp_change *= (1.0 - momentum_factor * 0.2)  # Up to 20% reduction
-            
+                temp_change *= 1.0 - momentum_factor * 0.2  # Up to 20% reduction
+
             # Update current temperature
             current_temp = current_temp + temp_change
             trajectory.append(current_temp)
-        
-        # Analyze trajectory for key metrics  
+
+        # Analyze trajectory for key metrics
         reaches_target_at = None
         # Use sensor precision tolerance: error must be < 0.1°C to be "on target"
         # 20.9°C vs 21.0°C = 0.1°C error = off target
-        # 20.91°C vs 21.0°C = 0.09°C error = on target  
+        # 20.91°C vs 21.0°C = 0.09°C error = on target
         sensor_precision_tolerance = 0.1  # °C - error must be LESS than this
-        
-        # Check if we're already at target (immediate check based on equilibrium)
-        # Use current conditions to see if outlet temp would achieve target immediately
-        equilibrium_temp = self.predict_equilibrium_temperature(
-            outlet_temp=outlet_temp,
-            outdoor_temp=outdoor_temp,
-            current_indoor=current_indoor,
-            pv_power=external_sources.get('pv_power', 0),
-            fireplace_on=external_sources.get('fireplace_on', 0),
-            tv_on=external_sources.get('tv_on', 0),
-            _suppress_logging=True
-        )
-        
-        # If equilibrium prediction is on target, consider it immediately reachable
-        if equilibrium_temp is not None and abs(equilibrium_temp - target_indoor) < sensor_precision_tolerance:
-            reaches_target_at = 0.1  # Immediately reachable (0.1h = 6 minutes)
-        else:
-            # Otherwise check trajectory points
-            for i, temp in enumerate(trajectory):
-                if abs(temp - target_indoor) < sensor_precision_tolerance:  # < not <=
-                    reaches_target_at = i + 1  # Hours from now
-                    break
-            
-            # CYCLE-SPECIFIC CHECK: If first trajectory point is on target, check cycle timing
-            if trajectory and abs(trajectory[0] - target_indoor) < sensor_precision_tolerance:
-                # First hour prediction is on target, so target reachable within cycle
-                cycle_hours = 0.5  # 30-minute cycle
-                reaches_target_at = min(reaches_target_at or float('inf'), cycle_hours)
-        
+
+        # Check trajectory points to see when target is reached
+        for i, temp in enumerate(trajectory):
+            if abs(temp - target_indoor) < sensor_precision_tolerance:  # < not <=
+                reaches_target_at = i + 1  # Hours from now
+                break
+
+        # CYCLE-SPECIFIC CHECK: If first trajectory point is on target, check cycle timing
+        if (
+            trajectory
+            and abs(trajectory[0] - target_indoor) < sensor_precision_tolerance
+        ):
+            # First hour prediction is on target, so target reachable within cycle
+            cycle_hours = 0.5  # 30-minute cycle
+            if reaches_target_at is not None:
+                reaches_target_at = min(reaches_target_at, cycle_hours)
+            else:
+                reaches_target_at = cycle_hours
+
         # Check for overshoot prediction
         overshoot_predicted = False
         max_predicted = max(trajectory) if trajectory else current_indoor
-        
+
         if target_indoor > current_indoor:  # Heating scenario
             overshoot_predicted = max_predicted > (target_indoor + self.safety_margin)
         else:  # Cooling scenario
             min_predicted = min(trajectory) if trajectory else current_indoor
             overshoot_predicted = min_predicted < (target_indoor - self.safety_margin)
-        
+
         return {
-            'trajectory': trajectory,
-            'times': list(range(1, time_horizon_hours + 1)),
-            'reaches_target_at': reaches_target_at,
-            'overshoot_predicted': overshoot_predicted,
-            'max_predicted': max(trajectory) if trajectory else current_indoor,
-            'min_predicted': min(trajectory) if trajectory else current_indoor,
-            'equilibrium_temp': trajectory[-1] if trajectory else current_indoor,
-            'final_error': abs(trajectory[-1] - target_indoor) if trajectory else abs(current_indoor - target_indoor)
+            "trajectory": trajectory,
+            "times": list(range(1, time_horizon_hours + 1)),
+            "reaches_target_at": reaches_target_at,
+            "overshoot_predicted": overshoot_predicted,
+            "max_predicted": max(trajectory) if trajectory else current_indoor,
+            "min_predicted": min(trajectory) if trajectory else current_indoor,
+            "equilibrium_temp": trajectory[-1] if trajectory else current_indoor,
+            "final_error": (
+                abs(trajectory[-1] - target_indoor)
+                if trajectory
+                else abs(current_indoor - target_indoor)
+            ),
         }
 
-    def calculate_optimal_outlet_temperature(self, target_indoor, current_indoor, outdoor_temp, 
-                                           time_available_hours=1.0, config_override=None, **external_sources):
+    def calculate_optimal_outlet_temperature(
+        self,
+        target_indoor,
+        current_indoor,
+        outdoor_temp,
+        time_available_hours=1.0,
+        config_override=None,
+        **external_sources,
+    ):
         """
         Calculate optimal outlet temperature to reach target indoor temperature.
-        
+
         Uses heat balance equations and thermal dynamics to determine the outlet
         temperature needed to reach the target in the specified time.
-        
+
         Args:
             target_indoor: Desired indoor temperature (°C)
             current_indoor: Current indoor temperature (°C)
             outdoor_temp: Current outdoor temperature (°C)
             time_available_hours: Time available to reach target (default: 1 hour)
             **external_sources: pv_power, fireplace_on, tv_on, etc.
-            
+
         Returns:
             Dict with optimal_outlet_temp and metadata, or None if target unreachable
         """
         # Extract external heat sources
-        pv_power = external_sources.get('pv_power', external_sources.get('pv_now', 0))
-        fireplace_on = external_sources.get('fireplace_on', 0)
-        tv_on = external_sources.get('tv_on', 0)
-        
+        pv_power = external_sources.get("pv_power", external_sources.get("pv_now", 0))
+        fireplace_on = external_sources.get("fireplace_on", 0)
+        tv_on = external_sources.get("tv_on", 0)
+
         # Calculate required temperature change
         temp_change_required = target_indoor - current_indoor
-        
+
         # If already at target, use minimal heating
         if abs(temp_change_required) < 0.1:
             # Calculate equilibrium outlet temp for maintenance
@@ -762,32 +927,35 @@ class ThermalEquilibriumModel:
                 target_indoor, outdoor_temp, pv_power, fireplace_on, tv_on
             )
             return {
-                'optimal_outlet_temp': outlet_temp,
-                'method': 'equilibrium_maintenance',
-                'temp_change_required': temp_change_required,
-                'time_available': time_available_hours
+                "optimal_outlet_temp": outlet_temp,
+                "method": "equilibrium_maintenance",
+                "temp_change_required": temp_change_required,
+                "time_available": time_available_hours,
             }
-        
+
         # TDD-COMPLIANT REFACTOR: Directly solve for optimal outlet temperature
         # using the inverse of the predict_equilibrium_temperature method.
-        method = 'direct_calculation'
+        method = "direct_calculation"
 
         # Allow config override for testing
         heat_loss_coefficient = self.heat_loss_coefficient
         outlet_effectiveness = self.outlet_effectiveness
         if config_override:
-            heat_loss_coefficient = config_override.get('heat_loss_coefficient', heat_loss_coefficient)
-            outlet_effectiveness = config_override.get('outlet_effectiveness', outlet_effectiveness)
-
+            heat_loss_coefficient = config_override.get(
+                "heat_loss_coefficient", heat_loss_coefficient
+            )
+            outlet_effectiveness = config_override.get(
+                "outlet_effectiveness", outlet_effectiveness
+            )
 
         # Calculate the total heat input required to maintain the target temperature
         required_heat_loss = (target_indoor - outdoor_temp) * heat_loss_coefficient
 
         # Calculate the contribution from external sources
         external_heating = (
-            pv_power * self.external_source_weights.get('pv', 0.0) +
-            fireplace_on * self.external_source_weights.get('fireplace', 0.0) +
-            tv_on * self.external_source_weights.get('tv', 0.0)
+            pv_power * self.external_source_weights.get("pv", 0.0)
+            + fireplace_on * self.external_source_weights.get("fireplace", 0.0)
+            + tv_on * self.external_source_weights.get("tv", 0.0)
         )
 
         # The required heat from the heat pump is the difference
@@ -795,17 +963,21 @@ class ThermalEquilibriumModel:
 
         # Back-calculate the optimal outlet temperature
         if outlet_effectiveness <= 0:
-            return None # Avoid division by zero
-        
+            return None  # Avoid division by zero
+
         optimal_outlet = required_heat_from_outlet / outlet_effectiveness
-        required_equilibrium = target_indoor # The required equilibrium is the target itself
-        
+        required_equilibrium = (
+            target_indoor  # The required equilibrium is the target itself
+        )
+
         # Apply safety bounds for physical realism
-        min_outlet = max(outdoor_temp + 5, 25.0)  # At least 5°C above outdoor, minimum 25°C
+        min_outlet = max(
+            outdoor_temp + 5, 25.0
+        )  # At least 5°C above outdoor, minimum 25°C
         max_outlet = 70.0  # Maximum safe heat pump outlet temperature
-        
+
         optimal_outlet_bounded = max(min_outlet, min(optimal_outlet, max_outlet))
-        
+
         # Verify the solution makes sense
         if optimal_outlet_bounded < outdoor_temp:
             # Cannot heat indoor above outdoor with outlet below outdoor
@@ -813,54 +985,55 @@ class ThermalEquilibriumModel:
                 target_indoor, outdoor_temp, pv_power, fireplace_on, tv_on
             )
             return {
-                'optimal_outlet_temp': fallback_outlet,
-                'method': 'fallback_equilibrium',
-                'reason': 'unrealistic_outlet_temp',
-                'original_calculation': optimal_outlet,
-                'temp_change_required': temp_change_required,
-                'time_available': time_available_hours
+                "optimal_outlet_temp": fallback_outlet,
+                "method": "fallback_equilibrium",
+                "reason": "unrealistic_outlet_temp",
+                "original_calculation": optimal_outlet,
+                "temp_change_required": temp_change_required,
+                "time_available": time_available_hours,
             }
-        
+
         # Return comprehensive result dictionary
         return {
-            'optimal_outlet_temp': optimal_outlet_bounded,
-            'method': method,
-            'required_equilibrium': required_equilibrium,
-            'temp_change_required': temp_change_required,
-            'time_available': time_available_hours,
-            'external_heating': external_heating,
-            'required_heat_loss': required_heat_loss,
-            'bounded': optimal_outlet != optimal_outlet_bounded,
-            'original_calculation': optimal_outlet
+            "optimal_outlet_temp": optimal_outlet_bounded,
+            "method": method,
+            "required_equilibrium": required_equilibrium,
+            "temp_change_required": temp_change_required,
+            "time_available": time_available_hours,
+            "external_heating": external_heating,
+            "required_heat_loss": required_heat_loss,
+            "bounded": optimal_outlet != optimal_outlet_bounded,
+            "original_calculation": optimal_outlet,
         }
-    
-    def _calculate_equilibrium_outlet_temperature(self, target_temp, outdoor_temp, 
-                                                pv_power=0, fireplace_on=0, tv_on=0):
+
+    def _calculate_equilibrium_outlet_temperature(
+        self, target_temp, outdoor_temp, pv_power=0, fireplace_on=0, tv_on=0
+    ):
         """
         Calculate outlet temperature needed for equilibrium at target temperature.
-        
+
         This is a helper method for steady-state calculations.
         """
         # Calculate external heating
         external_heating = (
-            pv_power * self.external_source_weights['pv'] +
-            fireplace_on * self.external_source_weights['fireplace'] +
-            tv_on * self.external_source_weights['tv']
+            pv_power * self.external_source_weights["pv"]
+            + fireplace_on * self.external_source_weights["fireplace"]
+            + tv_on * self.external_source_weights["tv"]
         )
-        
+
         # TDD-COMPLIANT: Clean heat balance equation
         required_heat_loss = self.heat_loss_coefficient * (target_temp - outdoor_temp)
         required_heat_input = required_heat_loss - external_heating
-        
+
         if self.outlet_effectiveness <= 0:
             return 35.0  # Default fallback
-            
+
         equilibrium_outlet = required_heat_input / self.outlet_effectiveness
-        
+
         # Apply reasonable bounds
         min_outlet = max(outdoor_temp + 5, 25.0)
         max_outlet = 65.0
-        
+
         return max(min_outlet, min(equilibrium_outlet, max_outlet))
 
     def calculate_physics_aware_thresholds(self, *args, **kwargs):
@@ -873,57 +1046,67 @@ class ThermalEquilibriumModel:
         ENHANCED: Get metrics with additional debugging info.
         """
         if len(self.prediction_history) < 5:
-            return {'insufficient_data': True}
-            
-        recent_errors = [abs(p['error']) for p in self.prediction_history[-20:]]
-        all_errors = [abs(p['error']) for p in self.prediction_history]
-        
+            return {"insufficient_data": True}
+
+        recent_errors = [abs(p["error"]) for p in self.prediction_history[-20:]]
+        all_errors = [abs(p["error"]) for p in self.prediction_history]
+
         # Learning trend analysis
         if len(recent_errors) >= 10:
-            first_half_errors = recent_errors[:len(recent_errors)//2]
-            second_half_errors = recent_errors[len(recent_errors)//2:]
+            first_half_errors = recent_errors[: len(recent_errors) // 2]
+            second_half_errors = recent_errors[len(recent_errors) // 2 :]
             error_improvement = np.mean(first_half_errors) - np.mean(second_half_errors)
         else:
             error_improvement = 0.0
-            
+
         # Parameter stability
         if len(self.parameter_history) >= 5:
             recent_params = self.parameter_history[-5:]
-            thermal_stability = np.std([p['thermal_time_constant'] for p in recent_params])
-            heat_loss_stability = np.std([p['heat_loss_coefficient'] for p in recent_params])
-            effectiveness_stability = np.std([p['outlet_effectiveness'] for p in recent_params])
-            
+            thermal_stability = np.std(
+                [p["thermal_time_constant"] for p in recent_params]
+            )
+            heat_loss_stability = np.std(
+                [p["heat_loss_coefficient"] for p in recent_params]
+            )
+            effectiveness_stability = np.std(
+                [p["outlet_effectiveness"] for p in recent_params]
+            )
+
             # Include recent gradient information
-            recent_gradients = recent_params[-1].get('gradients', {})
+            recent_gradients = recent_params[-1].get("gradients", {})
         else:
             thermal_stability = heat_loss_stability = effectiveness_stability = 0.0
             recent_gradients = {}
-            
+
         return {
-            'total_predictions': len(self.prediction_history),
-            'parameter_updates': len(self.parameter_history),
-            'update_percentage': len(self.parameter_history) / len(self.prediction_history) * 100 if self.prediction_history else 0,
-            'avg_recent_error': np.mean(recent_errors),
-            'avg_all_time_error': np.mean(all_errors),
-            'error_improvement_trend': error_improvement,
-            'learning_confidence': self.learning_confidence,
-            'current_learning_rate': self._calculate_adaptive_learning_rate(),
-            'thermal_time_constant_stability': thermal_stability,
-            'heat_loss_coefficient_stability': heat_loss_stability,
-            'outlet_effectiveness_stability': effectiveness_stability,
-            'recent_gradients': recent_gradients,
-            'current_parameters': {
-                'thermal_time_constant': self.thermal_time_constant,
-                'heat_loss_coefficient': self.heat_loss_coefficient,
-                'outlet_effectiveness': self.outlet_effectiveness
+            "total_predictions": len(self.prediction_history),
+            "parameter_updates": len(self.parameter_history),
+            "update_percentage": (
+                len(self.parameter_history) / len(self.prediction_history) * 100
+                if self.prediction_history
+                else 0
+            ),
+            "avg_recent_error": np.mean(recent_errors),
+            "avg_all_time_error": np.mean(all_errors),
+            "error_improvement_trend": error_improvement,
+            "learning_confidence": self.learning_confidence,
+            "current_learning_rate": self._calculate_adaptive_learning_rate(),
+            "thermal_time_constant_stability": thermal_stability,
+            "heat_loss_coefficient_stability": heat_loss_stability,
+            "outlet_effectiveness_stability": effectiveness_stability,
+            "recent_gradients": recent_gradients,
+            "current_parameters": {
+                "thermal_time_constant": self.thermal_time_constant,
+                "heat_loss_coefficient": self.heat_loss_coefficient,
+                "outlet_effectiveness": self.outlet_effectiveness,
             },
-            'fixes_applied': 'VERSION_WITH_CORRECTED_GRADIENTS'
+            "fixes_applied": "VERSION_WITH_CORRECTED_GRADIENTS",
         }
-    
+
     def _save_learning_to_thermal_state(self):
         """
         Save learned parameter adjustments to unified thermal state.
-        
+
         Properly accumulate parameter deltas instead of recalculating from baseline.
         This prevents parameter drift during service restarts.
         """
@@ -932,65 +1115,84 @@ class ThermalEquilibriumModel:
                 from .unified_thermal_state import get_thermal_state_manager
             except ImportError:
                 from unified_thermal_state import get_thermal_state_manager
-            
+
             state_manager = get_thermal_state_manager()
             baseline = state_manager.state["baseline_parameters"]
             learning_state = state_manager.state.get("learning_state", {})
-            
+
             # Get current deltas and calculate incremental changes
             current_deltas = learning_state.get("parameter_adjustments", {})
-            current_thermal_delta = current_deltas.get('thermal_time_constant_delta', 0.0)
-            current_heat_loss_delta = current_deltas.get('heat_loss_coefficient_delta', 0.0)
-            current_effectiveness_delta = current_deltas.get('outlet_effectiveness_delta', 0.0)
-            
+            current_thermal_delta = current_deltas.get(
+                "thermal_time_constant_delta", 0.0
+            )
+            current_heat_loss_delta = current_deltas.get(
+                "heat_loss_coefficient_delta", 0.0
+            )
+            current_effectiveness_delta = current_deltas.get(
+                "outlet_effectiveness_delta", 0.0
+            )
+
             # Calculate expected values from baseline + current deltas
             expected_thermal = baseline["thermal_time_constant"] + current_thermal_delta
-            expected_heat_loss = baseline["heat_loss_coefficient"] + current_heat_loss_delta
-            expected_effectiveness = baseline["outlet_effectiveness"] + current_effectiveness_delta
-            
+            expected_heat_loss = (
+                baseline["heat_loss_coefficient"] + current_heat_loss_delta
+            )
+            expected_effectiveness = (
+                baseline["outlet_effectiveness"] + current_effectiveness_delta
+            )
+
             # Calculate NEW adjustments since last save
             new_thermal_adjustment = self.thermal_time_constant - expected_thermal
             new_heat_loss_adjustment = self.heat_loss_coefficient - expected_heat_loss
-            new_effectiveness_adjustment = self.outlet_effectiveness - expected_effectiveness
-            
+            new_effectiveness_adjustment = (
+                self.outlet_effectiveness - expected_effectiveness
+            )
+
             # Accumulate deltas instead of recalculating from baseline
             updated_thermal_delta = current_thermal_delta + new_thermal_adjustment
             updated_heat_loss_delta = current_heat_loss_delta + new_heat_loss_adjustment
-            updated_effectiveness_delta = current_effectiveness_delta + new_effectiveness_adjustment
-            
+            updated_effectiveness_delta = (
+                current_effectiveness_delta + new_effectiveness_adjustment
+            )
+
             # Only save if there are meaningful new adjustments
-            if (abs(new_thermal_adjustment) > 0.001 or 
-                abs(new_heat_loss_adjustment) > 0.00001 or 
-                abs(new_effectiveness_adjustment) > 0.0001):
-                
+            if (
+                abs(new_thermal_adjustment) > 0.001
+                or abs(new_heat_loss_adjustment) > 0.00001
+                or abs(new_effectiveness_adjustment) > 0.0001
+            ):
+
                 # Update learning state with accumulated deltas
                 state_manager.update_learning_state(
                     learning_confidence=self.learning_confidence,
                     parameter_adjustments={
-                        'thermal_time_constant_delta': updated_thermal_delta,
-                        'heat_loss_coefficient_delta': updated_heat_loss_delta,
-                        'outlet_effectiveness_delta': updated_effectiveness_delta
-                    }
+                        "thermal_time_constant_delta": updated_thermal_delta,
+                        "heat_loss_coefficient_delta": updated_heat_loss_delta,
+                        "outlet_effectiveness_delta": updated_effectiveness_delta,
+                    },
                 )
-                
-                logging.debug(f"💾 Accumulated learning deltas: "
-                             f"thermal_Δ={updated_thermal_delta:+.3f} "
-                             f"(+{new_thermal_adjustment:+.3f}), "
-                             f"heat_loss_Δ={updated_heat_loss_delta:+.5f} "
-                             f"(+{new_heat_loss_adjustment:+.5f}), "
-                             f"effectiveness_Δ={updated_effectiveness_delta:+.3f} "
-                             f"(+{new_effectiveness_adjustment:+.3f})")
+
+                logging.debug(
+                    f"💾 Accumulated learning deltas: "
+                    f"thermal_Δ={updated_thermal_delta:+.3f} "
+                    f"(+{new_thermal_adjustment:+.3f}), "
+                    f"heat_loss_Δ={updated_heat_loss_delta:+.5f} "
+                    f"(+{new_heat_loss_adjustment:+.5f}), "
+                    f"effectiveness_Δ={updated_effectiveness_delta:+.3f} "
+                    f"(+{new_effectiveness_adjustment:+.3f})"
+                )
             else:
                 # Still update confidence even if parameters didn't change significantly
                 state_manager.update_learning_state(
                     learning_confidence=self.learning_confidence
                 )
-                logging.debug(f"💾 Updated learning confidence: {self.learning_confidence:.3f} "
-                             f"(no significant parameter changes)")
-                         
+                logging.debug(
+                    f"💾 Updated learning confidence: {self.learning_confidence:.3f} "
+                    f"(no significant parameter changes)"
+                )
+
         except Exception as e:
             logging.error(f"❌ Failed to save learning to thermal state: {e}")
-
 
     def reset_adaptive_learning(self):
         """Reset adaptive learning state with aggressive initial settings."""
