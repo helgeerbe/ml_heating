@@ -839,8 +839,8 @@ def main(args):
                 # Clamp the delta to the maximum allowed change
                 if abs(delta) > max_change:
                     final_temp = baseline + np.clip(delta, -max_change, max_change)
-                    logging.debug("--- Gradual Temperature Control ---")
-                    logging.debug(
+                    logging.info("--- Gradual Temperature Control ---")
+                    logging.info(
                         "Change from baseline %.1f°C to suggested %.1f°C exceeds"
                         " max change of %.1f°C. Capping at %.1f°C.",
                         baseline,
