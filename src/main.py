@@ -306,6 +306,19 @@ def main(args):
                 time.sleep(300)
                 continue
 
+            # --- Check for blocking modes (DHW, Defrost) ---
+            # Skip the control logic if the heat pump is busy with other
+            # tasks like heating domestic hot water (DHW) or defrosting.
+            # blocking_entities already defined outside try block Build a
+            # list of active blocking reasons so we can distinguish DHW-like
+            # (long) blockers from short ones like defrost.
+            blocking_reasons = [
+                e
+                for e in blocking_entities
+                if ha_client.get_state(e, all_states, is_binary=True)
+            ]
+            is_blocking = bool(blocking_reasons)
+
             # --- Step 1: Online Learning from Previous Cycle ---
             # Learn from the results of the previous cycle. This allows the
             # model to continuously adapt to the actual house behavior, whether
@@ -398,56 +411,105 @@ def main(args):
                             'outdoor_temp': learning_features.get('outdoor_temp', 10.0),
                             'pv_power': learning_features.get('pv_now', 0.0),
                             'fireplace_on': learning_features.get('fireplace_on', 0.0),
-                            'tv_on': learning_features.get('tv_on', 0.0)
+                            'tv_on': learning_features.get('tv_on', 0.0),
+                            'current_indoor': last_indoor_temp
                         }
                         
-                        # Calculate what the thermal model would have
-                        # actually predicted for this outlet temperature and
-                        # conditions
+                        # FIXED SHADOW MODE LEARNING: Distinguish between active mode 
+                        # and shadow mode learning patterns
+                        
+                        # Check if we're in effective shadow mode for this learning cycle
+                        # Look at what was ACTUALLY applied vs what ML calculated
+                        was_shadow_mode_cycle = (actual_applied_temp != last_final_temp_stored)
+                        
                         try:
-                            predicted_indoor_temp = (
-                                wrapper.thermal_model.predict_equilibrium_temperature(
-                                    outlet_temp=actual_applied_temp,
-                                    outdoor_temp=prediction_context.get(
-                                        "outdoor_temp", 10.0
-                                    ),
-                                    current_indoor=last_indoor_temp,
-                                    pv_power=prediction_context.get(
-                                        "pv_power", 0.0
-                                    ),
-                                    fireplace_on=prediction_context.get(
-                                        "fireplace_on", 0.0
-                                    ),
-                                    tv_on=prediction_context.get("tv_on", 0.0),
-                                    _suppress_logging=True,
+                            if was_shadow_mode_cycle:
+                                # SHADOW MODE LEARNING (CORRECTED):
+                                # Predict what indoor temp the heat curve's outlet setting will achieve
+                                # This learns building physics from heat curve's control decisions
+                                predicted_indoor_temp = (
+                                    wrapper.thermal_model.predict_equilibrium_temperature(
+                                        outlet_temp=actual_applied_temp,  # Heat curve's setting
+                                        outdoor_temp=prediction_context.get(
+                                            "outdoor_temp", 10.0
+                                        ),
+                                        current_indoor=last_indoor_temp,
+                                        pv_power=prediction_context.get(
+                                            "pv_power", 0.0
+                                        ),
+                                        fireplace_on=prediction_context.get(
+                                            "fireplace_on", 0.0
+                                        ),
+                                        tv_on=prediction_context.get("tv_on", 0.0),
+                                        _suppress_logging=True,
+                                    )
                                 )
-                            )
+                                
+                                learning_mode = "shadow_mode_hc_observation"
+                                logging.debug(
+                                    "🔍 SHADOW MODE LEARNING: Predicting indoor temp from "
+                                    f"heat curve's {actual_applied_temp}°C outlet setting"
+                                )
+                            else:
+                                # ACTIVE MODE LEARNING (UNCHANGED):
+                                # Predict what indoor temp ML's outlet setting will achieve
+                                # This learns from ML's own control decisions
+                                predicted_indoor_temp = (
+                                    wrapper.thermal_model.predict_equilibrium_temperature(
+                                        outlet_temp=actual_applied_temp,  # ML's setting (same as last_final_temp_stored)
+                                        outdoor_temp=prediction_context.get(
+                                            "outdoor_temp", 10.0
+                                        ),
+                                        current_indoor=last_indoor_temp,
+                                        pv_power=prediction_context.get(
+                                            "pv_power", 0.0
+                                        ),
+                                        fireplace_on=prediction_context.get(
+                                            "fireplace_on", 0.0
+                                        ),
+                                        tv_on=prediction_context.get("tv_on", 0.0),
+                                        _suppress_logging=True,
+                                    )
+                                )
+                                
+                                learning_mode = "active_mode_ml_feedback"
+                                logging.debug(
+                                    "🎯 ACTIVE MODE LEARNING: Verifying ML prediction accuracy "
+                                    f"for {actual_applied_temp}°C outlet setting"
+                                )
                             
                             if predicted_indoor_temp is not None:
-                                # Use actual thermal model prediction instead
-                                # of hardcoded 0.0
+                                # Use thermal model prediction for the actually applied outlet temp
                                 model_predicted_temp = predicted_indoor_temp
                             else:
                                 # Fallback: no learning if prediction failed
                                 logging.warning(
-                                    "Skipping online learning: thermal model "
+                                    f"Skipping online learning ({learning_mode}): thermal model "
                                     "prediction failed"
                                 )
                                 continue
 
                         except Exception as e:
                             logging.warning(
-                                "Skipping online learning: thermal model "
+                                f"Skipping online learning ({learning_mode}): thermal model "
                                 f"prediction error: {e}"
                             )
                             continue
                         
-                        # Call the learning feedback method with actual model prediction
+                        # Enhanced prediction context with learning mode information
+                        enhanced_prediction_context = prediction_context.copy()
+                        enhanced_prediction_context['learning_mode'] = learning_mode
+                        enhanced_prediction_context['was_shadow_mode_cycle'] = was_shadow_mode_cycle
+                        enhanced_prediction_context['ml_calculated_temp'] = last_final_temp_stored
+                        enhanced_prediction_context['hc_applied_temp'] = actual_applied_temp
+                        
+                        # Call the learning feedback method with the correct prediction context
                         wrapper.learn_from_prediction_feedback(
                             predicted_temp=model_predicted_temp,
                             actual_temp=current_indoor,
-                            prediction_context=prediction_context,
-                            timestamp=datetime.now().isoformat()
+                            prediction_context=enhanced_prediction_context,
+                            timestamp=datetime.now().isoformat(),
+                            is_blocking_active=is_blocking
                         )
                         
                         logging.debug(
@@ -497,18 +559,6 @@ def main(args):
                     "Skipping online learning: no data from previous cycle"
                 )
 
-            # --- Check for blocking modes (DHW, Defrost) ---
-            # Skip the control logic if the heat pump is busy with other
-            # tasks like heating domestic hot water (DHW) or defrosting.
-            # blocking_entities already defined outside try block Build a
-            # list of active blocking reasons so we can distinguish DHW-like
-            # (long) blockers from short ones like defrost.
-            blocking_reasons = [
-                e
-                for e in blocking_entities
-                if ha_client.get_state(e, all_states, is_binary=True)
-            ]
-            is_blocking = bool(blocking_reasons)
 
             # --- Grace Period after Blocking ---
             # Use modular blocking state manager for cleaner code

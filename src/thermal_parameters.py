@@ -12,10 +12,17 @@ import logging
 from typing import Dict, Tuple, Optional
 from dataclasses import dataclass
 
+# Import the single source of truth for thermal parameters
+try:
+    from .thermal_config import ThermalParameterConfig
+except ImportError:
+    from thermal_config import ThermalParameterConfig
+
 
 @dataclass
 class ParameterInfo:
     """Information about a thermal parameter."""
+    name: str
     default: float
     bounds: Tuple[float, float]
     description: str
@@ -27,128 +34,32 @@ class ThermalParameterManager:
     """
     Unified thermal parameter management system.
     
-    This class consolidates all thermal parameters from config.py, 
-    thermal_config.py, and thermal_constants.py into a single source 
-    of truth, resolving conflicts according to the documented decisions.
+    This class centralizes access to all thermal parameters defined in 
+    ThermalParameterConfig, providing a single, consistent API for the application.
     """
     
-    # Unified parameter definitions with conflict resolutions applied
-    _PARAMETERS = {
-        # Core thermal physics parameters (Priority 1)
-        'thermal_time_constant': ParameterInfo(
-            default=4.0,
-            bounds=(0.5, 24.0),
-            description='Building thermal response time',
-            unit='hours',
-            env_var='THERMAL_TIME_CONSTANT'
-        ),
-        
-        # CONFLICT RESOLVED: Use thermal_config.py value (0.2) over config.py (0.1)
-        'heat_loss_coefficient': ParameterInfo(
-            default=0.2,  # Resolution: More realistic for moderate insulation
-            bounds=(0.002, 0.25),
-            description='Heat loss rate per degree difference',
-            unit='1/hour',
-            env_var='HEAT_LOSS_COEFFICIENT'
-        ),
-        
-        # CONFLICT RESOLVED: Use thermal_config.py calibrated value
-        'outlet_effectiveness': ParameterInfo(
-            default=0.04,  # Resolution: Calibrated TDD value vs 0.1 in config.py
-            bounds=(0.01, 0.5),  # Resolution: Realistic max vs 1.0 in thermal_constants
-            description='Heat pump outlet efficiency',
-            unit='dimensionless',
-            env_var='OUTLET_EFFECTIVENESS'
-        ),
-        
-        'outdoor_coupling': ParameterInfo(
-            default=0.3,
-            bounds=(0.1, 0.8),
-            description='Outdoor temperature influence factor',
-            unit='dimensionless',
-            env_var='OUTDOOR_COUPLING'
-        ),
-        
-        # External heat source weights (Priority 2)
-        'pv_heat_weight': ParameterInfo(
-            default=0.002,  # 2°C per kW solar heating
-            bounds=(0.0001, 0.01),
-            description='PV power heating contribution',
-            unit='°C/W',
-            env_var='PV_HEAT_WEIGHT'
-        ),
-        
-        'fireplace_heat_weight': ParameterInfo(
-            default=5.0,
-            bounds=(0.0, 10.0),
-            description='Fireplace direct heating contribution',
-            unit='°C',
-            env_var='FIREPLACE_HEAT_WEIGHT'
-        ),
-        
-        'tv_heat_weight': ParameterInfo(
-            default=0.2,
-            bounds=(0.0, 2.0),
-            description='TV/appliance heating contribution',
-            unit='°C',
-            env_var='TV_HEAT_WEIGHT'
-        ),
-        
-        # Temperature bounds (CONFLICT RESOLVED)
-        'outlet_temp_min': ParameterInfo(
-            default=25.0,  # Resolution: Physics-based minimum vs 14.0 in config.py
-            bounds=(14.0, 30.0),
-            description='Minimum outlet temperature for heating mode',
-            unit='°C',
-            env_var='CLAMP_MIN_ABS'
-        ),
-        
-        'outlet_temp_max': ParameterInfo(
-            default=65.0,  # Resolution: Safety-first vs 70.0 in thermal_constants
-            bounds=(60.0, 70.0),
-            description='Maximum safe outlet temperature',
-            unit='°C',
-            env_var='CLAMP_MAX_ABS'
-        ),
-        
-        # Adaptive learning parameters (Priority 3)
-        'adaptive_learning_rate': ParameterInfo(
-            default=0.05,
-            bounds=(0.001, 0.2),
-            description='Base adaptive learning rate',
-            unit='dimensionless',
-            env_var='ADAPTIVE_LEARNING_RATE'
-        ),
-        
-        'min_learning_rate': ParameterInfo(
-            default=0.01,
-            bounds=(0.001, 0.1),
-            description='Minimum learning rate',
-            unit='dimensionless',
-            env_var='MIN_LEARNING_RATE'
-        ),
-        
-        'max_learning_rate': ParameterInfo(
-            default=0.2,
-            bounds=(0.1, 1.0),
-            description='Maximum learning rate',
-            unit='dimensionless',
-            env_var='MAX_LEARNING_RATE'
-        ),
-        
-        'learning_confidence': ParameterInfo(
-            default=3.0,
-            bounds=(1.0, 10.0),
-            description='Initial learning confidence',
-            unit='dimensionless',
-            env_var='LEARNING_CONFIDENCE'
-        )
-    }
-    
+    _PARAMETERS: Dict[str, ParameterInfo] = {}
+
     def __init__(self):
         """Initialize the thermal parameter manager."""
         self._cache = {}
+        self._initialize_parameters()
         self._load_from_environment()
+
+    def _initialize_parameters(self):
+        """Dynamically build the parameter list from ThermalParameterConfig."""
+        all_info = ThermalParameterConfig.get_all_parameter_info()
+        for name, info in all_info.items():
+            # Assume a convention for environment variables for now
+            env_var = name.upper()
+            self._PARAMETERS[name] = ParameterInfo(
+                name=name,
+                default=info['default'],
+                bounds=info['bounds'],
+                description=info['description'],
+                unit=info['unit'],
+                env_var=env_var
+            )
         
     def _load_from_environment(self):
         """Load parameter values from environment variables."""
@@ -166,13 +77,13 @@ class ThermalParameterManager:
                             )
                         else:
                             logging.warning(
-                                f"Environment value {value} for {param_name} "
-                                f"outside bounds {param_info.bounds}, using default"
+                                f"Environment value {value} for {param_name} outside "
+                                f"bounds {param_info.bounds}, using default"
                             )
                     except ValueError:
                         logging.error(
-                            f"Invalid float value '{env_value}' for "
-                            f"environment variable {param_info.env_var}"
+                            f"Invalid float value '{env_value}' for environment "
+                            f"variable {param_info.env_var}"
                         )
     
     def get(self, param_name: str) -> float:
@@ -319,33 +230,8 @@ class ThermalParameterManager:
         """
         return len(self._PARAMETERS) > 0
     
-    # Legacy compatibility methods
-    def legacy_get_config_value(self, config_name: str) -> Optional[float]:
-        """
-        Legacy compatibility method for config.py values.
-        
-        Maps old config names to new unified parameter names.
-        """
-        legacy_mapping = {
-            'THERMAL_TIME_CONSTANT': 'thermal_time_constant',
-            'HEAT_LOSS_COEFFICIENT': 'heat_loss_coefficient',
-            'OUTLET_EFFECTIVENESS': 'outlet_effectiveness',
-            'CLAMP_MIN_ABS': 'outlet_temp_min',
-            'CLAMP_MAX_ABS': 'outlet_temp_max'
-        }
-        
-        if config_name in legacy_mapping:
-            return self.get(legacy_mapping[config_name])
-        
-        return None
-    
-    def legacy_thermal_config_default(self, param_name: str) -> Optional[float]:
-        """
-        Legacy compatibility method for ThermalParameterConfig.get_default().
-        """
-        if param_name in self._PARAMETERS:
-            return self.get(param_name)
-        return None
+    # The new design makes these legacy methods obsolete.
+    # They are removed to enforce the single source of truth.
 
 
 # Create global instance for unified access

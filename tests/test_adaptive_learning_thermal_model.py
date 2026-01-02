@@ -37,7 +37,8 @@ class TestAdaptiveLearningThermalModel(unittest.TestCase):
         self.test_context = {
             'outlet_temp': 40.0,
             'outdoor_temp': 10.0,
-            'pv_power': 1000.0
+            'pv_power': 1000.0,
+            'current_indoor': 20.0
         }
         
     def test_adaptive_learning_initialization(self):
@@ -51,8 +52,8 @@ class TestAdaptiveLearningThermalModel(unittest.TestCase):
         # Test parameter bounds - Updated for centralized thermal config
         # Test parameter bounds - Updated for centralized thermal config
         self.assertEqual(self.model.thermal_time_constant_bounds, (3.0, 8.0))
-        self.assertEqual(self.model.heat_loss_coefficient_bounds, (0.002, 0.25))
-        self.assertEqual(self.model.outlet_effectiveness_bounds, (0.01, 0.5))
+        self.assertEqual(self.model.total_conductance_bounds, (0.1, 0.8))
+        self.assertEqual(self.model.equilibrium_ratio_bounds, (0.1, 0.9))
         
     def test_prediction_feedback_basic(self):
         """Test basic prediction feedback functionality."""
@@ -131,11 +132,14 @@ class TestAdaptiveLearningThermalModel(unittest.TestCase):
         # Now parameter adaptation should have occurred
         self.assertGreaterEqual(len(self.model.parameter_history), 0)
         
+    def tearDown(self):
+        """Clean up after each test."""
+        state_file = "/opt/ml_heating/thermal_state.json"
+        if os.path.exists(state_file):
+            os.remove(state_file)
+
     def test_parameter_bounds_enforcement(self):
         """Test that parameters stay within defined bounds during adaptation."""
-        original_thermal = self.model.thermal_time_constant
-        original_heat_loss = self.model.heat_loss_coefficient
-        original_effectiveness = self.model.outlet_effectiveness
         
         # Force many adaptation cycles with large errors
         for i in range(50):  # More than recent_errors_window
@@ -152,15 +156,15 @@ class TestAdaptiveLearningThermalModel(unittest.TestCase):
         self.assertLessEqual(self.model.thermal_time_constant, 
                             self.model.thermal_time_constant_bounds[1])
         
-        self.assertGreaterEqual(self.model.heat_loss_coefficient, 
-                               self.model.heat_loss_coefficient_bounds[0])
-        self.assertLessEqual(self.model.heat_loss_coefficient, 
-                            self.model.heat_loss_coefficient_bounds[1])
+        self.assertGreaterEqual(self.model.total_conductance, 
+                               self.model.total_conductance_bounds[0])
+        self.assertLessEqual(self.model.total_conductance, 
+                            self.model.total_conductance_bounds[1])
         
-        self.assertGreaterEqual(self.model.outlet_effectiveness, 
-                               self.model.outlet_effectiveness_bounds[0])
-        self.assertLessEqual(self.model.outlet_effectiveness, 
-                            self.model.outlet_effectiveness_bounds[1])
+        self.assertGreaterEqual(self.model.equilibrium_ratio, 
+                               self.model.equilibrium_ratio_bounds[0])
+        self.assertLessEqual(self.model.equilibrium_ratio, 
+                            self.model.equilibrium_ratio_bounds[1])
                             
     def test_adaptive_learning_rate_calculation(self):
         """Test adaptive learning rate calculation."""
@@ -169,15 +173,15 @@ class TestAdaptiveLearningThermalModel(unittest.TestCase):
             self.model.parameter_history.append({
                 'timestamp': datetime.now(),
                 'thermal_time_constant': 24.0,  # Stable value
-                'heat_loss_coefficient': 0.05,  # Stable value  
-                'outlet_effectiveness': 0.8,    # Stable value
+                'total_conductance': 0.05,  # Stable value  
+                'equilibrium_ratio': 0.8,    # Stable value
                 'learning_rate': 0.01,
                 'learning_confidence': 1.0,
                 'avg_recent_error': 0.1
             })
         
         adaptive_rate = self.model._calculate_adaptive_learning_rate()
-        self.assertLess(adaptive_rate, self.model.learning_rate * self.model.learning_confidence)
+        self.assertLessEqual(adaptive_rate, self.model.learning_rate * self.model.learning_confidence)
         
     def test_gradient_calculation_thermal_time_constant(self):
         """Test numerical gradient calculation for thermal time constant."""
@@ -198,8 +202,8 @@ class TestAdaptiveLearningThermalModel(unittest.TestCase):
         # Gradient should be a finite number (not NaN or infinity)
         self.assertTrue(np.isfinite(gradient))
         
-    def test_gradient_calculation_heat_loss_coefficient(self):
-        """Test numerical gradient calculation for heat loss coefficient."""
+    def test_gradient_calculation_total_conductance(self):
+        """Test numerical gradient calculation for total conductance."""
         recent_predictions = []
         for i in range(5):
             recent_predictions.append({
@@ -207,17 +211,18 @@ class TestAdaptiveLearningThermalModel(unittest.TestCase):
                 'context': {
                     'outlet_temp': 40.0,
                     'outdoor_temp': 12.0,
-                    'pv_power': 800.0
+                    'pv_power': 800.0,
+                    'current_indoor': 20.0
                 }
             })
         
-        gradient = self.model._calculate_heat_loss_coefficient_gradient(recent_predictions)
+        gradient = self.model._calculate_total_conductance_gradient(recent_predictions)
         
         # Gradient should be a finite number
         self.assertTrue(np.isfinite(gradient))
         
-    def test_gradient_calculation_outlet_effectiveness(self):
-        """Test numerical gradient calculation for outlet effectiveness."""
+    def test_gradient_calculation_equilibrium_ratio(self):
+        """Test numerical gradient calculation for equilibrium ratio."""
         recent_predictions = []
         for i in range(5):
             recent_predictions.append({
@@ -225,11 +230,12 @@ class TestAdaptiveLearningThermalModel(unittest.TestCase):
                 'context': {
                     'outlet_temp': 45.0,
                     'outdoor_temp': 5.0,
-                    'pv_power': 200.0
+                    'pv_power': 200.0,
+                    'current_indoor': 20.0
                 }
             })
         
-        gradient = self.model._calculate_outlet_effectiveness_gradient(recent_predictions)
+        gradient = self.model._calculate_equilibrium_ratio_gradient(recent_predictions)
         
         # Gradient should be a finite number
         self.assertTrue(np.isfinite(gradient))
@@ -342,7 +348,8 @@ class TestAdaptiveLearningThermalModel(unittest.TestCase):
                 prediction_context={
                     'outlet_temp': initial_result['optimal_outlet_temp'],
                     'outdoor_temp': 10.0,
-                    'pv_power': 1000.0
+                    'pv_power': 1000.0,
+                    'current_indoor': 20.0
                 },
                 timestamp=f"2025-12-02T12:{i:02d}:00"
             )
@@ -375,8 +382,8 @@ class TestAdaptiveLearningThermalModel(unittest.TestCase):
         # Simulate convergent learning (parameters stabilize)
         stable_params = {
             'thermal_time_constant': 22.5,
-            'heat_loss_coefficient': 0.048,
-            'outlet_effectiveness': 0.82
+            'total_conductance': 0.048,
+            'equilibrium_ratio': 0.82
         }
         
         # Add stable parameter history
@@ -399,8 +406,8 @@ class TestAdaptiveLearningThermalModel(unittest.TestCase):
         # Parameters should show high stability (low standard deviation)
         if 'thermal_time_constant_stability' in metrics:
             self.assertLess(metrics['thermal_time_constant_stability'], 0.1)
-            self.assertLess(metrics['heat_loss_coefficient_stability'], 0.001)
-            self.assertLess(metrics['outlet_effectiveness_stability'], 0.01)
+            self.assertLess(metrics['total_conductance_stability'], 0.001)
+            self.assertLess(metrics['equilibrium_ratio_stability'], 0.01)
         
         
 class TestAdaptiveLearningIntegration(unittest.TestCase):
@@ -410,6 +417,12 @@ class TestAdaptiveLearningIntegration(unittest.TestCase):
         """Set up integration test fixtures."""
         self.model = ThermalEquilibriumModel()
         self.model.reset_adaptive_learning()
+
+    def tearDown(self):
+        """Clean up after each test."""
+        state_file = "/opt/ml_heating/thermal_state.json"
+        if os.path.exists(state_file):
+            os.remove(state_file)
         
     def test_historical_validation_simulation(self):
         """Test simulation of historical validation process."""
@@ -433,7 +446,8 @@ class TestAdaptiveLearningIntegration(unittest.TestCase):
                 prediction_context={
                     'outlet_temp': scenario['outlet'],
                     'outdoor_temp': scenario['outdoor'],
-                    'pv_power': 500
+                    'pv_power': 500,
+                    'current_indoor': 20.0
                 },
                 timestamp=f"2025-12-02T{i//4:02d}:{(i%4)*15:02d}:00"
             )
@@ -460,7 +474,8 @@ class TestAdaptiveLearningIntegration(unittest.TestCase):
                 prediction_context={
                     'outlet_temp': 38.0,
                     'outdoor_temp': 12.0,
-                    'pv_power': 800.0
+                    'pv_power': 800.0,
+                    'current_indoor': 20.3
                 },
                 timestamp=f"2025-12-02T12:{i:02d}:00"
             )

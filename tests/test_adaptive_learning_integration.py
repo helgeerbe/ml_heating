@@ -34,7 +34,7 @@ def test_adaptive_learning_enabled():
     
     # Test parameter update mechanism works
     initial_thermal = model.thermal_time_constant
-    initial_heat_loss = model.heat_loss_coefficient
+    initial_heat_loss = model.total_conductance
     
     # Simulate prediction feedback to trigger learning with larger errors
     for i in range(20):  # More predictions with significant errors
@@ -53,7 +53,7 @@ def test_adaptive_learning_enabled():
     # Check if parameters have been updated OR if learning confidence increased
     parameter_changed = (
         abs(model.thermal_time_constant - initial_thermal) > 0.001 or
-        abs(model.heat_loss_coefficient - initial_heat_loss) > 0.0001
+        abs(model.total_conductance - initial_heat_loss) > 0.0001
     )
     
     # Also check if learning confidence increased (indicates learning is working)
@@ -181,7 +181,7 @@ def test_enhanced_ha_metrics():
         
         # Verify required fields for HA
         required_fields = [
-            'thermal_time_constant', 'heat_loss_coefficient', 'outlet_effectiveness',
+            'thermal_time_constant', 'total_conductance', 'equilibrium_ratio',
             'learning_confidence', 'cycle_count', 'mae_all_time', 'rmse_all_time',
             'model_health', 'total_predictions', 'last_updated'
         ]

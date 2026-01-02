@@ -19,20 +19,13 @@ from datetime import datetime
 import pandas as pd
 
 # Support both package-relative and direct import for notebooks
-try:
-    from .thermal_equilibrium_model import ThermalEquilibriumModel
-    from .unified_thermal_state import get_thermal_state_manager
-    from .influx_service import create_influx_service
-    from .prediction_metrics import PredictionMetrics
-    from .prediction_context import prediction_context_manager
-    from . import config
-except ImportError:
-    from thermal_equilibrium_model import ThermalEquilibriumModel
-    from unified_thermal_state import get_thermal_state_manager
-    from influx_service import create_influx_service
-    from prediction_metrics import PredictionMetrics
-    from prediction_context import prediction_context_manager
-    import config
+from .thermal_equilibrium_model import ThermalEquilibriumModel
+from .unified_thermal_state import get_thermal_state_manager
+from .influx_service import create_influx_service
+from .prediction_metrics import PredictionMetrics
+from . import config
+from .thermal_config import ThermalParameterConfig
+from .ha_client import create_ha_client
 
 
 # Singleton pattern to prevent multiple model instantiation
@@ -72,12 +65,12 @@ class EnhancedModelWrapper:
             f"{self.thermal_model.thermal_time_constant:.1f}h"
         )
         logging.info(
-            f"   - Heat loss coefficient: "
-            f"{self.thermal_model.heat_loss_coefficient:.4f}"
+            f"   - Total conductance: "
+            f"{self.thermal_model.total_conductance:.4f}"
         )
         logging.info(
-            f"   - Outlet effectiveness: "
-            f"{self.thermal_model.outlet_effectiveness:.3f}"
+            f"   - Equilibrium ratio: "
+            f"{self.thermal_model.equilibrium_ratio:.3f}"
         )
         logging.info(
             f"   - Learning confidence: "
@@ -197,8 +190,8 @@ class EnhancedModelWrapper:
             confidence = self.thermal_model.learning_confidence
             prediction_metadata = {
                 "thermal_time_constant": self.thermal_model.thermal_time_constant,
-                "heat_loss_coefficient": self.thermal_model.heat_loss_coefficient,
-                "outlet_effectiveness": self.thermal_model.outlet_effectiveness,
+                "total_conductance": self.thermal_model.total_conductance,
+                "equilibrium_ratio": self.thermal_model.equilibrium_ratio,
                 "learning_confidence": confidence,
                 "prediction_method": "thermal_equilibrium_single_prediction",
                 "cycle_count": self.cycle_count,
@@ -1005,20 +998,24 @@ class EnhancedModelWrapper:
 
             # Physics-based scaling factor derived from house characteristics
             time_constant = self.thermal_model.thermal_time_constant
-            effectiveness = self.thermal_model.outlet_effectiveness
+            effectiveness = self.thermal_model.equilibrium_ratio
 
-            # Adaptive scaling: combines your house's 15.0 factor with physics
-            # For your house: (4.0 * 4.0) / 0.084 ≈ 15.0 (matches heat curve)
+            logging.info(
+                f"🌡️ Thermal parameters: time_constant={time_constant:.2f}, "
+                f"effectiveness={effectiveness:.4f}"
+            )
+
+            # Adaptive scaling: using physics to scale correction.
             if effectiveness > 0:
-                physics_scale = (time_constant * 4.0) / effectiveness
+                physics_scale = 2.0 / effectiveness
             else:
                 physics_scale = 15.0  # Fallback to heat curve default
 
             # Exponential response based on time pressure
             if time_pressure > 0.8:  # Very urgent
-                urgency_multiplier = 2.0
+                urgency_multiplier = 1.5 # Reduced from 2.0
             elif time_pressure > 0.5:  # Moderate urgency
-                urgency_multiplier = 1.5
+                urgency_multiplier = 1.25 # Reduced from 1.5
             else:  # Low urgency
                 urgency_multiplier = 1.0
 
@@ -1028,6 +1025,14 @@ class EnhancedModelWrapper:
             # House-specific bounds (same as heat curve for compatibility)
             max_heating = 10.0
             max_cooling = -20.0
+
+            # Proximity-based dampening for max_heating to avoid overreaction
+            proximity_dampen = 1.0  # Default to no dampening
+            if temp_error < 0:  # Only dampen if overshooting
+                proximity_dampen = min(1.0, abs(temp_error) / 0.5)
+                effective_max_heating = max_heating * proximity_dampen
+                correction = min(effective_max_heating, correction)
+
             correction = max(max_cooling, min(max_heating, correction))
 
             # Apply correction to outlet temperature
@@ -1038,10 +1043,10 @@ class EnhancedModelWrapper:
                 config.CLAMP_MIN_ABS, min(config.CLAMP_MAX_ABS, corrected_outlet)
             )
 
-            logging.debug(
+            logging.info(
                 f"🏠 Physics-based correction: {outlet_temp:.1f}°C + {correction:+.1f}°C = {corrected_outlet:.1f}°C "
-                f"(temp_error: {temp_error:+.2f}°C, scale: {physics_scale:.1f}, "
-                f"time_pressure: {time_pressure:.2f}, urgency: {urgency_multiplier:.1f}x)"
+                f"(temp_error: {temp_error:+.2f}°C, proximity_dampen: {proximity_dampen:.2f}, "
+                f"scale: {physics_scale:.1f}, time_pressure: {time_pressure:.2f}, urgency: {urgency_multiplier:.1f}x)"
             )
 
             return corrected_outlet
@@ -1077,9 +1082,14 @@ class EnhancedModelWrapper:
         actual_temp: float,
         prediction_context: Dict,
         timestamp: Optional[str] = None,
+        is_blocking_active: bool = False,
     ):
         """Learn from prediction feedback using the thermal model's adaptive learning."""
         if not self.learning_enabled:
+            return
+
+        if is_blocking_active:
+            logging.info("Skipping online learning due to active blocking event.")
             return
 
         try:
@@ -1093,11 +1103,12 @@ class EnhancedModelWrapper:
                 return
 
             # Update thermal model with prediction feedback
-            self.thermal_model.update_prediction_feedback(
+            prediction_error = self.thermal_model.update_prediction_feedback(
                 predicted_temp=predicted_temp,
                 actual_temp=actual_temp,
                 prediction_context=prediction_context,
                 timestamp=timestamp or datetime.now().isoformat(),
+                is_blocking_active=is_blocking_active,
             )
 
             # Add prediction to MAE/RMSE tracking
@@ -1132,12 +1143,12 @@ class EnhancedModelWrapper:
             self._export_metrics_to_ha()
 
             # Log learning cycle completion
-            prediction_error = abs(predicted_temp - actual_temp)
-            logging.info(
-                f"✅ Learning cycle {self.cycle_count}: error={prediction_error:.3f}°C, "
-                f"confidence={self.thermal_model.learning_confidence:.3f}, "
-                f"total_predictions={len(self.prediction_metrics.predictions)}"
-            )
+            if prediction_error is not None:
+                logging.info(
+                    f"✅ Learning cycle {self.cycle_count}: error={abs(prediction_error):.3f}°C, "
+                    f"confidence={self.thermal_model.learning_confidence:.3f}, "
+                    f"total_predictions={len(self.prediction_metrics.predictions)}"
+                )
 
         except Exception as e:
             logging.error(f"Learning from feedback failed: {e}", exc_info=True)
@@ -1145,12 +1156,6 @@ class EnhancedModelWrapper:
     def _export_metrics_to_ha(self):
         """Export metrics to Home Assistant sensors."""
         try:
-            # Import here to avoid circular imports
-            try:
-                from .ha_client import create_ha_client
-            except ImportError:
-                from ha_client import create_ha_client
-
             ha_client = create_ha_client()
 
             # Get comprehensive metrics
@@ -1208,13 +1213,13 @@ class EnhancedModelWrapper:
                                 "thermal_time_constant",
                                 self.thermal_model.thermal_time_constant,
                             ),
-                            "heat_loss_coefficient": current_params.get(
-                                "heat_loss_coefficient",
-                                self.thermal_model.heat_loss_coefficient,
+                            "total_conductance": current_params.get(
+                                "total_conductance",
+                                self.thermal_model.total_conductance,
                             ),
-                            "outlet_effectiveness": current_params.get(
-                                "outlet_effectiveness",
-                                self.thermal_model.outlet_effectiveness,
+                            "equilibrium_ratio": current_params.get(
+                                "equilibrium_ratio",
+                                self.thermal_model.equilibrium_ratio,
                             ),
                             "learning_confidence": self.thermal_model.learning_confidence,
                             "cycle_count": self.cycle_count,
@@ -1230,8 +1235,8 @@ class EnhancedModelWrapper:
         # Fallback if method doesn't exist or returns insufficient_data
         return {
             "thermal_time_constant": self.thermal_model.thermal_time_constant,
-            "heat_loss_coefficient": self.thermal_model.heat_loss_coefficient,
-            "outlet_effectiveness": self.thermal_model.outlet_effectiveness,
+            "total_conductance": self.thermal_model.total_conductance,
+            "equilibrium_ratio": self.thermal_model.equilibrium_ratio,
             "learning_confidence": self.thermal_model.learning_confidence,
             "cycle_count": self.cycle_count,
         }
@@ -1258,11 +1263,11 @@ class EnhancedModelWrapper:
                 "thermal_time_constant": thermal_metrics.get(
                     "thermal_time_constant", 6.0
                 ),
-                "heat_loss_coefficient": thermal_metrics.get(
-                    "heat_loss_coefficient", 0.05
+                "total_conductance": thermal_metrics.get(
+                    "total_conductance", 0.05
                 ),
-                "outlet_effectiveness": thermal_metrics.get(
-                    "outlet_effectiveness", 0.8
+                "equilibrium_ratio": thermal_metrics.get(
+                    "equilibrium_ratio", 0.8
                 ),
                 "learning_confidence": thermal_metrics.get("learning_confidence", 3.0),
                 # Learning progress
@@ -1518,10 +1523,10 @@ def _calculate_thermal_trust_metrics(
 
         # Calculate thermal stability (how stable are the thermal parameters)
         time_constant_stability = min(1.0, thermal_model.thermal_time_constant / 48.0)
-        heat_loss_stability = min(1.0, thermal_model.heat_loss_coefficient * 20.0)
-        effectiveness_stability = thermal_model.outlet_effectiveness
+        conductance_stability = min(1.0, thermal_model.total_conductance * 20.0)
+        equilibrium_ratio_stability = thermal_model.equilibrium_ratio
         thermal_stability = (
-            time_constant_stability + heat_loss_stability + effectiveness_stability
+            time_constant_stability + conductance_stability + equilibrium_ratio_stability
         ) / 3.0
 
         # Calculate prediction consistency (how reasonable is this prediction)

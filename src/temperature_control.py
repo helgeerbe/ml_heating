@@ -64,21 +64,13 @@ class GradualTemperatureControl:
         max_change = config.MAX_TEMP_CHANGE_PER_CYCLE
         original_temp = final_temp
         
-        last_blocking_reasons = state.get("last_blocking_reasons", []) or []
         last_final_temp = state.get("last_final_temp")
-        
-        # DHW-like blockers that should keep the soft-start behavior
-        dhw_like_blockers = {
-            config.DHW_STATUS_ENTITY_ID,
-            config.DISINFECTION_STATUS_ENTITY_ID,
-            config.DHW_BOOST_HEATER_STATUS_ENTITY_ID,
-        }
         
         # Determine baseline temperature
         if last_final_temp is not None:
+            # Always use last_final_temp as the baseline to ensure gradual control
+            # resumes from the last known setpoint, even after DHW or other interruptions.
             baseline = last_final_temp
-            if any(b in dhw_like_blockers for b in last_blocking_reasons):
-                baseline = actual_outlet_temp
         else:
             baseline = actual_outlet_temp
             

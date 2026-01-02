@@ -36,8 +36,8 @@ if _is_addon_environment():
     HASS_URL: str = os.getenv("HASS_URL", "http://supervisor/core")
     HASS_TOKEN: str = os.getenv("SUPERVISOR_TOKEN", "").strip()
 else:
-    HASS_URL: str = os.getenv("HASS_URL", "http://localhost:8123")
-    HASS_TOKEN: str = os.getenv("HASS_TOKEN", "").strip()
+    HASS_URL = os.getenv("HASS_URL", "http://localhost:8123")
+    HASS_TOKEN = os.getenv("HASS_TOKEN", "").strip()
 
 HASS_HEADERS: dict[str, str] = {
     "Authorization": f"Bearer {HASS_TOKEN}",
@@ -59,8 +59,8 @@ if _is_addon_environment():
     MODEL_FILE: str = os.getenv("MODEL_FILE_PATH", "/data/models/ml_model.pkl")
     STATE_FILE: str = os.getenv("STATE_FILE_PATH", "/data/models/ml_state.pkl")
 else:
-    MODEL_FILE: str = os.getenv("MODEL_FILE", "/opt/ml_heating/ml_model.pkl")
-    STATE_FILE: str = os.getenv("STATE_FILE", "/opt/ml_heating/ml_state.pkl")
+    MODEL_FILE = os.getenv("MODEL_FILE", "/opt/ml_heating/ml_model.pkl")
+    STATE_FILE = os.getenv("STATE_FILE", "/opt/ml_heating/ml_state.pkl")
 
 # --- Model & History Parameters ---
 # These parameters control the time windows for feature creation and prediction.
@@ -199,12 +199,6 @@ BLOCKING_POLL_INTERVAL_SECONDS: int = int(
 MAE_ENTITY_ID: str = os.getenv("MAE_ENTITY_ID", "sensor.ml_model_mae")
 RMSE_ENTITY_ID: str = os.getenv("RMSE_ENTITY_ID", "sensor.ml_model_rmse")
 
-# --- Clamping (absolute) ---
-# These define the absolute allowed range for any ML-proposed outlet temperature.
-# Use environment variables CLAMP_MIN_ABS and CLAMP_MAX_ABS to override defaults.
-CLAMP_MIN_ABS: float = float(os.getenv("CLAMP_MIN_ABS", "14.0"))
-CLAMP_MAX_ABS: float = float(os.getenv("CLAMP_MAX_ABS", "65.0"))
-
 # --- Multi-Lag Learning Configuration ---
 # Enable time-delayed learning for external heat sources (PV, fireplace, TV)
 # to capture realistic time delays (e.g., PV warming peaks 60-90min after production)
@@ -252,32 +246,11 @@ ML_HEATING_CONTROL_ENTITY_ID: str = os.getenv(
 )
 
 # --- Thermal Equilibrium Model Parameters ---
-# Core thermal physics parameters for the thermal equilibrium model.
-# These parameters control the physics-based calculations and can be tuned
-# for different building characteristics and testing scenarios.
-
-# Core Thermal Properties (Priority 1 - Critical for Model Behavior)
-# UPDATED FOR CORRECTED PHYSICS - Previous values were calibrated for broken formula
-THERMAL_TIME_CONSTANT: float = float(os.getenv("THERMAL_TIME_CONSTANT", "4.0"))  # Building thermal response time (hours)
-HEAT_LOSS_COEFFICIENT: float = float(os.getenv("HEAT_LOSS_COEFFICIENT", "0.10"))  # Heat loss rate per degree difference (CORRECTED)
-OUTLET_EFFECTIVENESS: float = float(os.getenv("OUTLET_EFFECTIVENESS", "0.10"))     # Heat pump outlet efficiency (CORRECTED)
-OUTDOOR_COUPLING: float = float(os.getenv("OUTDOOR_COUPLING", "0.3"))            # Outdoor temperature influence factor
-# THERMAL_BRIDGE_FACTOR removed in Phase 2: was not used in calculations
-
-# External Heat Source Weights (Priority 2 - Multi-Source Testing)
-# Updated to physically reasonable ranges as defined by TDD tests:
-# - PV: 0.001-0.01 °C/W (1-10°C per kW)
-# - Fireplace: 2-10°C (significant heating)  
-# - TV: 0.1-2°C (small but measurable)
-PV_HEAT_WEIGHT: float = float(os.getenv("PV_HEAT_WEIGHT", "0.002"))              # 2°C per kW solar heating
-FIREPLACE_HEAT_WEIGHT: float = float(os.getenv("FIREPLACE_HEAT_WEIGHT", "5.0"))  # 5°C direct contribution
-TV_HEAT_WEIGHT: float = float(os.getenv("TV_HEAT_WEIGHT", "0.2"))                # 0.2°C electronics heating
+# DEPRECATED: These parameters are now managed by the unified
+# ThermalParameterManager and are sourced from src/thermal_config.py.
+# Environment variables set for these will be loaded by the manager.
 
 # Adaptive Learning Parameters (Priority 3 - Advanced Tuning)
-ADAPTIVE_LEARNING_RATE: float = float(os.getenv("ADAPTIVE_LEARNING_RATE", "0.05"))  # Base learning rate
-MIN_LEARNING_RATE: float = float(os.getenv("MIN_LEARNING_RATE", "0.01"))         # Minimum learning rate
-MAX_LEARNING_RATE: float = float(os.getenv("MAX_LEARNING_RATE", "0.2"))          # Maximum learning rate
-LEARNING_CONFIDENCE: float = float(os.getenv("LEARNING_CONFIDENCE", "3.0"))      # Initial learning confidence
 RECENT_ERRORS_WINDOW: int = int(os.getenv("RECENT_ERRORS_WINDOW", "10"))         # Error analysis window size
 
 # --- Hybrid Learning Strategy (Phase 2 Enhancement) ---
@@ -332,3 +305,21 @@ ENABLE_DELTA_FORECAST_CALIBRATION: bool = (
 )
 # Maximum allowed temperature offset to prevent unrealistic corrections
 DELTA_CALIBRATION_MAX_OFFSET: float = float(os.getenv("DELTA_CALIBRATION_MAX_OFFSET", "10.0"))
+
+# Absolute clamp values for outlet temperature
+CLAMP_MIN_ABS: float = float(os.getenv("CLAMP_MIN_ABS", "25.0"))
+CLAMP_MAX_ABS: float = float(os.getenv("CLAMP_MAX_ABS", "55.0"))
+
+# Thermal Model Parameters
+PV_HEAT_WEIGHT: float = float(os.getenv("PV_HEAT_WEIGHT", "0.002"))
+FIREPLACE_HEAT_WEIGHT: float = float(os.getenv("FIREPLACE_HEAT_WEIGHT", "5.0"))
+TV_HEAT_WEIGHT: float = float(os.getenv("TV_HEAT_WEIGHT", "0.2"))
+THERMAL_TIME_CONSTANT: float = float(os.getenv("THERMAL_TIME_CONSTANT",
+                                               "4.0"))
+EQUILIBRIUM_RATIO: float = float(os.getenv("EQUILIBRIUM_RATIO", "0.17"))
+TOTAL_CONDUCTANCE: float = float(os.getenv("TOTAL_CONDUCTANCE", "0.24"))
+ADAPTIVE_LEARNING_RATE: float = float(os.getenv("ADAPTIVE_LEARNING_RATE",
+                                                  "0.01"))
+LEARNING_CONFIDENCE: float = float(os.getenv("LEARNING_CONFIDENCE", "3.0"))
+MIN_LEARNING_RATE: float = float(os.getenv("MIN_LEARNING_RATE", "0.001"))
+MAX_LEARNING_RATE: float = float(os.getenv("MAX_LEARNING_RATE", "0.1"))
