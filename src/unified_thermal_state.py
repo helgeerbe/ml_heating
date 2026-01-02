@@ -201,6 +201,8 @@ class ThermalStateManager:
             return int(obj)
         elif isinstance(obj, np.floating):
             return float(obj)
+        elif isinstance(obj, np.bool_):
+            return bool(obj)  # Convert numpy boolean to Python boolean
         elif isinstance(obj, np.ndarray):
             return obj.tolist()
         elif hasattr(obj, 'to_dict'):
