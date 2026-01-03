@@ -42,13 +42,32 @@ was_shadow_mode_cycle = (actual_applied_temp != last_final_temp_stored)
 **Shadow Mode Learning**:
 ```python
 if was_shadow_mode_cycle:
-    # SHADOW MODE LEARNING (CORRECTED):
-    # Predict what indoor temp the heat curve's outlet setting will achieve
-    predicted_indoor_temp = wrapper.thermal_model.predict_equilibrium_temperature(
-        outlet_temp=actual_applied_temp,  # Heat curve's setting
-        # ... other parameters
-    )
-    learning_mode = "shadow_mode_hc_observation"
+    # SHADOW MODE LEARNING (FIXED FOR NON-EQUILIBRIUM):
+    # Use trajectory prediction for realistic one-cycle predictions during non-equilibrium
+    
+    # Check if we're near equilibrium (small deviation from target)
+    deviation_from_target = abs(current_indoor - target_temp)
+    near_equilibrium = deviation_from_target < 0.5  # Within 0.5°C = near equilibrium
+    
+    if near_equilibrium:
+        # Use equilibrium prediction for steady-state scenarios
+        predicted_indoor_temp = wrapper.thermal_model.predict_equilibrium_temperature(
+            outlet_temp=actual_applied_temp,  # Heat curve's setting
+            # ... other parameters
+        )
+        prediction_method = "equilibrium"
+    else:
+        # Use trajectory prediction for transient (non-equilibrium) scenarios
+        trajectory = wrapper.thermal_model.predict_thermal_trajectory(
+            current_indoor=current_indoor,
+            outlet_temp=actual_applied_temp,  # Heat curve's setting
+            time_horizon_hours=cycle_interval_hours,  # One cycle time
+            # ... other parameters
+        )
+        predicted_indoor_temp = trajectory["trajectory"][0]
+        prediction_method = "trajectory"
+    
+    learning_mode = f"shadow_mode_hc_{prediction_method}"
 ```
 
 **Active Mode Learning** (unchanged):
@@ -163,6 +182,46 @@ ML Decision → ML Prediction → Compare with Reality → Learn Prediction Accu
                        └─────────────────┘
 ```
 
+## Prediction Method Enhancement (v3.0)
+
+### Problem: Equilibrium vs. Non-Equilibrium Scenarios
+
+**Previous Limitation**: Shadow mode only used equilibrium prediction, which assumes the system has reached steady-state. This was inaccurate during:
+- Large temperature deviations from target (>0.5°C)
+- Rapid heating/cooling scenarios  
+- Transient thermal conditions
+
+### Solution: Adaptive Prediction Method Selection
+
+**Enhanced Algorithm**:
+```python
+# Detect thermal equilibrium state
+deviation_from_target = abs(current_indoor - target_temp)
+near_equilibrium = deviation_from_target < 0.5  # Within 0.5°C
+
+if near_equilibrium:
+    # Steady-state: Use equilibrium prediction
+    prediction_method = "equilibrium"
+    # Predicts final temperature after infinite time
+else:
+    # Transient: Use trajectory prediction  
+    prediction_method = "trajectory"
+    # Predicts temperature after one cycle time (30 minutes)
+```
+
+### Benefits of Enhanced Prediction
+
+**Improved Accuracy During Non-Equilibrium**:
+- **Large Deviations**: When current temp is far from target, trajectory prediction accounts for thermal momentum
+- **Realistic Time Horizons**: Predicts what happens in one cycle (30min) vs. infinite time
+- **Better Learning**: ML learns more accurate building physics during heating/cooling transitions
+
+**Log Output Enhancement**:
+```
+🔍 SHADOW MODE LEARNING (trajectory): Predicting indoor temp from heat curve's 56.0°C outlet setting (deviation: 0.6°C)
+🔍 SHADOW MODE LEARNING (equilibrium): Predicting indoor temp from heat curve's 45.0°C outlet setting (deviation: 0.2°C)
+```
+
 ## Version History
 
 - **v1.0**: Initial shadow mode implementation (flawed)
@@ -171,3 +230,9 @@ ML Decision → ML Prediction → Compare with Reality → Learn Prediction Accu
   - Active mode continues learning from ML decisions  
   - Enhanced context tracking and logging
   - Comprehensive test validation
+- **v3.0**: Adaptive prediction method enhancement (January 3, 2026)
+  - Equilibrium detection for steady-state vs transient scenarios
+  - Trajectory prediction for non-equilibrium conditions (deviation > 0.5°C)
+  - Equilibrium prediction for steady-state conditions (deviation ≤ 0.5°C)
+  - Enhanced logging with prediction method identification
+  - Improved learning accuracy during heating/cooling transitions
