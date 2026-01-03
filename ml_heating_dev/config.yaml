@@ -172,7 +172,7 @@ options:
   # Heat loss rate per degree difference between indoor and outdoor temperature
   heat_loss_coefficient: 0.2
   # Heat pump outlet efficiency (how effectively outlet heats indoor air)
-  outlet_effectiveness: 0.04
+  outlet_effectiveness: 0.8
   # Outdoor temperature influence factor (how much outdoor temp affects indoor equilibrium)
   outdoor_coupling: 0.3
   # Thermal bridging losses factor (heat loss through building envelope)
@@ -188,11 +188,11 @@ options:
   
   # Adaptive Learning Parameters - Real-time parameter tuning settings
   # Base learning rate for thermal parameter adaptation
-  adaptive_learning_rate: 0.05
+  adaptive_learning_rate: 0.01
   # Minimum allowed learning rate (prevents learning from stopping)
-  min_learning_rate: 0.01
+  min_learning_rate: 0.001
   # Maximum allowed learning rate (prevents unstable learning)
-  max_learning_rate: 0.2
+  max_learning_rate: 0.01
   # Initial confidence level for learning algorithms
   learning_confidence: 3.0
   # Number of recent prediction errors to analyze for parameter updates

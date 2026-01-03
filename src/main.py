@@ -424,31 +424,52 @@ def main(args):
                         
                         try:
                             if was_shadow_mode_cycle:
-                                # SHADOW MODE LEARNING (CORRECTED):
+                                # SHADOW MODE LEARNING (FIXED FOR NON-EQUILIBRIUM):
                                 # Predict what indoor temp the heat curve's outlet setting will achieve
-                                # This learns building physics from heat curve's control decisions
-                                predicted_indoor_temp = (
-                                    wrapper.thermal_model.predict_equilibrium_temperature(
-                                        outlet_temp=actual_applied_temp,  # Heat curve's setting
-                                        outdoor_temp=prediction_context.get(
-                                            "outdoor_temp", 10.0
-                                        ),
-                                        current_indoor=last_indoor_temp,
-                                        pv_power=prediction_context.get(
-                                            "pv_power", 0.0
-                                        ),
-                                        fireplace_on=prediction_context.get(
-                                            "fireplace_on", 0.0
-                                        ),
-                                        tv_on=prediction_context.get("tv_on", 0.0),
-                                        _suppress_logging=True,
-                                    )
-                                )
+                                # Use trajectory prediction for realistic one-cycle predictions during non-equilibrium
                                 
-                                learning_mode = "shadow_mode_hc_observation"
+                                # Check if we're near equilibrium (small deviation from target)
+                                # Get target temp from current sensor reading
+                                target_temp_for_check = ha_client.get_state(
+                                    config.TARGET_INDOOR_TEMP_ENTITY_ID, all_states
+                                )
+                                deviation_from_target = abs(current_indoor - target_temp_for_check) if target_temp_for_check else 0.0
+                                near_equilibrium = deviation_from_target < 0.5  # Within 0.5°C = near equilibrium
+                                
+                                if near_equilibrium:
+                                    # Use equilibrium prediction for steady-state scenarios
+                                    predicted_indoor_temp = (
+                                        wrapper.thermal_model.predict_equilibrium_temperature(
+                                            outlet_temp=actual_applied_temp,  # Heat curve's setting
+                                            outdoor_temp=prediction_context.get("outdoor_temp", 10.0),
+                                            current_indoor=last_indoor_temp,
+                                            pv_power=prediction_context.get("pv_power", 0.0),
+                                            fireplace_on=prediction_context.get("fireplace_on", 0.0),
+                                            tv_on=prediction_context.get("tv_on", 0.0),
+                                            _suppress_logging=True,
+                                        )
+                                    )
+                                    prediction_method = "equilibrium"
+                                else:
+                                    # Use trajectory prediction for transient (non-equilibrium) scenarios
+                                    trajectory = wrapper.thermal_model.predict_thermal_trajectory(
+                                        current_indoor=last_indoor_temp,
+                                        target_indoor=last_indoor_temp,  # Not used in trajectory calculation
+                                        outlet_temp=actual_applied_temp,  # Heat curve's setting
+                                        outdoor_temp=prediction_context.get("outdoor_temp", 10.0),
+                                        time_horizon_hours=config.CYCLE_INTERVAL_MINUTES / 60.0,  # One cycle time
+                                        pv_power=prediction_context.get("pv_power", 0.0),
+                                        fireplace_on=prediction_context.get("fireplace_on", 0.0),
+                                        tv_on=prediction_context.get("tv_on", 0.0),
+                                    )
+                                    predicted_indoor_temp = trajectory["trajectory"][0] if trajectory["trajectory"] else last_indoor_temp
+                                    prediction_method = "trajectory"
+                                
+                                learning_mode = f"shadow_mode_hc_{prediction_method}"
                                 logging.debug(
-                                    "🔍 SHADOW MODE LEARNING: Predicting indoor temp from "
-                                    f"heat curve's {actual_applied_temp}°C outlet setting"
+                                    f"🔍 SHADOW MODE LEARNING ({prediction_method}): Predicting indoor temp from "
+                                    f"heat curve's {actual_applied_temp}°C outlet setting "
+                                    f"(deviation: {deviation_from_target:.1f}°C)"
                                 )
                             else:
                                 # ACTIVE MODE LEARNING (UNCHANGED):
