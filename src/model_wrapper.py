@@ -177,6 +177,9 @@ class EnhancedModelWrapper:
             current_indoor = features.get("indoor_temp_lag_30m", 21.0)
             target_indoor = features.get("target_temp", 21.0)
             outdoor_temp = features.get("outdoor_temp", 10.0)
+            
+            # Store current indoor for trajectory correction
+            self._current_indoor = current_indoor
 
             # Extract enhanced thermal intelligence features
             thermal_features = self._extract_thermal_features(features)
@@ -399,27 +402,38 @@ class EnhancedModelWrapper:
             )
 
             if min_prediction is not None and max_prediction is not None:
-                # Target below minimum capability - use minimum outlet
+                # UNIFIED PRE-CHECK: Check reachability regardless of heating/cooling scenario
+                temp_diff = target_indoor - current_indoor
+                temp_diff_abs = abs(temp_diff)
+                is_cooling_needed = temp_diff < -0.1  # Need to cool house
+                is_heating_needed = temp_diff > 0.1   # Need to heat house
+                
+                # Check if target is unreachable with system limits
                 if target_indoor < min_prediction - tolerance:
+                    # Target below minimum capability
+                    scenario = "cooling" if is_cooling_needed else "heating"
                     logging.warning(
-                        f"🎯 Pre-check: Target {target_indoor:.1f}°C unreachable "
+                        f"🎯 {scenario.title()} pre-check: Target {target_indoor:.1f}°C unreachable "
                         f"(min outlet {outlet_min:.1f}°C → {min_prediction:.2f}°C), "
-                        f"using minimum"
+                        f"using minimum outlet"
                     )
                     return outlet_min
 
-                # Target above maximum capability - use maximum outlet
                 if target_indoor > max_prediction + tolerance:
+                    # Target above maximum capability  
+                    scenario = "cooling" if is_cooling_needed else "heating"
                     logging.warning(
-                        f"🎯 Pre-check: Target {target_indoor:.1f}°C unreachable "
+                        f"🎯 {scenario.title()} pre-check: Target {target_indoor:.1f}°C unreachable "
                         f"(max outlet {outlet_max:.1f}°C → {max_prediction:.2f}°C), "
-                        f"using maximum"
+                        f"using maximum outlet"
                     )
                     return outlet_max
 
+                # Target is achievable - proceed to binary search for ALL scenarios
+                scenario = "cooling" if is_cooling_needed else ("heating" if is_heating_needed else "maintenance")
                 logging.debug(
-                    f"   Pre-check: Target {target_indoor:.1f}°C achievable "
-                    f"(range: {min_prediction:.1f}-{max_prediction:.1f}°C)"
+                    f"🎯 {scenario.title()} ({temp_diff_abs:.1f}°C deviation): Target {target_indoor:.1f}°C achievable "
+                    f"(range: {min_prediction:.1f}-{max_prediction:.1f}°C), proceeding to binary search"
                 )
         except Exception as e:
             logging.warning(f"Pre-check failed: {e}, proceeding with binary search")
@@ -523,18 +537,54 @@ class EnhancedModelWrapper:
                 return outlet_mid
 
             # Adjust search range based on error
-            if predicted_indoor < target_indoor:
-                # Need higher outlet temperature
-                outlet_min = outlet_mid
-                logging.debug(
-                    f"     → Predicted too low, raising minimum to {outlet_min:.1f}°C"
-                )
+            # COOLING FIX: Consider whether we're heating or cooling the house
+            temp_diff = target_indoor - current_indoor
+            is_heating_scenario = temp_diff > 0.1  # Need to heat house
+            is_cooling_scenario = temp_diff < -0.1  # Need to cool house
+            
+            if is_heating_scenario:
+                # HEATING: Normal logic
+                if predicted_indoor < target_indoor:
+                    # Need higher outlet temperature
+                    outlet_min = outlet_mid
+                    logging.debug(
+                        f"     → Heating: Predicted too low, raising minimum to {outlet_min:.1f}°C"
+                    )
+                else:
+                    # Need lower outlet temperature
+                    outlet_max = outlet_mid
+                    logging.debug(
+                        f"     → Heating: Predicted too high, lowering maximum to {outlet_max:.1f}°C"
+                    )
+            elif is_cooling_scenario:
+                # COOLING: For cooling, we want to get as close as possible to target
+                # Standard binary search logic works, just need to be close to target
+                if predicted_indoor < target_indoor:
+                    # Predicted is below target - need slightly higher outlet to reach target
+                    outlet_min = outlet_mid
+                    logging.debug(
+                        f"     → Cooling: Predicted below target, raising minimum to {outlet_min:.1f}°C"
+                    )
+                else:
+                    # Predicted is above target - need lower outlet to reach target
+                    outlet_max = outlet_mid
+                    logging.debug(
+                        f"     → Cooling: Predicted above target, lowering maximum to {outlet_max:.1f}°C"
+                    )
             else:
-                # Need lower outlet temperature
-                outlet_max = outlet_mid
-                logging.debug(
-                    f"     → Predicted too high, lowering maximum to {outlet_max:.1f}°C"
-                )
+                # MAINTENANCE: At target (normal logic)
+                if predicted_indoor < target_indoor:
+                    # Need higher outlet temperature
+                    outlet_min = outlet_mid
+                    logging.debug(
+                        f"     → Maintenance: Predicted too low, raising minimum to {outlet_min:.1f}°C"
+                    )
+                else:
+                    # Need lower outlet temperature
+                    outlet_max = outlet_mid
+                    logging.debug(
+                        f"     → Maintenance: Predicted too high, lowering maximum to {outlet_max:.1f}°C"
+                    )
 
         # Return best guess if didn't converge
         final_outlet = (outlet_min + outlet_max) / 2.0
@@ -947,10 +997,12 @@ class EnhancedModelWrapper:
         cycle_hours: float,
     ) -> float:
         """
-        Calculate physics-based adaptive correction using learned thermal parameters.
+        Calculate physics-based adaptive correction with deviation-scaled response.
 
-        Uses house-specific thermal characteristics to scale corrections appropriately
-        while maintaining exponential response for urgent scenarios.
+        ENHANCED PRIORITY 2 IMPLEMENTATION:
+        - Graduated response zones based on temperature deviation magnitude
+        - Unified control logic for heating and cooling scenarios
+        - Physics-based scaling using house thermal characteristics
         """
         try:
             # Calculate temperature error from trajectory
@@ -958,20 +1010,20 @@ class EnhancedModelWrapper:
             if not trajectory_temps:
                 return outlet_temp
 
-            # Calculate temperature error from trajectory boundary violations
+            # Get initial temperature deviation for graduated response
+            current_indoor = getattr(self, '_current_indoor', target_indoor)
+            initial_deviation = abs(target_indoor - current_indoor)
+
+            # Calculate trajectory error
             min_predicted_temp = min(trajectory_temps)
             max_predicted_temp = max(trajectory_temps)
 
-            # Check for boundary violations (include exact boundary matches)
-            min_violates = (
-                min_predicted_temp <= target_indoor - 0.1
-            )  # Temperature drops below comfort boundary
-            max_violates = (
-                max_predicted_temp >= target_indoor + 0.1
-            )  # Temperature rises above comfort boundary
+            # Determine primary error source
+            min_violates = min_predicted_temp <= target_indoor - 0.1
+            max_violates = max_predicted_temp >= target_indoor + 0.1
 
             if min_violates and max_violates:
-                # Both boundaries violated - choose the more severe one
+                # Both boundaries violated - choose the more severe
                 min_severity = abs(min_predicted_temp - (target_indoor - 0.1))
                 max_severity = abs(max_predicted_temp - (target_indoor + 0.1))
                 if min_severity > max_severity:
@@ -979,13 +1031,11 @@ class EnhancedModelWrapper:
                 else:
                     temp_error = target_indoor - max_predicted_temp
             elif min_violates:
-                # Only minimum violated - temperature drops too low
                 temp_error = target_indoor - min_predicted_temp
             elif max_violates:
-                # Only maximum violated - temperature rises too high
                 temp_error = target_indoor - max_predicted_temp
             else:
-                # No boundary violations, but target not reached in time
+                # Target not reached in time
                 reaches_target_at = trajectory.get("reaches_target_at")
                 if reaches_target_at is None or reaches_target_at > cycle_hours:
                     final_predicted_temp = trajectory_temps[-1]
@@ -993,60 +1043,77 @@ class EnhancedModelWrapper:
                 else:
                     temp_error = 0.0
 
-            # Calculate time pressure based on how far we are from reachability
-            time_pressure = self._calculate_time_pressure(trajectory, cycle_hours)
-
-            # Physics-based scaling factor derived from house characteristics
+            # GRADUATED RESPONSE ZONES - Priority 2 Enhancement
+            response_zone = self._get_response_zone(initial_deviation)
+            
+            # Physics-based scaling
             time_constant = self.thermal_model.thermal_time_constant
             effectiveness = self.thermal_model.equilibrium_ratio
 
-            logging.info(
-                f"🌡️ Thermal parameters: time_constant={time_constant:.2f}, "
-                f"effectiveness={effectiveness:.4f}"
-            )
-
-            # Adaptive scaling: using physics to scale correction.
+            # Adaptive scaling based on house characteristics
             if effectiveness > 0:
-                physics_scale = 2.0 / effectiveness
+                base_scale = 2.0 / effectiveness
             else:
-                physics_scale = 15.0  # Fallback to heat curve default
+                base_scale = 15.0  # Fallback
 
-            # Exponential response based on time pressure
-            if time_pressure > 0.8:  # Very urgent
-                urgency_multiplier = 1.5 # Reduced from 2.0
-            elif time_pressure > 0.5:  # Moderate urgency
-                urgency_multiplier = 1.25 # Reduced from 1.5
-            else:  # Low urgency
+            # Zone-specific scaling factors
+            zone_multipliers = {
+                "maintenance": 0.5,      # Gentle adjustments
+                "fine_tuning": 0.8,      # Moderate adjustments  
+                "active_control": 1.0,   # Standard response
+                "rapid_correction": 1.5  # Aggressive action
+            }
+
+            physics_scale = base_scale * zone_multipliers[response_zone]
+
+            # Time pressure calculation
+            time_pressure = self._calculate_time_pressure(trajectory, cycle_hours)
+
+            # Unified urgency calculation for all scenarios
+            if time_pressure > 0.8:
+                urgency_multiplier = 1.3  # Reduced for stability
+            elif time_pressure > 0.5:
+                urgency_multiplier = 1.15
+            else:
                 urgency_multiplier = 1.0
 
-            # Calculate correction
+            # Calculate base correction
             correction = temp_error * physics_scale * urgency_multiplier
 
-            # House-specific bounds (same as heat curve for compatibility)
-            max_heating = 10.0
-            max_cooling = -20.0
+            # Apply zone-specific bounds
+            zone_bounds = {
+                "maintenance": (1.0, -1.0),        # ±1°C max
+                "fine_tuning": (3.0, -3.0),        # ±3°C max
+                "active_control": (8.0, -8.0),     # ±8°C max  
+                "rapid_correction": (15.0, -15.0)  # ±15°C max
+            }
 
-            # Proximity-based dampening for max_heating to avoid overreaction
-            proximity_dampen = 1.0  # Default to no dampening
-            if temp_error < 0:  # Only dampen if overshooting
+            max_heating, max_cooling = zone_bounds[response_zone]
+
+            # Proximity dampening to prevent overshooting
+            proximity_dampen = 1.0
+            if temp_error < 0:  # Overshooting scenario
                 proximity_dampen = min(1.0, abs(temp_error) / 0.5)
                 effective_max_heating = max_heating * proximity_dampen
                 correction = min(effective_max_heating, correction)
 
+            # Apply zone bounds
             correction = max(max_cooling, min(max_heating, correction))
 
-            # Apply correction to outlet temperature
+            # Final outlet temperature
             corrected_outlet = outlet_temp + correction
-
-            # Apply system bounds
             corrected_outlet = max(
                 config.CLAMP_MIN_ABS, min(config.CLAMP_MAX_ABS, corrected_outlet)
             )
 
             logging.info(
-                f"🏠 Physics-based correction: {outlet_temp:.1f}°C + {correction:+.1f}°C = {corrected_outlet:.1f}°C "
-                f"(temp_error: {temp_error:+.2f}°C, proximity_dampen: {proximity_dampen:.2f}, "
-                f"scale: {physics_scale:.1f}, time_pressure: {time_pressure:.2f}, urgency: {urgency_multiplier:.1f}x)"
+                f"🎯 Graduated correction [{response_zone}]: "
+                f"{outlet_temp:.1f}°C + {correction:+.1f}°C = "
+                f"{corrected_outlet:.1f}°C "
+                f"(deviation: {initial_deviation:.1f}°C, "
+                f"temp_error: {temp_error:+.2f}°C, "
+                f"time_pressure: {time_pressure:.2f}, "
+                f"urgency: {urgency_multiplier:.2f}x)"
             )
 
             return corrected_outlet
@@ -1054,6 +1121,21 @@ class EnhancedModelWrapper:
         except Exception as e:
             logging.error(f"Physics-based correction failed: {e}")
             return outlet_temp
+
+    def _get_response_zone(self, deviation: float) -> str:
+        """
+        Determine graduated response zone based on temperature deviation.
+        
+        PRIORITY 2 ENHANCEMENT: Graduated response with hysteresis
+        """
+        if deviation < 0.1:
+            return "maintenance"      # Minimal adjustments
+        elif deviation < 0.3:
+            return "fine_tuning"      # Gentle corrections
+        elif deviation < 0.7:
+            return "active_control"   # Standard response
+        else:
+            return "rapid_correction" # Aggressive action
 
     def _calculate_time_pressure(self, trajectory: Dict, cycle_hours: float) -> float:
         """

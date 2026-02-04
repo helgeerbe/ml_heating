@@ -415,12 +415,10 @@ def main(args):
                             'current_indoor': last_indoor_temp
                         }
                         
-                        # FIXED SHADOW MODE LEARNING: Distinguish between active mode 
-                        # and shadow mode learning patterns
-                        
-                        # Check if we're in effective shadow mode for this learning cycle
-                        # Look at what was ACTUALLY applied vs what ML calculated
-                        was_shadow_mode_cycle = (actual_applied_temp != last_final_temp_stored)
+                        # FIXED SHADOW MODE LEARNING: Only learn from shadow mode when actually in shadow mode
+                        # In ACTIVE MODE: Learn from ML's own decisions (even with smart rounding)
+                        # In SHADOW MODE: Learn from heat curve decisions
+                        was_shadow_mode_cycle = effective_shadow_mode
                         
                         try:
                             if was_shadow_mode_cycle:

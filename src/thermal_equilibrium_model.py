@@ -497,6 +497,11 @@ class ThermalEquilibriumModel:
 
         if len(recent_predictions) < self.recent_errors_window:
             return
+        
+        # CRITICAL BUG FIX: Add missing corruption detection to parameter adaptation
+        if self._detect_parameter_corruption():
+            logging.warning("🛑 Parameter corruption detected in adaptation - learning DISABLED")
+            return
             
         # STABILITY FIX: Check for catastrophic errors before parameter updates
         recent_errors = [abs(p["error"]) for p in recent_predictions]
@@ -713,7 +718,7 @@ class ThermalEquilibriumModel:
             error = np.clip(
                 pred["error"], -2.0, 2.0
             )  # Clip error to prevent instability
-            gradient = finite_diff * error
+            gradient = -finite_diff * error  # Fixed: Correct gradient descent direction
             gradient_sum += gradient
             count += 1
 
