@@ -84,7 +84,9 @@ class ThermalStateManager:
                 "learning_enabled": True,
                 "parameter_adjustments": {
                     "equilibrium_ratio_delta": 0.0,
-                    "total_conductance_delta": 0.0
+                    "total_conductance_delta": 0.0,
+                    "heat_loss_coefficient_delta": 0.0,
+                    "outlet_effectiveness_delta": 0.0
                 },
                 "parameter_bounds": {
                     "equilibrium_ratio":
@@ -281,8 +283,10 @@ class ThermalStateManager:
                                   adjustments["equilibrium_ratio_delta"]),
             "total_conductance": (baseline["total_conductance"] +
                                   adjustments["total_conductance_delta"]),
-            "heat_loss_coefficient": baseline["heat_loss_coefficient"],
-            "outlet_effectiveness": baseline["outlet_effectiveness"],
+            "heat_loss_coefficient": (baseline["heat_loss_coefficient"] +
+                                  adjustments.get("heat_loss_coefficient_delta", 0.0)),
+            "outlet_effectiveness": (baseline["outlet_effectiveness"] +
+                                  adjustments.get("outlet_effectiveness_delta", 0.0)),
             "pv_heat_weight": baseline["pv_heat_weight"],
             "fireplace_heat_weight": baseline["fireplace_heat_weight"],
             "tv_heat_weight": baseline["tv_heat_weight"]

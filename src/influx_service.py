@@ -576,8 +576,12 @@ class InfluxService:
             
             # Core thermal parameters
             current_params = learning_metrics.get('current_parameters', {})
-            p = p.field("outlet_effectiveness", float(current_params.get('outlet_effectiveness', thermal_model.outlet_effectiveness)))
-            p = p.field("heat_loss_coefficient", float(current_params.get('heat_loss_coefficient', thermal_model.heat_loss_coefficient)))
+
+            heat_loss_coefficient = current_params.get('heat_loss_coefficient', getattr(thermal_model, 'heat_loss_coefficient', 0.0))
+            outlet_effectiveness = current_params.get('outlet_effectiveness', getattr(thermal_model, 'outlet_effectiveness', 0.0))
+
+            p = p.field("outlet_effectiveness", float(outlet_effectiveness))
+            p = p.field("heat_loss_coefficient", float(heat_loss_coefficient))
             p = p.field("thermal_time_constant", float(current_params.get('thermal_time_constant', thermal_model.thermal_time_constant)))
             
             # Learning metadata

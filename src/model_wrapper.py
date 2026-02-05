@@ -65,12 +65,12 @@ class EnhancedModelWrapper:
             f"{self.thermal_model.thermal_time_constant:.1f}h"
         )
         logging.info(
-            f"   - Total conductance: "
-            f"{self.thermal_model.total_conductance:.4f}"
+            f"   - Heat loss coefficient: "
+            f"{self.thermal_model.heat_loss_coefficient:.4f}"
         )
         logging.info(
-            f"   - Equilibrium ratio: "
-            f"{self.thermal_model.equilibrium_ratio:.3f}"
+            f"   - Outlet effectiveness: "
+            f"{self.thermal_model.outlet_effectiveness:.4f}"
         )
         logging.info(
             f"   - Learning confidence: "
@@ -193,8 +193,8 @@ class EnhancedModelWrapper:
             confidence = self.thermal_model.learning_confidence
             prediction_metadata = {
                 "thermal_time_constant": self.thermal_model.thermal_time_constant,
-                "total_conductance": self.thermal_model.total_conductance,
-                "equilibrium_ratio": self.thermal_model.equilibrium_ratio,
+                "heat_loss_coefficient": self.thermal_model.heat_loss_coefficient,
+                "outlet_effectiveness": self.thermal_model.outlet_effectiveness,
                 "learning_confidence": confidence,
                 "prediction_method": "thermal_equilibrium_single_prediction",
                 "cycle_count": self.cycle_count,
@@ -1048,11 +1048,12 @@ class EnhancedModelWrapper:
             
             # Physics-based scaling
             time_constant = self.thermal_model.thermal_time_constant
-            effectiveness = self.thermal_model.equilibrium_ratio
 
-            # Adaptive scaling based on house characteristics
-            if effectiveness > 0:
-                base_scale = 2.0 / effectiveness
+            # The new 'outlet_effectiveness' is a conductance, not a ratio. A typical value is ~0.05.
+            # A simple heuristic is that higher effectiveness means less correction is needed.
+            # We want a scale around 2-7. So we can use a value like (1.0 / outlet_effectiveness) * 0.2
+            if self.thermal_model.outlet_effectiveness > 0.01:
+                base_scale = (1.0 / self.thermal_model.outlet_effectiveness) * 0.2
             else:
                 base_scale = 15.0  # Fallback
 
@@ -1295,13 +1296,13 @@ class EnhancedModelWrapper:
                                 "thermal_time_constant",
                                 self.thermal_model.thermal_time_constant,
                             ),
-                            "total_conductance": current_params.get(
-                                "total_conductance",
-                                self.thermal_model.total_conductance,
+                            "heat_loss_coefficient": current_params.get(
+                                "heat_loss_coefficient",
+                                self.thermal_model.heat_loss_coefficient,
                             ),
-                            "equilibrium_ratio": current_params.get(
-                                "equilibrium_ratio",
-                                self.thermal_model.equilibrium_ratio,
+                            "outlet_effectiveness": current_params.get(
+                                "outlet_effectiveness",
+                                self.thermal_model.outlet_effectiveness,
                             ),
                             "learning_confidence": self.thermal_model.learning_confidence,
                             "cycle_count": self.cycle_count,
@@ -1317,8 +1318,8 @@ class EnhancedModelWrapper:
         # Fallback if method doesn't exist or returns insufficient_data
         return {
             "thermal_time_constant": self.thermal_model.thermal_time_constant,
-            "total_conductance": self.thermal_model.total_conductance,
-            "equilibrium_ratio": self.thermal_model.equilibrium_ratio,
+            "heat_loss_coefficient": self.thermal_model.heat_loss_coefficient,
+            "outlet_effectiveness": self.thermal_model.outlet_effectiveness,
             "learning_confidence": self.thermal_model.learning_confidence,
             "cycle_count": self.cycle_count,
         }
@@ -1345,11 +1346,11 @@ class EnhancedModelWrapper:
                 "thermal_time_constant": thermal_metrics.get(
                     "thermal_time_constant", 6.0
                 ),
-                "total_conductance": thermal_metrics.get(
-                    "total_conductance", 0.05
+                "heat_loss_coefficient": thermal_metrics.get(
+                    "heat_loss_coefficient", 0.05
                 ),
-                "equilibrium_ratio": thermal_metrics.get(
-                    "equilibrium_ratio", 0.8
+                "outlet_effectiveness": thermal_metrics.get(
+                    "outlet_effectiveness", 0.04
                 ),
                 "learning_confidence": thermal_metrics.get("learning_confidence", 3.0),
                 # Learning progress
@@ -1605,10 +1606,10 @@ def _calculate_thermal_trust_metrics(
 
         # Calculate thermal stability (how stable are the thermal parameters)
         time_constant_stability = min(1.0, thermal_model.thermal_time_constant / 48.0)
-        conductance_stability = min(1.0, thermal_model.total_conductance * 20.0)
-        equilibrium_ratio_stability = thermal_model.equilibrium_ratio
+        heat_loss_stability = min(1.0, thermal_model.heat_loss_coefficient * 20.0)
+        outlet_effectiveness_stability = min(1.0, thermal_model.outlet_effectiveness * 25.0)
         thermal_stability = (
-            time_constant_stability + conductance_stability + equilibrium_ratio_stability
+            time_constant_stability + heat_loss_stability + outlet_effectiveness_stability
         ) / 3.0
 
         # Calculate prediction consistency (how reasonable is this prediction)

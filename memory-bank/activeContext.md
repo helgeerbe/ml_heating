@@ -1,5 +1,58 @@
 # Active Context - Current Work & Decision State
 
+### 🚀 **THERMAL INERTIA LEARNING IMPLEMENTED - February 4, 2026**
+
+**CRITICAL ENHANCEMENT**: The thermal model has been significantly refactored to enable online learning of the house's thermal inertia, addressing a core limitation where the model did not properly account for how the house retains heat.
+
+#### ✅ **INERTIA-AWARE LEARNING NOW ACTIVE**
+
+**PROBLEM ANALYSIS**:
+- **Root Cause**: The online learning algorithm was not updating the key parameters that govern thermal inertia: `heat_loss_coefficient` and `outlet_effectiveness`. This meant the model's understanding of the house's heat retention capabilities was static and based only on the initial calibration.
+- **Symptom**: The user reported that "the inertia of the house is not properly taken into account," which was observed as the model not adapting to changes in the building's thermal behavior over time.
+
+**COMPREHENSIVE REFACTORING IMPLEMENTED**:
+
+**1. Physics Model Refactoring**:
+- **Replaced Parameters**: The core physics model in `src/thermal_equilibrium_model.py` has been updated to use `heat_loss_coefficient` and `outlet_effectiveness` directly, replacing the less intuitive `equilibrium_ratio` and `total_conductance`.
+- **New Heat Balance Equation**: The equilibrium temperature calculation is now based on a clearer, more physically meaningful heat balance equation.
+
+**2. Online Learning Integration**:
+- **Gradient Calculation**: The adaptive learning algorithm (`_adapt_parameters_from_recent_errors`) now calculates gradients for `heat_loss_coefficient` and `outlet_effectiveness`.
+- **Parameter Updates**: The model now continuously adjusts these two parameters based on prediction errors, allowing it to learn the house's thermal inertia in real-time.
+
+**3. State Management Update**:
+- **`unified_thermal_state.py`**: The state manager has been updated to track, store, and apply learning adjustments (`_delta`) for `heat_loss_coefficient` and `outlet_effectiveness`. This ensures that learned inertia parameters persist across service restarts.
+
+**ALGORITHM ENHANCEMENTS**:
+```python
+# NEW: Heat balance using physically meaningful parameters
+total_conductance = self.heat_loss_coefficient + self.outlet_effectiveness
+equilibrium_temp = (
+    self.outlet_effectiveness * outlet_temp
+    + self.heat_loss_coefficient * outdoor_temp
+    + external_thermal_power
+) / total_conductance
+
+# NEW: Online learning for inertia parameters
+heat_loss_coefficient_gradient = self._calculate_heat_loss_coefficient_gradient(recent_predictions)
+outlet_effectiveness_gradient = self._calculate_outlet_effectiveness_gradient(recent_predictions)
+
+# ... apply updates ...
+self.heat_loss_coefficient -= learning_rate * heat_loss_coefficient_gradient
+self.outlet_effectiveness -= learning_rate * outlet_effectiveness_gradient
+```
+
+**IMMEDIATE BENEFITS**:
+- **Adaptive Inertia**: The model can now learn how quickly the house loses heat and how effectively the heating system transfers heat into the living space.
+- **Improved Accuracy**: Predictions will become more accurate over time as the model fine-tunes its understanding of the building's unique thermal properties.
+- **Better Control**: The heating controller will make more intelligent decisions based on a more accurate thermal model.
+
+**FILES MODIFIED**:
+- **src/unified_thermal_state.py**: Added state management for `heat_loss_coefficient_delta` and `outlet_effectiveness_delta`.
+- **src/thermal_equilibrium_model.py**: Major refactoring to replace core physics parameters and enable them to be learned online.
+
+
+
 ## Current Work Focus - January 3, 2026
 
 ### ✅ **CONFIGURATION PARAMETER FIXES COMPLETED - January 3, 2026**

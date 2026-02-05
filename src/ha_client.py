@@ -366,8 +366,6 @@ class HAClient:
             "thermal_time_constant": learning_metrics.get("thermal_time_constant", 6.0),
             "heat_loss_coefficient": learning_metrics.get("heat_loss_coefficient", 0.05),
             "outlet_effectiveness": learning_metrics.get("outlet_effectiveness", 0.8),
-            "total_conductance": learning_metrics.get("total_conductance", 0.3),
-            "equilibrium_ratio": learning_metrics.get("equilibrium_ratio", 0.4),
             
             # Learning progress
             "cycle_count": learning_metrics.get("cycle_count", 0),

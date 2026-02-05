@@ -84,12 +84,13 @@ class ThermalEquilibriumModel:
                     baseline_params["thermal_time_constant"]
                     + adjustments.get("thermal_time_constant_delta", 0.0)
                 )
-                self.equilibrium_ratio = baseline_params[
-                    "equilibrium_ratio"
-                ] + adjustments.get("equilibrium_ratio_delta", 0.0)
-                self.total_conductance = (
-                    baseline_params["total_conductance"]
-                    + adjustments.get("total_conductance_delta", 0.0)
+                self.heat_loss_coefficient = (
+                    baseline_params["heat_loss_coefficient"]
+                    + adjustments.get("heat_loss_coefficient_delta", 0.0)
+                )
+                self.outlet_effectiveness = (
+                    baseline_params["outlet_effectiveness"]
+                    + adjustments.get("outlet_effectiveness_delta", 0.0)
                 )
 
                 self.external_source_weights = {
@@ -110,16 +111,16 @@ class ThermalEquilibriumModel:
                     "(baseline + learning adjustments):"
                 )
                 logging.info(
-                    "   equilibrium_ratio: %.4f + %.5f = %.4f",
-                    baseline_params["equilibrium_ratio"],
-                    adjustments.get("equilibrium_ratio_delta", 0.0),
-                    self.equilibrium_ratio,
+                    "   heat_loss_coefficient: %.4f + %.5f = %.4f",
+                    baseline_params["heat_loss_coefficient"],
+                    adjustments.get("heat_loss_coefficient_delta", 0.0),
+                    self.heat_loss_coefficient,
                 )
                 logging.info(
-                    "   total_conductance: %.3f + %.3f = %.3f",
-                    baseline_params["total_conductance"],
-                    adjustments.get("total_conductance_delta", 0.0),
-                    self.total_conductance,
+                    "   outlet_effectiveness: %.3f + %.3f = %.3f",
+                    baseline_params["outlet_effectiveness"],
+                    adjustments.get("outlet_effectiveness_delta", 0.0),
+                    self.outlet_effectiveness,
                 )
                 logging.info(
                     "   pv_heat_weight: %.4f",
@@ -181,8 +182,8 @@ class ThermalEquilibriumModel:
         """MIGRATED: Load thermal parameters from unified parameter system."""
         # MIGRATION: Use unified thermal parameter system
         self.thermal_time_constant = thermal_params.get("thermal_time_constant")
-        self.equilibrium_ratio = thermal_params.get("equilibrium_ratio")
-        self.total_conductance = thermal_params.get("total_conductance")
+        self.heat_loss_coefficient = thermal_params.get("heat_loss_coefficient")
+        self.outlet_effectiveness = thermal_params.get("outlet_effectiveness")
 
         self.external_source_weights = {
             "pv": thermal_params.get("pv_heat_weight"),
@@ -242,11 +243,11 @@ class ThermalEquilibriumModel:
         self.thermal_time_constant_bounds = ThermalParameterConfig.get_bounds(
             "thermal_time_constant"
         )
-        self.equilibrium_ratio_bounds = ThermalParameterConfig.get_bounds(
-            "equilibrium_ratio"
+        self.heat_loss_coefficient_bounds = ThermalParameterConfig.get_bounds(
+            "heat_loss_coefficient"
         )
-        self.total_conductance_bounds = ThermalParameterConfig.get_bounds(
-            "total_conductance"
+        self.outlet_effectiveness_bounds = ThermalParameterConfig.get_bounds(
+            "outlet_effectiveness"
         )
 
         # Learning rate scheduling
@@ -294,12 +295,16 @@ class ThermalEquilibriumModel:
         # Total external thermal power
         external_thermal_power = heat_from_pv + heat_from_fireplace + heat_from_tv
 
-        # Re-parameterized heat balance equation
-        equilibrium_temp = (
-            self.equilibrium_ratio * outlet_temp
-            + (1 - self.equilibrium_ratio) * outdoor_temp
-            + external_thermal_power / self.total_conductance
-        )
+        # Heat balance equation using heat loss coefficient and outlet effectiveness
+        total_conductance = self.heat_loss_coefficient + self.outlet_effectiveness
+        if total_conductance > 0:
+            equilibrium_temp = (
+                self.outlet_effectiveness * outlet_temp
+                + self.heat_loss_coefficient * outdoor_temp
+                + external_thermal_power
+            ) / total_conductance
+        else:
+            equilibrium_temp = outdoor_temp
 
         # Physical constraints for obviously impossible scenarios only
         if outlet_temp > outdoor_temp:  # Heating mode (normal case)
@@ -308,8 +313,10 @@ class ThermalEquilibriumModel:
             equilibrium_temp = min(outdoor_temp, equilibrium_temp)
         else:  # outlet_temp == outdoor_temp
             # No temperature difference from outlet, only external heat contributes
-            if self.total_conductance > 0:
-                equilibrium_temp = outdoor_temp + external_thermal_power / self.total_conductance
+            if total_conductance > 0:
+                equilibrium_temp = (
+                    outdoor_temp + external_thermal_power / total_conductance
+                )
             else:
                 equilibrium_temp = outdoor_temp
 
@@ -317,12 +324,12 @@ class ThermalEquilibriumModel:
         if not _suppress_logging:
             logging.debug(
                 "🔬 Equilibrium physics: outlet=%.1f°C, outdoor=%.1f°C, "
-                "equilibrium_ratio=%.3f, total_conductance=%.3f, "
+                "heat_loss_coeff=%.3f, outlet_eff=%.3f, "
                 "equilibrium=%.2f°C",
                 outlet_temp,
                 outdoor_temp,
-                self.equilibrium_ratio,
-                self.total_conductance,
+                self.heat_loss_coefficient,
+                self.outlet_effectiveness,
                 equilibrium_temp,
             )
 
@@ -410,8 +417,8 @@ class ThermalEquilibriumModel:
             "model_internal_prediction": predicted_temp_at_cycle_end,
             "parameters_at_prediction": {
                 "thermal_time_constant": self.thermal_time_constant,
-                "equilibrium_ratio": self.equilibrium_ratio,
-                "total_conductance": self.total_conductance,
+                "heat_loss_coefficient": self.heat_loss_coefficient,
+                "outlet_effectiveness": self.outlet_effectiveness,
             },
             "shadow_mode": config.SHADOW_MODE,  # Track learning mode
             "system_state": system_state,  # Track system correcting/equilibrium
@@ -518,10 +525,10 @@ class ThermalEquilibriumModel:
         thermal_gradient = self._calculate_thermal_time_constant_gradient(
             recent_predictions
         )
-        equilibrium_ratio_gradient = self._calculate_equilibrium_ratio_gradient(
+        heat_loss_coefficient_gradient = self._calculate_heat_loss_coefficient_gradient(
             recent_predictions
         )
-        total_conductance_gradient = self._calculate_total_conductance_gradient(
+        outlet_effectiveness_gradient = self._calculate_outlet_effectiveness_gradient(
             recent_predictions
         )
 
@@ -530,24 +537,30 @@ class ThermalEquilibriumModel:
 
         # Update parameters with bounds checking
         old_thermal_time_constant = self.thermal_time_constant
-        old_equilibrium_ratio = self.equilibrium_ratio
-        old_total_conductance = self.total_conductance
+        old_heat_loss_coefficient = self.heat_loss_coefficient
+        old_outlet_effectiveness = self.outlet_effectiveness
 
         # Apply gradient updates
         thermal_update = current_learning_rate * thermal_gradient
-        equilibrium_ratio_update = (
-            current_learning_rate * equilibrium_ratio_gradient
+        heat_loss_coefficient_update = (
+            current_learning_rate * heat_loss_coefficient_gradient
         )
-        total_conductance_update = (
-            current_learning_rate * total_conductance_gradient
+        outlet_effectiveness_update = (
+            current_learning_rate * outlet_effectiveness_gradient
         )
 
         # STABILITY FIX: Add parameter change rate limiting
-        max_equilibrium_ratio_change = 0.02  # Limit change to 0.02 per cycle
-        equilibrium_ratio_update = np.clip(
-            equilibrium_ratio_update,
-            -max_equilibrium_ratio_change,
-            max_equilibrium_ratio_change,
+        max_heat_loss_coefficient_change = 0.02  # Limit change to 0.02 per cycle
+        heat_loss_coefficient_update = np.clip(
+            heat_loss_coefficient_update,
+            -max_heat_loss_coefficient_change,
+            max_heat_loss_coefficient_change,
+        )
+        max_outlet_effectiveness_change = 0.02  # Limit change to 0.02 per cycle
+        outlet_effectiveness_update = np.clip(
+            outlet_effectiveness_update,
+            -max_outlet_effectiveness_change,
+            max_outlet_effectiveness_change,
         )
         max_thermal_time_constant_change = (
             0.5  # Limit change to 0.5 per cycle
@@ -559,28 +572,28 @@ class ThermalEquilibriumModel:
         )
 
         # Update with bounds
-        self.thermal_time_constant = np.clip(
+        self.thermal_time_constant = float(np.clip(
             self.thermal_time_constant - thermal_update,  # Gradient descent
             self.thermal_time_constant_bounds[0],
             self.thermal_time_constant_bounds[1],
-        )
+        ))
 
-        self.equilibrium_ratio = np.clip(
-            self.equilibrium_ratio - equilibrium_ratio_update,  # Gradient descent
-            self.equilibrium_ratio_bounds[0],
-            self.equilibrium_ratio_bounds[1],
-        )
+        self.heat_loss_coefficient = float(np.clip(
+            self.heat_loss_coefficient - heat_loss_coefficient_update,
+            self.heat_loss_coefficient_bounds[0],
+            self.heat_loss_coefficient_bounds[1],
+        ))
 
-        self.total_conductance = np.clip(
-            self.total_conductance - total_conductance_update,  # Gradient descent
-            self.total_conductance_bounds[0],
-            self.total_conductance_bounds[1],
-        )
+        self.outlet_effectiveness = float(np.clip(
+            self.outlet_effectiveness - outlet_effectiveness_update,
+            self.outlet_effectiveness_bounds[0],
+            self.outlet_effectiveness_bounds[1],
+        ))
 
         # Log parameter changes and track history
         thermal_change = abs(self.thermal_time_constant - old_thermal_time_constant)
-        equilibrium_ratio_change = abs(self.equilibrium_ratio - old_equilibrium_ratio)
-        total_conductance_change = abs(self.total_conductance - old_total_conductance)
+        heat_loss_coefficient_change = abs(self.heat_loss_coefficient - old_heat_loss_coefficient)
+        outlet_effectiveness_change = abs(self.outlet_effectiveness - old_outlet_effectiveness)
 
         # Always record parameter state for tracking parameter updates
         # This ensures parameter_updates increments even with small changes
@@ -588,8 +601,8 @@ class ThermalEquilibriumModel:
             {
                 "timestamp": recent_predictions[-1]["timestamp"],
                 "thermal_time_constant": self.thermal_time_constant,
-                "equilibrium_ratio": self.equilibrium_ratio,
-                "total_conductance": self.total_conductance,
+                "heat_loss_coefficient": self.heat_loss_coefficient,
+                "outlet_effectiveness": self.outlet_effectiveness,
                 "learning_rate": current_learning_rate,
                 "learning_confidence": self.learning_confidence,
                 "avg_recent_error": np.mean(
@@ -597,13 +610,13 @@ class ThermalEquilibriumModel:
                 ),
                 "gradients": {
                     "thermal": thermal_gradient,
-                    "equilibrium_ratio": equilibrium_ratio_gradient,
-                    "total_conductance": total_conductance_gradient,
+                    "heat_loss_coefficient": heat_loss_coefficient_gradient,
+                    "outlet_effectiveness": outlet_effectiveness_gradient,
                 },
                 "changes": {
                     "thermal": thermal_change,
-                    "equilibrium_ratio": equilibrium_ratio_change,
-                    "total_conductance": total_conductance_change,
+                    "heat_loss_coefficient": heat_loss_coefficient_change,
+                    "outlet_effectiveness": outlet_effectiveness_change,
                 },
             }
         )
@@ -616,23 +629,23 @@ class ThermalEquilibriumModel:
         # This allows smaller but meaningful changes to be logged and saved
         if (
             thermal_change > 0.001
-            or equilibrium_ratio_change > 0.0001
-            or total_conductance_change > 0.0001
+            or heat_loss_coefficient_change > 0.0001
+            or outlet_effectiveness_change > 0.0001
         ):
             logging.info(
                 "Adaptive learning update: "
                 "thermal: %.2f→%.2f (Δ%+.3f), "
-                "equilibrium_ratio: %.4f→%.4f (Δ%+.5f), "
-                "total_conductance: %.3f→%.3f (Δ%+.3f)",
+                "heat_loss_coeff: %.4f→%.4f (Δ%+.5f), "
+                "outlet_eff: %.3f→%.3f (Δ%+.3f)",
                 old_thermal_time_constant,
                 self.thermal_time_constant,
                 thermal_change,
-                old_equilibrium_ratio,
-                self.equilibrium_ratio,
-                equilibrium_ratio_change,
-                old_total_conductance,
-                self.total_conductance,
-                total_conductance_change,
+                old_heat_loss_coefficient,
+                self.heat_loss_coefficient,
+                heat_loss_coefficient_change,
+                old_outlet_effectiveness,
+                self.outlet_effectiveness,
+                outlet_effectiveness_change,
             )
 
             # Save learned parameter adjustments to unified thermal state
@@ -641,10 +654,10 @@ class ThermalEquilibriumModel:
             # Log micro-updates for diagnostics
             logging.debug(
                 "Micro learning update: thermal_Δ=%+.5f, "
-                "equilibrium_ratio_Δ=%+.7f, total_conductance_Δ=%+.5f",
+                "heat_loss_coeff_Δ=%+.7f, outlet_eff_Δ=%+.5f",
                 thermal_change,
-                equilibrium_ratio_change,
-                total_conductance_change,
+                heat_loss_coefficient_change,
+                outlet_effectiveness_change,
             )
 
     def _calculate_parameter_gradient(
@@ -736,26 +749,26 @@ class ThermalEquilibriumModel:
             recent_predictions,
         )
 
-    def _calculate_equilibrium_ratio_gradient(
+    def _calculate_heat_loss_coefficient_gradient(
         self, recent_predictions: List[Dict]
     ) -> float:
         """
-        Calculate equilibrium ratio gradient using refactored generic method.
+        Calculate heat loss coefficient gradient using refactored generic method.
         """
         return self._calculate_parameter_gradient(
-            "equilibrium_ratio",
+            "heat_loss_coefficient",
             0.001,
             recent_predictions,
         )
 
-    def _calculate_total_conductance_gradient(
+    def _calculate_outlet_effectiveness_gradient(
         self, recent_predictions: List[Dict]
     ) -> float:
         """
-        Calculate total conductance gradient using refactored generic method.
+        Calculate outlet effectiveness gradient using refactored generic method.
         """
         return self._calculate_parameter_gradient(
-            "total_conductance",
+            "outlet_effectiveness",
             0.001,
             recent_predictions,
         )
@@ -775,46 +788,44 @@ class ThermalEquilibriumModel:
         )
 
         # STABILITY FIX: Detect parameter oscillation and reduce learning
-        equilibrium_ratio_std = 0.0
+        heat_loss_coefficient_std = 0.0
         thermal_time_constant_std = 0.0
-        total_conductance_std = 0.0
+        outlet_effectiveness_std = 0.0
         if len(self.parameter_history) >= 3:
             recent_params = self.parameter_history[-3:]
-            equilibrium_ratio_std = np.std(
-                [p["equilibrium_ratio"] for p in recent_params]
+            heat_loss_coefficient_std = np.std(
+                [p["heat_loss_coefficient"] for p in recent_params]
             )
             thermal_time_constant_std = np.std(
                 [p["thermal_time_constant"] for p in recent_params]
             )
-            total_conductance_std = np.std([p["total_conductance"] for p in recent_params])
+            outlet_effectiveness_std = np.std([p["outlet_effectiveness"] for p in recent_params])
 
         # If effectiveness is oscillating wildly, drastically reduce learning
         if (
-            equilibrium_ratio_std > 0.05
-            or total_conductance_std > 0.1
+            heat_loss_coefficient_std > 0.05
+            or outlet_effectiveness_std > 0.1
             or thermal_time_constant_std > 1.0
         ):  # 0.05 is already quite unstable
             base_rate *= 0.1  # 90% reduction when oscillating
             logging.debug(
                 (
-                    "⚠️ Parameter oscillation detected (eq_ratio=%.3f, total_cond=%.3f, thermal=%.3f), "
+                    "⚠️ Parameter oscillation detected (heat_loss_coeff=%.3f, outlet_eff=%.3f, thermal=%.3f), "
                     "reducing learning rate by 90%%"
                 ),
-                equilibrium_ratio_std,
-                total_conductance_std,
+                heat_loss_coefficient_std,
+                outlet_effectiveness_std,
                 thermal_time_constant_std,
             )
         elif (
-            equilibrium_ratio_std > 0.02
-            or total_conductance_std > 0.05
+            heat_loss_coefficient_std > 0.02
+            or outlet_effectiveness_std > 0.05
             or thermal_time_constant_std > 0.5
         ):
             base_rate *= 0.3  # 70% reduction for moderate oscillation
 
         # CATASTROPHIC ERROR HANDLING: Stop learning for errors ≥5°C
         if self.prediction_history:
-            last_error = abs(self.prediction_history[-1]["error"])
-
             # Check for any catastrophic errors in recent history (not just last error)
             recent_errors = [abs(p["error"]) for p in self.prediction_history[-5:]]
             has_catastrophic_error = any(error >= 5.0 for error in recent_errors)
@@ -1047,18 +1058,16 @@ class ThermalEquilibriumModel:
         method = "direct_calculation"
 
         # Allow config override for testing
-        equilibrium_ratio = self.equilibrium_ratio
-        total_conductance = self.total_conductance
+        heat_loss_coefficient = self.heat_loss_coefficient
+        outlet_effectiveness = self.outlet_effectiveness
         if config_override:
-            equilibrium_ratio = config_override.get(
-                "equilibrium_ratio", equilibrium_ratio
+            heat_loss_coefficient = config_override.get(
+                "heat_loss_coefficient", heat_loss_coefficient
             )
-            total_conductance = config_override.get(
-                "total_conductance", total_conductance
+            outlet_effectiveness = config_override.get(
+                "outlet_effectiveness", outlet_effectiveness
             )
-
-        # Calculate the total heat input required to maintain the target temperature
-        required_heat_loss = (target_indoor - outdoor_temp) * total_conductance * (1 - equilibrium_ratio)
+        total_conductance = heat_loss_coefficient + outlet_effectiveness
 
         # Calculate the contribution from external sources
         external_heating = (
@@ -1067,14 +1076,15 @@ class ThermalEquilibriumModel:
             + tv_on * self.external_source_weights.get("tv", 0.0)
         )
 
-        # The required heat from the heat pump is the difference
-        required_heat_from_outlet = required_heat_loss - external_heating
-
         # Back-calculate the optimal outlet temperature
-        if equilibrium_ratio <= 0:
+        if outlet_effectiveness <= 0:
             return None  # Avoid division by zero
 
-        optimal_outlet = required_heat_from_outlet / (total_conductance * equilibrium_ratio)
+        optimal_outlet = (
+            target_indoor * total_conductance
+            - heat_loss_coefficient * outdoor_temp
+            - external_heating
+        ) / outlet_effectiveness
         required_equilibrium = (
             target_indoor  # The required equilibrium is the target itself
         )
@@ -1110,7 +1120,6 @@ class ThermalEquilibriumModel:
             "temp_change_required": temp_change_required,
             "time_available": time_available_hours,
             "external_heating": external_heating,
-            "required_heat_loss": required_heat_loss,
             "bounded": optimal_outlet != optimal_outlet_bounded,
             "original_calculation": optimal_outlet,
         }
@@ -1131,16 +1140,15 @@ class ThermalEquilibriumModel:
         )
 
         # Re-parameterized heat balance equation
-        required_heat_from_outlet = (
-            target_temp
-            - (1 - self.equilibrium_ratio) * outdoor_temp
-            - external_heating / self.total_conductance
-        ) / self.equilibrium_ratio
-
-        if self.equilibrium_ratio <= 0:
+        if self.outlet_effectiveness <= 0:
             return 35.0  # Default fallback
 
-        equilibrium_outlet = required_heat_from_outlet
+        total_conductance = self.heat_loss_coefficient + self.outlet_effectiveness
+        equilibrium_outlet = (
+            target_temp * total_conductance
+            - self.heat_loss_coefficient * outdoor_temp
+            - external_heating
+        ) / self.outlet_effectiveness
 
         # Apply reasonable bounds
         min_outlet = max(outdoor_temp + 5, 25.0)
@@ -1177,19 +1185,19 @@ class ThermalEquilibriumModel:
             thermal_stability = np.std(
                 [p["thermal_time_constant"] for p in recent_params]
             )
-            equilibrium_ratio_stability = np.std(
-                [p["equilibrium_ratio"] for p in recent_params]
+            heat_loss_coefficient_stability = np.std(
+                [p["heat_loss_coefficient"] for p in recent_params]
             )
-            total_conductance_stability = np.std(
-                [p["total_conductance"] for p in recent_params]
+            outlet_effectiveness_stability = np.std(
+                [p["outlet_effectiveness"] for p in recent_params]
             )
 
             # Include recent gradient information
             recent_gradients = recent_params[-1].get("gradients", {})
         else:
             thermal_stability = 0.0
-            equilibrium_ratio_stability = 0.0
-            total_conductance_stability = 0.0
+            heat_loss_coefficient_stability = 0.0
+            outlet_effectiveness_stability = 0.0
             recent_gradients = {}
 
         return {
@@ -1206,13 +1214,13 @@ class ThermalEquilibriumModel:
             "learning_confidence": self.learning_confidence,
             "current_learning_rate": self._calculate_adaptive_learning_rate(),
             "thermal_time_constant_stability": thermal_stability,
-            "equilibrium_ratio_stability": equilibrium_ratio_stability,
-            "total_conductance_stability": total_conductance_stability,
+            "heat_loss_coefficient_stability": heat_loss_coefficient_stability,
+            "outlet_effectiveness_stability": outlet_effectiveness_stability,
             "recent_gradients": recent_gradients,
             "current_parameters": {
                 "thermal_time_constant": self.thermal_time_constant,
-                "equilibrium_ratio": self.equilibrium_ratio,
-                "total_conductance": self.total_conductance,
+                "heat_loss_coefficient": self.heat_loss_coefficient,
+                "outlet_effectiveness": self.outlet_effectiveness,
             },
             "fixes_applied": "VERSION_WITH_CORRECTED_GRADIENTS",
         }
@@ -1236,41 +1244,41 @@ class ThermalEquilibriumModel:
             current_thermal_delta = current_deltas.get(
                 "thermal_time_constant_delta", 0.0
             )
-            current_equilibrium_ratio_delta = current_deltas.get(
-                "equilibrium_ratio_delta", 0.0
+            current_heat_loss_coefficient_delta = current_deltas.get(
+                "heat_loss_coefficient_delta", 0.0
             )
-            current_total_conductance_delta = current_deltas.get(
-                "total_conductance_delta", 0.0
+            current_outlet_effectiveness_delta = current_deltas.get(
+                "outlet_effectiveness_delta", 0.0
             )
 
             # Calculate expected values from baseline + current deltas
             expected_thermal = baseline["thermal_time_constant"] + current_thermal_delta
-            expected_equilibrium_ratio = (
-                baseline["equilibrium_ratio"] + current_equilibrium_ratio_delta
+            expected_heat_loss_coefficient = (
+                baseline["heat_loss_coefficient"] + current_heat_loss_coefficient_delta
             )
-            expected_total_conductance = (
-                baseline["total_conductance"] + current_total_conductance_delta
+            expected_outlet_effectiveness = (
+                baseline["outlet_effectiveness"] + current_outlet_effectiveness_delta
             )
 
             # Calculate NEW adjustments since last save
             new_thermal_adjustment = self.thermal_time_constant - expected_thermal
-            new_equilibrium_ratio_adjustment = self.equilibrium_ratio - expected_equilibrium_ratio
-            new_total_conductance_adjustment = (
-                self.total_conductance - expected_total_conductance
+            new_heat_loss_coefficient_adjustment = self.heat_loss_coefficient - expected_heat_loss_coefficient
+            new_outlet_effectiveness_adjustment = (
+                self.outlet_effectiveness - expected_outlet_effectiveness
             )
 
             # Accumulate deltas instead of recalculating from baseline
             updated_thermal_delta = current_thermal_delta + new_thermal_adjustment
-            updated_equilibrium_ratio_delta = current_equilibrium_ratio_delta + new_equilibrium_ratio_adjustment
-            updated_total_conductance_delta = (
-                current_total_conductance_delta + new_total_conductance_adjustment
+            updated_heat_loss_coefficient_delta = current_heat_loss_coefficient_delta + new_heat_loss_coefficient_adjustment
+            updated_outlet_effectiveness_delta = (
+                current_outlet_effectiveness_delta + new_outlet_effectiveness_adjustment
             )
 
             # Only save if there are meaningful new adjustments
             if (
                 abs(new_thermal_adjustment) > 0.001
-                or abs(new_equilibrium_ratio_adjustment) > 0.0001
-                or abs(new_total_conductance_adjustment) > 0.0001
+                or abs(new_heat_loss_coefficient_adjustment) > 0.0001
+                or abs(new_outlet_effectiveness_adjustment) > 0.0001
             ):
 
                 # Update learning state with accumulated deltas
@@ -1278,19 +1286,22 @@ class ThermalEquilibriumModel:
                     learning_confidence=self.learning_confidence,
                     parameter_adjustments={
                         "thermal_time_constant_delta": updated_thermal_delta,
-                        "equilibrium_ratio_delta": updated_equilibrium_ratio_delta,
-                        "total_conductance_delta": updated_total_conductance_delta,
+                        "heat_loss_coefficient_delta": updated_heat_loss_coefficient_delta,
+                        "outlet_effectiveness_delta": updated_outlet_effectiveness_delta,
                     },
                 )
 
                 logging.debug(
-                    f"💾 Accumulated learning deltas: "
-                    f"thermal_Δ={updated_thermal_delta:+.3f} "
-                    f"(+{new_thermal_adjustment:+.3f}), "
-                    f"equilibrium_ratio_Δ={updated_equilibrium_ratio_delta:+.5f} "
-                    f"(+{new_equilibrium_ratio_adjustment:+.5f}), "
-                    f"total_conductance_Δ={updated_total_conductance_delta:+.3f} "
-                    f"(+{new_total_conductance_adjustment:+.3f})"
+                    "💾 Accumulated learning deltas: "
+                    "thermal_Δ=%+.3f (+%+.3f), "
+                    "heat_loss_coeff_Δ=%+.5f (+%+.5f), "
+                    "outlet_eff_Δ=%+.3f (+%+.3f)",
+                    updated_thermal_delta,
+                    new_thermal_adjustment,
+                    updated_heat_loss_coefficient_delta,
+                    new_heat_loss_coefficient_adjustment,
+                    updated_outlet_effectiveness_delta,
+                    new_outlet_effectiveness_adjustment,
                 )
             else:
                 # Still update confidence even if parameters didn't change significantly
@@ -1316,18 +1327,12 @@ class ThermalEquilibriumModel:
         Returns:
             True if parameters are corrupted, False if valid
         """
-        # Check equilibrium_ratio bounds (should be 0.3-0.9 for realistic physics)
-        if self.equilibrium_ratio < 0.3 or self.equilibrium_ratio > 0.9:
+        # Check heat_loss_coefficient bounds
+        if self.heat_loss_coefficient < 0.001 or self.heat_loss_coefficient > 1.0:
             return True
-            
-        # Check total_conductance bounds (should be 0.02-0.25 for typical buildings)
-        # 0.266 was the corrupted value from production that caused 12°C errors
-        # BUT: 0.3 is also needed as boundary valid for tests. Use more specific bounds:
-        # - Normal range: 0.02-0.25 (typical buildings)
-        # - Allow boundary test value: exactly 0.3
-        # - Catch corrupted value: 0.266
-        if (self.total_conductance < 0.02 or 
-            (self.total_conductance > 0.25 and self.total_conductance != 0.3)):
+
+        # Check outlet_effectiveness bounds
+        if self.outlet_effectiveness < 0.01 or self.outlet_effectiveness > 1.5:
             return True
             
         # Check learning_confidence (system giving up indicates corruption)

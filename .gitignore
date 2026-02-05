@@ -229,3 +229,6 @@ thermal_state.json
 
 # Python backup files
 *_backup_*.py
+
+# Calibration artifacts
+stable_periods.json
