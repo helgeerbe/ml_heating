@@ -54,6 +54,15 @@
 
 #### 🔧 **Recent Critical Fixes - COMPLETED**
 
+**Code Quality and Formatting (February 9, 2026)**:
+- ✅ **Linting and Formatting**: Resolved all outstanding linting and line-length errors in `src/model_wrapper.py`.
+- ✅ **Improved Readability**: The code is now cleaner, more readable, and adheres to project standards.
+
+**Intelligent Post-DHW Recovery (February 9, 2026)**:
+- ✅ **Model-Driven Grace Period**: Re-architected the grace period logic to use the ML model to calculate a new, higher target temperature after DHW/defrost cycles.
+- ✅ **Prevents Temperature Droop**: Actively compensates for heat loss during blocking events, ensuring the target indoor temperature is reached.
+- ✅ **Maintains Prediction Accuracy**: By correcting the thermal deficit, the model's performance is no longer negatively impacted by these interruptions.
+
 **Gentle Trajectory Correction Implementation (December 10)**:
 - ✅ **Aggressive Correction Issue Resolved** - Replaced multiplicative (7x factors) with gentle additive approach
 - ✅ **Heat Curve Alignment** - Based on user's 15°C per degree automation logic, scaled for outlet adjustment

@@ -1,9 +1,9 @@
 """
 ThermalEquilibriumModel-based Model Wrapper.
 
-This module provides a clean interface for thermal physics-based heating control
-using only the ThermalEquilibriumModel. All legacy ML model code has been removed
-as part of the thermal equilibrium model migration.
+This module provides a clean interface for thermal physics-based heating
+control using only the ThermalEquilibriumModel. All legacy ML model code has
+been removed as part of the thermal equilibrium model migration.
 
 Key features:
 - Single ThermalEquilibriumModel-based prediction pathway
@@ -34,12 +34,14 @@ _enhanced_model_wrapper_instance = None
 
 class EnhancedModelWrapper:
     """
-    Simplified model wrapper using ThermalEquilibriumModel for persistent learning.
+    Simplified model wrapper using ThermalEquilibriumModel for persistent
+    learning.
 
     Replaces the complex Heat Balance Controller with a single prediction path
     that continuously adapts thermal parameters and survives service restarts.
 
-    Implements singleton pattern to prevent multiple instantiation per service restart.
+    Implements singleton pattern to prevent multiple instantiation per service
+    restart.
     """
 
     def __init__(self):
@@ -49,17 +51,22 @@ class EnhancedModelWrapper:
         # Get thermal state manager
         self.state_manager = get_thermal_state_manager()
 
-        # Initialize prediction metrics for MAE/RMSE tracking with state integration
-        self.prediction_metrics = PredictionMetrics(state_manager=self.state_manager)
+        # Initialize prediction metrics for MAE/RMSE tracking
+        self.prediction_metrics = PredictionMetrics(
+            state_manager=self.state_manager
+        )
 
         # Get current cycle count from unified state
         metrics = self.state_manager.get_learning_metrics()
         self.cycle_count = metrics["current_cycle_count"]
 
-        # UNIFIED FORECAST: Store cycle-aligned forecast conditions for smart rounding
+        # UNIFIED FORECAST: Store cycle-aligned forecast conditions for smart
+        # rounding
         self.cycle_aligned_forecast = {}
 
-        logging.info("🎯 Model Wrapper initialized with ThermalEquilibriumModel")
+        logging.info(
+            "🎯 Model Wrapper initialized with ThermalEquilibriumModel"
+        )
         logging.info(f"   - Thermal time constant: "
                      f"{self.thermal_model.thermal_time_constant:.1f}h")
         logging.info(f"   - Heat loss coefficient: "
@@ -78,21 +85,33 @@ class EnhancedModelWrapper:
         """
         Predict indoor temperature for smart rounding.
 
-        Uses the thermal model's equilibrium prediction with proper parameter handling.
-        Provides robust conversion of pandas data types to scalar values.
+        Uses the thermal model's equilibrium prediction with proper parameter
+        handling. Provides robust conversion of pandas data types to scalar
+        values.
         """
         try:
-            # UNIFIED FORECAST FIX: Use cycle-aligned forecast for smart rounding
-            if hasattr(self, "cycle_aligned_forecast") and self.cycle_aligned_forecast:
+            # UNIFIED FORECAST FIX: Use cycle-aligned forecast for smart
+            # rounding
+            if hasattr(self, "cycle_aligned_forecast") and \
+                    self.cycle_aligned_forecast:
                 logging.debug(
-                    f"🧠 Smart rounding is using cycle-aligned forecast: "
-                    f"PV={self.cycle_aligned_forecast.get('pv_power', 0.0):.0f}W (caller sent PV={kwargs.get('pv_power', 0.0):.0f}W)"
+                    "🧠 Smart rounding is using cycle-aligned forecast: "
+                    f"PV={self.cycle_aligned_forecast.get('pv_power', 0.0):.0f}W"
+                    f" (caller sent PV={kwargs.get('pv_power', 0.0):.0f}W)"
                 )
-                pv_power = self.cycle_aligned_forecast.get("pv_power", kwargs.get("pv_power", 0.0))
-                fireplace_on = self.cycle_aligned_forecast.get("fireplace_on", kwargs.get("fireplace_on", 0.0))
-                tv_on = self.cycle_aligned_forecast.get("tv_on", kwargs.get("tv_on", 0.0))
+                pv_power = self.cycle_aligned_forecast.get(
+                    "pv_power", kwargs.get("pv_power", 0.0)
+                )
+                fireplace_on = self.cycle_aligned_forecast.get(
+                    "fireplace_on", kwargs.get("fireplace_on", 0.0)
+                )
+                tv_on = self.cycle_aligned_forecast.get(
+                    "tv_on", kwargs.get("tv_on", 0.0)
+                )
                 # Use cycle-aligned outdoor_temp as well for full consistency
-                outdoor_temp = self.cycle_aligned_forecast.get("outdoor_temp", outdoor_temp)
+                outdoor_temp = self.cycle_aligned_forecast.get(
+                    "outdoor_temp", outdoor_temp
+                )
             else:
                 # Fallback to kwargs if cycle-aligned forecast is not available
                 pv_power = kwargs.get("pv_power", 0.0)
@@ -137,16 +156,18 @@ class EnhancedModelWrapper:
 
             # Use thermal model to predict temperature at the end of the cycle
             cycle_hours = config.CYCLE_INTERVAL_MINUTES / 60.0
-            trajectory_result = self.thermal_model.predict_thermal_trajectory(
-                current_indoor=current_indoor,
-                target_indoor=current_indoor,  # Target is not critical for this prediction
-                outlet_temp=outlet_temp,
-                outdoor_temp=outdoor_temp,
-                time_horizon_hours=cycle_hours,
-                time_step_minutes=config.CYCLE_INTERVAL_MINUTES,
-                pv_power=pv_power,
-                fireplace_on=fireplace_on,
-                tv_on=tv_on,
+            trajectory_result = (
+                self.thermal_model.predict_thermal_trajectory(
+                    current_indoor=current_indoor,
+                    target_indoor=current_indoor,
+                    outlet_temp=outlet_temp,
+                    outdoor_temp=outdoor_temp,
+                    time_horizon_hours=cycle_hours,
+                    time_step_minutes=config.CYCLE_INTERVAL_MINUTES,
+                    pv_power=pv_power,
+                    fireplace_on=fireplace_on,
+                    tv_on=tv_on,
+                )
             )
 
             if (
@@ -169,10 +190,12 @@ class EnhancedModelWrapper:
             # Safe fallback - assume minimal heating effect
             return outdoor_temp + 10.0 if outdoor_temp is not None else 21.0
 
-    def calculate_optimal_outlet_temp(self, features: Dict) -> Tuple[float, Dict]:
-        """Calculate optimal outlet temperature using direct thermal physics prediction."""
+    def calculate_optimal_outlet_temp(
+        self, features: Dict
+    ) -> Tuple[float, Dict]:
+        """Calculate optimal outlet temp using direct physics prediction."""
         try:
-            # Store features for use in trajectory verification during binary search
+            # Store features for trajectory verification during binary search
             self._current_features = features
 
             # Extract core thermal parameters
@@ -188,7 +211,10 @@ class EnhancedModelWrapper:
 
             # Calculate required outlet temperature using iterative approach
             optimal_outlet_temp = self._calculate_required_outlet_temp(
-                current_indoor, target_indoor, outdoor_temp, thermal_features
+                current_indoor,
+                target_indoor,
+                outdoor_temp,
+                thermal_features,
             )
 
             # Get prediction metadata
@@ -235,8 +261,7 @@ class EnhancedModelWrapper:
         thermal_features["outlet_indoor_diff"] = \
             features.get("outlet_indoor_diff", 0.0)
 
-        # Note: Removed occupancy and cooking features as they don't have
-        # corresponding sensors
+        # Note: Occupancy/cooking features removed (no sensors)
 
         return thermal_features
 
@@ -244,25 +269,37 @@ class EnhancedModelWrapper:
         self, outdoor_temp: float, pv_power: float, thermal_features: Dict
     ) -> Tuple[float, float, list, list]:
         """
-        CYCLE-TIME-ALIGNED forecast condition calculation for consistent predictions.
+        CYCLE-TIME-ALIGNED forecast condition calculation.
 
-        Uses cycle-appropriate forecast timing instead of 1-4h averaging to eliminate
-        timing mismatch between control cycles and forecast horizons.
+        Uses cycle-appropriate forecast timing instead of 1-4h averaging to
+        eliminate timing mismatch between control cycles and forecast horizons.
 
-        Returns both cycle-aligned averages and arrays for trajectory prediction.
+        Returns both cycle-aligned averages and arrays for trajectory
+        prediction.
         """
+        # BUGFIX: Ensure pv_power and outdoor_temp are scalars to prevent
+        # TypeError in logging.
+        if hasattr(pv_power, "iloc"):
+            pv_power = \
+                float(pv_power.iloc[0]) if not pv_power.empty else 0.0
+        if hasattr(outdoor_temp, "iloc"):
+            outdoor_temp = \
+                float(outdoor_temp.iloc[0]) if not outdoor_temp.empty else 0.0
+
         features = getattr(self, "_current_features", {})
 
         # Get cycle time from config and validate
         cycle_minutes = config.CYCLE_INTERVAL_MINUTES
         cycle_hours = cycle_minutes / 60.0
 
-        # Validate cycle time against reasonable limits (max 180min for good control)
+        # Validate cycle time against reasonable limits (max 180min for good
+        # control)
         max_reasonable_cycle = 180  # 3 hours maximum for responsive control
         if cycle_minutes > max_reasonable_cycle:
             logging.warning(
-                f"⚠️ Cycle time {cycle_minutes}min exceeds recommended maximum "
-                f"{max_reasonable_cycle}min. Using 180min limit for forecast alignment."
+                f"⚠️ Cycle time {cycle_minutes}min exceeds recommended "
+                f"max {max_reasonable_cycle}min. Using 180min limit for "
+                "forecast alignment."
             )
             cycle_hours = max_reasonable_cycle / 60.0
 
@@ -277,8 +314,10 @@ class EnhancedModelWrapper:
             forecast_4h_outdoor = features.get("temp_forecast_4h", outdoor_temp)
             forecast_4h_pv = features.get("pv_forecast_4h", pv_power)
 
-            # Calculate cycle-aligned forecast using appropriate interpolation/selection
-            if cycle_hours <= 0.5:  # 0-30min cycles: interpolate between current and 1h
+            # Calculate cycle-aligned forecast using appropriate
+            # interpolation/selection
+            if cycle_hours <= 0.5:
+                # 0-30min cycles: interpolate between current and 1h
                 weight = cycle_hours / 1.0  # 0.0 to 0.5
                 cycle_outdoor = (
                     outdoor_temp * (1 - weight) + forecast_1h_outdoor * weight
@@ -317,9 +356,10 @@ class EnhancedModelWrapper:
             ]
 
             logging.info(
-                f"⏱️ Cycle-aligned forecast ({method}): outdoor={cycle_outdoor:.1f}°C "
-                f"(vs current {outdoor_temp:.1f}°C), PV={cycle_pv:.0f}W "
-                f"(vs current {pv_power:.0f}W) [cycle: {cycle_minutes}min]"
+                f"⏱️ Cycle-aligned forecast ({method}): "
+                f"outdoor={cycle_outdoor:.1f}°C (vs current "
+                f"{outdoor_temp:.1f}°C), PV={cycle_pv:.0f}W (vs current "
+                f"{pv_power:.0f}W) [cycle: {cycle_minutes}min]"
             )
         else:
             # No forecast data available, use current values
@@ -343,23 +383,27 @@ class EnhancedModelWrapper:
         outdoor_temp: float,
         thermal_features: Dict,
     ) -> float:
-        """Calculate the outlet temperature required to reach target indoor temperature using learned thermal model."""
-        # REMOVED: "Already at target" bypass logic - let physics model always calculate proper outlet temp
-        # The thermal model should determine maintenance requirements based on actual conditions
+        """
+        Calculate required outlet temperature to reach target indoor temp.
+        """
+        # REMOVED: "Already at target" bypass logic. Let physics model always
+        # calculate proper outlet temp. The thermal model should determine
+        # maintenance requirements based on actual conditions.
 
-        # Use the calibrated thermal model to find required outlet temperature
-        # This leverages the 26 days of learned parameters instead of simple heuristics
+        # Use the calibrated thermal model to find required outlet temp. This
+        # leverages the learned parameters instead of simple heuristics.
         pv_power = thermal_features.get("pv_power", 0.0)
         fireplace_on = thermal_features.get("fireplace_on", 0.0)
         tv_on = thermal_features.get("tv_on", 0.0)
 
-        # Iterative search to find outlet temperature that produces target indoor temp
-        # This uses the learned thermal physics parameters from calibration
+        # Iterative search to find outlet temp that produces target indoor
+        # temp. This uses the learned thermal physics parameters from
+        # calibration.
         tolerance = 0.1  # °C
 
-        # Use natural system bounds - let binary search and physics model handle optimal outlet temps
-        outlet_min = config.CLAMP_MIN_ABS
-        outlet_max = config.CLAMP_MAX_ABS
+        # Use natural system bounds. Let binary search and physics model
+        # handle optimal outlet temps.
+        outlet_min, outlet_max = config.CLAMP_MIN_ABS, config.CLAMP_MAX_ABS
 
         logging.debug(
             f"🔧 Using natural bounds: outlet_min={outlet_min:.1f}°C, "
@@ -367,8 +411,13 @@ class EnhancedModelWrapper:
         )
 
         # UNIFIED: Get forecast conditions using centralized method
-        avg_outdoor, avg_pv, outdoor_forecast, pv_forecast = (
-            self._get_forecast_conditions(outdoor_temp, pv_power, thermal_features)
+        (
+            avg_outdoor,
+            avg_pv,
+            outdoor_forecast,
+            pv_forecast,
+        ) = self._get_forecast_conditions(
+            outdoor_temp, pv_power, thermal_features
         )
 
         # UNIFIED FORECAST: Store cycle-aligned conditions for smart rounding
@@ -379,29 +428,31 @@ class EnhancedModelWrapper:
             "tv_on": tv_on,
         }
 
-        # Pre-check for unreachable targets to avoid futile searching (using forecast conditions)
+        # Pre-check for unreachable targets to avoid futile searching
         try:
             # Check what minimum outlet temp produces
-            min_prediction = self.thermal_model.predict_equilibrium_temperature(
-                outlet_temp=outlet_min,
-                outdoor_temp=avg_outdoor,  # Use forecast average for consistency
-                current_indoor=current_indoor,
-                pv_power=avg_pv,  # Use forecast average for consistency
-                fireplace_on=fireplace_on,
-                tv_on=tv_on,
-                _suppress_logging=True,
-            )
+            min_prediction = \
+                self.thermal_model.predict_equilibrium_temperature(
+                    outlet_temp=outlet_min,
+                    outdoor_temp=avg_outdoor,
+                    current_indoor=current_indoor,
+                    pv_power=avg_pv,
+                    fireplace_on=fireplace_on,
+                    tv_on=tv_on,
+                    _suppress_logging=True,
+                )
 
             # Check what maximum outlet temp produces
-            max_prediction = self.thermal_model.predict_equilibrium_temperature(
-                outlet_temp=outlet_max,
-                outdoor_temp=avg_outdoor,  # Use forecast average for consistency
-                current_indoor=current_indoor,
-                pv_power=avg_pv,  # Use forecast average for consistency
-                fireplace_on=fireplace_on,
-                tv_on=tv_on,
-                _suppress_logging=True,
-            )
+            max_prediction = \
+                self.thermal_model.predict_equilibrium_temperature(
+                    outlet_temp=outlet_max,
+                    outdoor_temp=avg_outdoor,
+                    current_indoor=current_indoor,
+                    pv_power=avg_pv,
+                    fireplace_on=fireplace_on,
+                    tv_on=tv_on,
+                    _suppress_logging=True,
+                )
 
             if min_prediction is not None and max_prediction is not None:
                 # UNIFIED PRE-CHECK: Check reachability regardless of heating/cooling scenario
@@ -415,27 +466,33 @@ class EnhancedModelWrapper:
                     # Target below minimum capability
                     scenario = "cooling" if is_cooling_needed else "heating"
                     logging.warning(
-                        f"🎯 {scenario.title()} pre-check: Target {target_indoor:.1f}°C unreachable "
-                        f"(min outlet {outlet_min:.1f}°C → {min_prediction:.2f}°C), "
-                        f"using minimum outlet"
+                        f"🎯 {scenario.title()} pre-check: Target {target_indoor:.1f}°C "
+                        f"unreachable (min outlet {outlet_min:.1f}°C → "
+                        f"{min_prediction:.2f}°C), using minimum outlet"
                     )
                     return outlet_min
 
                 if target_indoor > max_prediction + tolerance:
-                    # Target above maximum capability  
+                    # Target above maximum capability
                     scenario = "cooling" if is_cooling_needed else "heating"
                     logging.warning(
-                        f"🎯 {scenario.title()} pre-check: Target {target_indoor:.1f}°C unreachable "
-                        f"(max outlet {outlet_max:.1f}°C → {max_prediction:.2f}°C), "
-                        f"using maximum outlet"
+                        f"🎯 {scenario.title()} pre-check: Target {target_indoor:.1f}°C "
+                        f"unreachable (max outlet {outlet_max:.1f}°C → "
+                        f"{max_prediction:.2f}°C), using maximum outlet"
                     )
                     return outlet_max
 
                 # Target is achievable - proceed to binary search for ALL scenarios
-                scenario = "cooling" if is_cooling_needed else ("heating" if is_heating_needed else "maintenance")
+                scenario = (
+                    "cooling"
+                    if is_cooling_needed
+                    else ("heating" if is_heating_needed else "maintenance")
+                )
                 logging.debug(
-                    f"🎯 {scenario.title()} ({temp_diff_abs:.1f}°C deviation): Target {target_indoor:.1f}°C achievable "
-                    f"(range: {min_prediction:.1f}-{max_prediction:.1f}°C), proceeding to binary search"
+                    f"🎯 {scenario.title()} ({temp_diff_abs:.1f}°C deviation): Target "
+                    f"{target_indoor:.1f}°C achievable (range: "
+                    f"{min_prediction:.1f}-{max_prediction:.1f}°C), proceeding to binary "
+                    "search"
                 )
         except Exception as e:
             logging.warning(f"Pre-check failed: {e}, proceeding with binary search")
@@ -970,16 +1027,19 @@ class EnhancedModelWrapper:
             # Apply correction if target not reachable or significant boundary violations
             if trajectory_temps and min(trajectory_temps) > target_indoor:
                 logging.info(
-                    f"⚠️ Overshoot detected: entire trajectory is above target {target_indoor:.1f}°C. "
-                    "Applying correction."
+                    "⚠️ Overshoot detected: entire trajectory is above target "
+                    f"{target_indoor:.1f}°C. Applying correction."
                 )
             elif reaches_target_at is None or reaches_target_at > cycle_hours:
                 logging.info(
-                    f"⚠️ Target will NOT be reached within {cycle_hours:.1f}h cycle - applying physics-based correction"
+                    f"⚠️ Target will NOT be reached within {cycle_hours:.1f}h "
+                    "cycle - applying physics-based correction"
                 )
             elif temp_boundary_violation:
                 logging.info(
-                    f"⚠️ Temperature boundary violations detected (min: {min_temp:.2f}°C, max: {max_temp:.2f}°C) - applying correction"
+                    "⚠️ Temperature boundary violations detected (min: "
+                    f"{min_temp:.2f}°C, max: {max_temp:.2f}°C) - applying "
+                    "correction"
                 )
 
             # Calculate physics-based correction

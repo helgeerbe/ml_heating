@@ -1,5 +1,95 @@
 # Active Context - Current Work & Decision State
 
+### 🧠 **FORMATTING AND LINTING FIXES IMPLEMENTED - February 9, 2026**
+
+**CRITICAL CODE QUALITY ENHANCEMENT**: The codebase, particularly `src/model_wrapper.py`, has been meticulously reformatted to resolve all outstanding linting and line-length errors. This ensures the code is clean, readable, and adheres to the project's coding standards.
+
+#### ✅ **CODEBASE CLEANUP COMPLETE**
+
+**PROBLEM ANALYSIS**:
+- **Root Cause**: A significant number of linting errors, primarily related to line length and formatting, were present in `src/model_wrapper.py`.
+- **Symptom**: The code was difficult to read and did not comply with PEP 8 standards, which could lead to maintainability issues and obscure potential bugs.
+
+**COMPREHENSIVE SOLUTION IMPLEMENTED**:
+
+**1. Line-Length and Formatting Fixes**:
+- **File**: `src/model_wrapper.py`
+- **Action**: Systematically addressed all line-length and formatting errors reported by the linter.
+- **Result**: The file is now fully compliant with the project's coding standards.
+
+**IMMEDIATE BENEFITS**:
+- **Improved Readability**: The code is now easier to read and understand.
+- **Enhanced Maintainability**: A clean codebase is easier to modify and extend.
+- **Reduced Risk of Bugs**: Proper formatting can help to reveal logical errors that might otherwise be hidden.
+
+**FILES MODIFIED**:
+- **src/model_wrapper.py**: Extensive formatting and line-length corrections.
+
+---
+
+### 🧠 **INTELLIGENT POST-DHW RECOVERY IMPLEMENTED - February 9, 2026**
+
+**CRITICAL RESILIENCE ENHANCEMENT**: The grace period logic has been re-architected to use an intelligent, model-driven approach for recovering from heat loss during Domestic Hot Water (DHW) and defrost cycles. This addresses a key weakness where the system failed to adequately recover, leading to a drop in prediction accuracy.
+
+#### ✅ **INTELLIGENT RECOVERY NOW ACTIVE**
+
+**PROBLEM ANALYSIS**:
+- **Root Cause**: The previous grace period logic simply restored the pre-DHW outlet temperature. This was insufficient to compensate for the significant heat loss that occurs in the house during these blocking events.
+- **Symptom**: The user observed that after DHW cycles, the target indoor temperature was frequently not reached, and the model's prediction quality suffered. This was due to the system starting from a thermal deficit that the old logic didn't account for.
+
+**COMPREHENSIVE SOLUTION IMPLEMENTED**:
+
+**1. Model-Driven Temperature Calculation**:
+- **Re-architected `_execute_grace_period`**: The function in `src/heating_controller.py` no longer restores the old temperature. Instead, it now actively calculates a new, higher target temperature.
+- **Leveraging Model Intelligence**: It calls the `_calculate_required_outlet_temp` method from the model wrapper, using the current indoor temperature, target indoor temperature, and outdoor temperature to determine the precise outlet temperature needed to guide the house back to the desired state.
+
+**2. Enhanced Resilience**:
+- **Dynamic Adaptation**: The system is no longer reliant on a static, outdated temperature setpoint. It now dynamically responds to the actual thermal state of the house post-interruption.
+- **Improved Accuracy**: By actively correcting the thermal deficit, the system prevents the model's prediction accuracy from degrading after DHW cycles.
+
+**ALGORITHM ENHANCEMENT**:
+```python
+# In src/heating_controller.py
+
+def _execute_grace_period(self, ha_client: HAClient, state: Dict, age: float):
+    """Execute the grace period temperature restoration logic"""
+    logging.info("--- Grace Period Started ---")
+    
+    # ...
+
+    # NEW: Fetch current state for intelligent recovery
+    current_indoor = ha_client.get_state(config.INDOOR_TEMP_ENTITY_ID, all_states)
+    target_indoor = ha_client.get_state(config.TARGET_INDOOR_TEMP_ENTITY_ID, all_states)
+    outdoor_temp = ha_client.get_state(config.OUTDOOR_TEMP_ENTITY_ID, all_states)
+
+    if not all([current_indoor, target_indoor, outdoor_temp]):
+        # Fallback to old logic if sensors are unavailable
+        grace_target = state.get("last_final_temp")
+    else:
+        # NEW: Use the model to calculate the required outlet temperature
+        wrapper = get_enhanced_model_wrapper()
+        features, _ = build_physics_features(ha_client, influx_service)
+        thermal_features = wrapper._extract_thermal_features(features)
+
+        grace_target = wrapper._calculate_required_outlet_temp(
+            current_indoor, target_indoor, outdoor_temp, thermal_features
+        )
+
+    # ... set new grace_target and wait
+```
+
+**IMMEDIATE BENEFITS**:
+- **Prevents Temperature Droop**: The system now actively counteracts heat loss from DHW cycles.
+- **Maintains Prediction Accuracy**: The model's performance is no longer negatively impacted by these common operational interruptions.
+- **Increased Resilience**: The heating control is more robust and can handle disruptions more effectively.
+
+**FILES MODIFIED**:
+- **src/heating_controller.py**: Major enhancement to `_execute_grace_period` to implement model-driven recovery.
+
+---
+
+# Active Context - Current Work & Decision State
+
 ### 🚀 **THERMAL INERTIA LEARNING IMPLEMENTED - February 4, 2026**
 
 **CRITICAL ENHANCEMENT**: The thermal model has been significantly refactored to enable online learning of the house's thermal inertia, addressing a core limitation where the model did not properly account for how the house retains heat.

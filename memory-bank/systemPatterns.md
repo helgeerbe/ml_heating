@@ -198,12 +198,34 @@ if any_blocking_active:
 ```
 
 **Layer 4: Grace Periods**
+
+**Grace Period Logic (Intelligent Recovery)**:
 ```python
-# Stabilization time after blocking ends
-if blocking_just_ended:
-    restore_previous_target()
-    wait_for_outlet_temperature_stabilization()
+# After blocking ends, use the model to calculate a new target for recovery
+if last_is_blocking and not is_blocking:
+    # Fetch current state (indoor, target, outdoor temps)
+    sensor_data = get_current_sensor_data()
+
+    if sensor_data_is_complete:
+        # Use the model to determine the precise outlet temperature needed for recovery
+        grace_target = model.calculate_required_outlet_temp(
+            sensor_data.current_indoor,
+            sensor_data.target_indoor,
+            sensor_data.outdoor_temp,
+            # ... other features
+        )
+    else:
+        # Fallback to simple restoration if sensor data is missing
+        grace_target = state.get("last_final_temp")
+
+    set_target_temperature(grace_target)
+    wait_for_temperature_stabilization(grace_target, wait_condition)
 ```
+
+**Recovery Strategy**:
+- **Model-Driven**: Instead of static restoration, the system calculates the optimal temperature to recover from the thermal deficit caused by the blocking event (DHW, defrost).
+- **Resilient**: This makes the system more robust against heat loss and prevents prediction accuracy from dropping.
+- **Fallback**: A safe fallback to the previous temperature is retained for sensor data issues.
 
 **Layer 5: Physics Validation**
 ```python
@@ -350,18 +372,33 @@ blocking_reasons = [e for e in blocking_entities if ha_client.get_state(e, is_bi
 is_blocking = bool(blocking_reasons)
 ```
 
-**Grace Period Logic**:
+**Grace Period Logic (Intelligent Recovery)**:
 ```python
-# After blocking ends, restore target and wait for stabilization
+# After blocking ends, use the model to calculate a new target for recovery
 if last_is_blocking and not is_blocking:
-    grace_target = determine_grace_target(last_final_temp, current_outlet, blocking_reasons)
+    # Fetch current state (indoor, target, outdoor temps)
+    sensor_data = get_current_sensor_data()
+
+    if sensor_data_is_complete:
+        # Use the model to determine the precise outlet temperature needed for recovery
+        grace_target = model.calculate_required_outlet_temp(
+            sensor_data.current_indoor,
+            sensor_data.target_indoor,
+            sensor_data.outdoor_temp,
+            # ... other features
+        )
+    else:
+        # Fallback to simple restoration if sensor data is missing
+        grace_target = state.get("last_final_temp")
+
     set_target_temperature(grace_target)
     wait_for_temperature_stabilization(grace_target, wait_condition)
 ```
 
-**DHW vs Defrost Handling**:
-- **DHW heating**: Outlet gets hot → cool-down target with aggressive restoration
-- **Defrost cycle**: Outlet gets cold → exact restoration target for full recovery
+**Recovery Strategy**:
+- **Model-Driven**: Instead of static restoration, the system calculates the optimal temperature to recover from the thermal deficit caused by the blocking event (DHW, defrost).
+- **Resilient**: This makes the system more robust against heat loss and prevents prediction accuracy from dropping.
+- **Fallback**: A safe fallback to the previous temperature is retained for sensor data issues.
 
 ### Error Handling and Resilience
 
