@@ -421,97 +421,46 @@ def main(args):
                         was_shadow_mode_cycle = effective_shadow_mode
                         
                         try:
+                            # UNIFIED LEARNING: Always use trajectory prediction for learning
+                            # to ensure consistency with the control loop's prediction method.
+                            was_shadow_mode_cycle = effective_shadow_mode
+
                             if was_shadow_mode_cycle:
-                                # SHADOW MODE LEARNING (FIXED FOR NON-EQUILIBRIUM):
-                                # Predict what indoor temp the heat curve's outlet setting will achieve
-                                # Use trajectory prediction for realistic one-cycle predictions during non-equilibrium
-                                
-                                # Check if we're near equilibrium (small deviation from target)
-                                # Get target temp from current sensor reading
-                                target_temp_for_check = ha_client.get_state(
-                                    config.TARGET_INDOOR_TEMP_ENTITY_ID, all_states
-                                )
-                                deviation_from_target = abs(current_indoor - target_temp_for_check) if target_temp_for_check else 0.0
-                                near_equilibrium = deviation_from_target < 0.5  # Within 0.5°C = near equilibrium
-                                
-                                if near_equilibrium:
-                                    # Use equilibrium prediction for steady-state scenarios
-                                    predicted_indoor_temp = (
-                                        wrapper.thermal_model.predict_equilibrium_temperature(
-                                            outlet_temp=actual_applied_temp,  # Heat curve's setting
-                                            outdoor_temp=prediction_context.get("outdoor_temp", 10.0),
-                                            current_indoor=last_indoor_temp,
-                                            pv_power=prediction_context.get("pv_power", 0.0),
-                                            fireplace_on=prediction_context.get("fireplace_on", 0.0),
-                                            tv_on=prediction_context.get("tv_on", 0.0),
-                                            _suppress_logging=True,
-                                        )
-                                    )
-                                    prediction_method = "equilibrium"
-                                else:
-                                    # Use trajectory prediction for transient (non-equilibrium) scenarios
-                                    trajectory = wrapper.thermal_model.predict_thermal_trajectory(
-                                        current_indoor=last_indoor_temp,
-                                        target_indoor=last_indoor_temp,  # Not used in trajectory calculation
-                                        outlet_temp=actual_applied_temp,  # Heat curve's setting
-                                        outdoor_temp=prediction_context.get("outdoor_temp", 10.0),
-                                        time_horizon_hours=config.CYCLE_INTERVAL_MINUTES / 60.0,  # One cycle time
-                                        pv_power=prediction_context.get("pv_power", 0.0),
-                                        fireplace_on=prediction_context.get("fireplace_on", 0.0),
-                                        tv_on=prediction_context.get("tv_on", 0.0),
-                                    )
-                                    predicted_indoor_temp = trajectory["trajectory"][0] if trajectory["trajectory"] else last_indoor_temp
-                                    prediction_method = "trajectory"
-                                
-                                learning_mode = f"shadow_mode_hc_{prediction_method}"
-                                logging.debug(
-                                    f"🔍 SHADOW MODE LEARNING ({prediction_method}): Predicting indoor temp from "
-                                    f"heat curve's {actual_applied_temp}°C outlet setting "
-                                    f"(deviation: {deviation_from_target:.1f}°C)"
+                                learning_mode = "shadow_mode_hc_trajectory"
+                                log_msg = (
+                                    f"🔍 SHADOW MODE LEARNING (trajectory): Predicting indoor temp from "
+                                    f"heat curve's {actual_applied_temp}°C outlet setting"
                                 )
                             else:
-                                # ACTIVE MODE LEARNING (UNCHANGED):
-                                # Predict what indoor temp ML's outlet setting will achieve
-                                # This learns from ML's own control decisions
-                                predicted_indoor_temp = (
-                                    wrapper.thermal_model.predict_equilibrium_temperature(
-                                        outlet_temp=actual_applied_temp,  # ML's setting (same as last_final_temp_stored)
-                                        outdoor_temp=prediction_context.get(
-                                            "outdoor_temp", 10.0
-                                        ),
-                                        current_indoor=last_indoor_temp,
-                                        pv_power=prediction_context.get(
-                                            "pv_power", 0.0
-                                        ),
-                                        fireplace_on=prediction_context.get(
-                                            "fireplace_on", 0.0
-                                        ),
-                                        tv_on=prediction_context.get("tv_on", 0.0),
-                                        _suppress_logging=True,
-                                    )
-                                )
-                                
-                                learning_mode = "active_mode_ml_feedback"
-                                logging.debug(
-                                    "🎯 ACTIVE MODE LEARNING: Verifying ML prediction accuracy "
+                                learning_mode = "active_mode_ml_trajectory"
+                                log_msg = (
+                                    "🎯 ACTIVE MODE LEARNING (trajectory): Verifying ML prediction accuracy "
                                     f"for {actual_applied_temp}°C outlet setting"
                                 )
-                            
-                            if predicted_indoor_temp is not None:
-                                # Use thermal model prediction for the actually applied outlet temp
-                                model_predicted_temp = predicted_indoor_temp
-                            else:
-                                # Fallback: no learning if prediction failed
-                                logging.warning(
-                                    f"Skipping online learning ({learning_mode}): thermal model "
-                                    "prediction failed"
-                                )
-                                continue
+                            logging.debug(log_msg)
 
+                            trajectory = wrapper.thermal_model.predict_thermal_trajectory(
+                                current_indoor=last_indoor_temp,
+                                target_indoor=last_indoor_temp,  # Not used for this prediction
+                                outlet_temp=actual_applied_temp,
+                                outdoor_temp=prediction_context.get("outdoor_temp", 10.0),
+                                time_horizon_hours=config.CYCLE_INTERVAL_MINUTES / 60.0,
+                                pv_power=prediction_context.get("pv_power", 0.0),
+                                fireplace_on=prediction_context.get("fireplace_on", 0.0),
+                                tv_on=prediction_context.get("tv_on", 0.0),
+                            )
+                            
+                            predicted_indoor_temp = trajectory["trajectory"][0] if trajectory and trajectory.get("trajectory") else last_indoor_temp
+
+                            if predicted_indoor_temp is None:
+                                logging.warning(f"Skipping online learning ({learning_mode}): thermal model prediction returned None")
+                                continue
+                            
+                            model_predicted_temp = predicted_indoor_temp
+                                
                         except Exception as e:
                             logging.warning(
-                                f"Skipping online learning ({learning_mode}): thermal model "
-                                f"prediction error: {e}"
+                                f"Skipping online learning: thermal model prediction error: {e}"
                             )
                             continue
                         
@@ -840,6 +789,20 @@ def main(args):
             features, outlet_history = build_physics_features(
                 ha_client, influx_service
             )
+            # Handle both DataFrame and dict features properly
+            if isinstance(features, pd.DataFrame):
+                # Convert DataFrame to dict for safe access
+                features_dict = (
+                    features.iloc[0].to_dict()
+                    if not features.empty
+                    else {}
+                )
+            else:
+                features_dict = (
+                    features
+                    if isinstance(features, dict)
+                    else {}
+                )
             if features is None:
                 logging.warning("Feature building failed, skipping cycle.")
                 time.sleep(300)
@@ -866,57 +829,51 @@ def main(args):
                 confidence
             )
 
-            # --- Gradual Temperature Control ---
-            # Final safety check to prevent abrupt setpoint jumps. Baseline
-            # selection rules:
-            #  - Default baseline: the persisted previous target
-            #    (`last_final_temp`) when available. This ensures we clamp
-            #    relative to the last intended setpoint rather than a
-            #    transient measured outlet.
-            #  - Exception (soft-start): if the last blocking reason matches
-            #    a DHW-like blocker (DHW, disinfection, DHW boost), use the
-            #    current measured `actual_outlet_temp` as baseline to enable a
-            #    gentle ramp.
-            #  - Fallback: if `last_final_temp` is not available, use the
-            #    instantaneous measured outlet temp.
-            if actual_outlet_temp is not None:
-                max_change = config.MAX_TEMP_CHANGE_PER_CYCLE
-                original_temp = final_temp  # Keep a copy for logging
+            # --- Gradual Temperature Control (DISABLED) ---
+            # if actual_outlet_temp is not None:
+            #     max_change = config.MAX_TEMP_CHANGE_PER_CYCLE
+            #     original_temp = final_temp  # Keep a copy for logging
 
-                last_blocking_reasons = state.get("last_blocking_reasons", []) or []
-                last_final_temp = state.get("last_final_temp")
+            #     last_blocking_reasons = state.get("last_blocking_reasons", []) or []
+            #     last_final_temp = state.get("last_final_temp")
 
-                # DHW-like blockers that should keep the soft-start behavior
-                dhw_like_blockers = {
-                    config.DHW_STATUS_ENTITY_ID,
-                    config.DISINFECTION_STATUS_ENTITY_ID,
-                    config.DHW_BOOST_HEATER_STATUS_ENTITY_ID,
-                }
+            #     # DHW-like blockers that should keep the soft-start behavior
+            #     dhw_like_blockers = {
+            #         config.DHW_STATUS_ENTITY_ID,
+            #         config.DISINFECTION_STATUS_ENTITY_ID,
+            #         config.DHW_BOOST_HEATER_STATUS_ENTITY_ID,
+            #     }
 
-                # Default baseline is the persisted last_final_temp if
-                # present. Override to measured actual_outlet_temp when last
-                # blocking reasons include any DHW-like blocker (soft start).
-                if last_final_temp is not None:
-                    baseline = last_final_temp
-                    if any(b in dhw_like_blockers for b in last_blocking_reasons):
-                        baseline = actual_outlet_temp
-                else:
-                    baseline = actual_outlet_temp
+            #     # SHADOW MODE FIX: In shadow mode, the baseline for gradual control
+            #     # should be the actual heat curve temperature from the last cycle,
+            #     # not the ML's (potentially wrong) prediction.
+            #     if effective_shadow_mode:
+            #         baseline = actual_outlet_temp
+            #         logging.info(
+            #             "Gradual control baseline in shadow mode set to "
+            #             "actual_outlet_temp: %.1f°C", baseline
+            #         )
+            #     elif last_final_temp is not None:
+            #         baseline = last_final_temp
+            #         if any(b in dhw_like_blockers for b in last_blocking_reasons):
+            #             baseline = actual_outlet_temp
+            #     else:
+            #         baseline = actual_outlet_temp
 
-                # Calculate the difference from the chosen baseline
-                delta = final_temp - baseline
-                # Clamp the delta to the maximum allowed change
-                if abs(delta) > max_change:
-                    final_temp = baseline + np.clip(delta, -max_change, max_change)
-                    logging.info("--- Gradual Temperature Control ---")
-                    logging.info(
-                        "Change from baseline %.1f°C to suggested %.1f°C exceeds"
-                        " max change of %.1f°C. Capping at %.1f°C.",
-                        baseline,
-                        original_temp,
-                        max_change,
-                        final_temp,
-                    )
+            #     # Calculate the difference from the chosen baseline
+            #     delta = final_temp - baseline
+            #     # Clamp the delta to the maximum allowed change
+            #     if abs(delta) > max_change:
+            #         final_temp = baseline + np.clip(delta, -max_change, max_change)
+            #         logging.info("--- Gradual Temperature Control ---")
+            #         logging.info(
+            #             "Change from baseline %.1f°C to suggested %.1f°C exceeds"
+            #             " max change of %.1f°C. Capping at %.1f°C.",
+            #             baseline,
+            #             original_temp,
+            #             max_change,
+            #             final_temp,
+            #         )
 
             # Final prediction is now handled by ThermalEquilibriumModel in model_wrapper
             # Use confidence metadata for predicted indoor temp if available
@@ -928,6 +885,7 @@ def main(args):
             # and feature importances are also published to HA for monitoring.
             # In shadow mode, skip all HA sensor updates to avoid
             # interference.
+
             if config.SHADOW_MODE:
                 logging.info(
                     "🔍 SHADOW MODE: ML prediction calculated but not "
@@ -980,21 +938,7 @@ def main(args):
                         )
 
                         # Set up unified prediction context (same as binary
-                        # search uses) Handle both DataFrame and dict
-                        # features properly
-                        if isinstance(features, pd.DataFrame):
-                            # Convert DataFrame to dict for safe access
-                            features_dict = (
-                                features.iloc[0].to_dict()
-                                if not features.empty
-                                else {}
-                            )
-                        else:
-                            features_dict = (
-                                features
-                                if isinstance(features, dict)
-                                else {}
-                            )
+                        # search uses)
                         
                         thermal_features = {
                             "pv_power": features_dict.get("pv_now", 0.0),
@@ -1182,6 +1126,7 @@ def main(args):
             # Use the actual rounded temperature that was applied to HA
             applied_temp = smart_rounded_temp if not config.SHADOW_MODE else final_temp
             
+            thermal_params = {}
             # Calculate what the applied temperature will actually predict
             try:
                 if not config.SHADOW_MODE and "wrapper" in locals():

@@ -260,9 +260,12 @@ class ThermalStateManager:
         baseline["calibration_cycles"] = calibration_cycles
 
         # Reset learning adjustments when new baseline is set
-        adjustments = self.state["learning_state"]["parameter_adjustments"]
-        for key in adjustments:
-            adjustments[key] = 0.0
+        self.state["learning_state"]["parameter_adjustments"] = {
+            "equilibrium_ratio_delta": 0.0,
+            "total_conductance_delta": 0.0,
+            "heat_loss_coefficient_delta": 0.0,
+            "outlet_effectiveness_delta": 0.0
+        }
 
         logging.info("🎯 Set calibrated baseline parameters (cycles: %s)",
                      calibration_cycles)

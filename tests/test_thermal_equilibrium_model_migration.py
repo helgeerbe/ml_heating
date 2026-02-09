@@ -69,20 +69,17 @@ class TestPreMigrationBaseline:
 
         # Verify core parameters are loaded
         assert hasattr(model, 'thermal_time_constant')
-        assert hasattr(model, 'equilibrium_ratio')
-        assert hasattr(model, 'total_conductance')
+        assert hasattr(model, 'heat_loss_coefficient')
         assert hasattr(model, 'outlet_effectiveness')
 
         # Document baseline parameter values for equivalence testing
         self.baseline_thermal_time_constant = model.thermal_time_constant
-        self.baseline_equilibrium_ratio = model.equilibrium_ratio
-        self.baseline_total_conductance = model.total_conductance
+        self.baseline_heat_loss_coefficient = model.heat_loss_coefficient
         self.baseline_outlet_effectiveness = model.outlet_effectiveness
 
         # These values must be identical after migration
         assert isinstance(self.baseline_thermal_time_constant, float)
-        assert isinstance(self.baseline_equilibrium_ratio, float)
-        assert isinstance(self.baseline_total_conductance, float)
+        assert isinstance(self.baseline_heat_loss_coefficient, float)
         assert isinstance(self.baseline_outlet_effectiveness, float)
 
     def test_equilibrium_prediction_baseline(self):

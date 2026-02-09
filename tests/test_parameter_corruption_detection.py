@@ -11,7 +11,7 @@ import pytest
 from unittest.mock import patch
 
 # Import the model we're testing
-from src.thermal_equilibrium_model import ThermalEquilibriumModel
+from src.thermal_equilibrium_model import ThermalEquilibriumModel, _thermal_equilibrium_model_instance
 
 
 class TestParameterCorruptionDetection:
@@ -25,136 +25,96 @@ class TestParameterCorruptionDetection:
         self.model = ThermalEquilibriumModel()
         
         # Set known good parameters as baseline
-        self.model.equilibrium_ratio = 0.408
-        self.model.total_conductance = 0.194
+        self.model.heat_loss_coefficient = 0.1
+        self.model.outlet_effectiveness = 0.8
+        self.model.thermal_time_constant = 5.0
         self.model.learning_confidence = 3.0
         
         # Mock thermal state loading to prevent file system dependencies
         with patch('src.unified_thermal_state.get_thermal_state_manager'):
             pass
     
-    def test_detect_corrupted_equilibrium_ratio_too_low(self):
-        """Test detection of equilibrium_ratio corruption - value too low."""
-        # Arrange: Set corrupted parameter (known bad value from real issue)
-        self.model.equilibrium_ratio = 0.1  # Should be ~0.8, this is corrupted
-        
-        # Act & Assert: Should detect corruption
+    def test_detect_corrupted_heat_loss_coefficient_too_low(self):
+        """Test detection of heat_loss_coefficient corruption - value too low."""
+        self.model.heat_loss_coefficient = 0.005
         assert self.model._detect_parameter_corruption() is True
-    
-    def test_detect_corrupted_equilibrium_ratio_too_high(self):
-        """Test detection of equilibrium_ratio corruption - value too high."""
-        # Arrange: Set unrealistic high value
-        # Above reasonable physics bounds
-        self.model.equilibrium_ratio = 0.95
-        
-        # Act & Assert: Should detect corruption
+
+    def test_detect_corrupted_heat_loss_coefficient_too_high(self):
+        """Test detection of heat_loss_coefficient corruption - value too high."""
+        self.model.heat_loss_coefficient = 0.6
         assert self.model._detect_parameter_corruption() is True
-    
-    def test_detect_corrupted_total_conductance_too_low(self):
-        """Test detection of total_conductance corruption - value too low."""
-        # Arrange: Set unrealistically low conductance
-        # Too low for realistic building
-        self.model.total_conductance = 0.01
-        
-        # Act & Assert: Should detect corruption
+
+    def test_detect_corrupted_outlet_effectiveness_too_low(self):
+        """Test detection of outlet_effectiveness corruption - value too low."""
+        self.model.outlet_effectiveness = 0.4
         assert self.model._detect_parameter_corruption() is True
-    
-    def test_detect_corrupted_total_conductance_too_high(self):
-        """Test detection of total_conductance corruption - value too high."""
-        # Arrange: Set corrupted parameter (known bad value from real issue)
-        # Should be ~0.05, this is corrupted
-        self.model.total_conductance = 0.266
-        
-        # Act & Assert: Should detect corruption
+
+    def test_detect_corrupted_outlet_effectiveness_too_high(self):
+        """Test detection of outlet_effectiveness corruption - value too high."""
+        self.model.outlet_effectiveness = 1.1
+        assert self.model._detect_parameter_corruption() is True
+
+    def test_detect_corrupted_thermal_time_constant_too_low(self):
+        """Test detection of thermal_time_constant corruption - value too low."""
+        self.model.thermal_time_constant = 2.0
+        assert self.model._detect_parameter_corruption() is True
+
+    def test_detect_corrupted_thermal_time_constant_too_high(self):
+        """Test detection of thermal_time_constant corruption - value too high."""
+        self.model.thermal_time_constant = 9.0
         assert self.model._detect_parameter_corruption() is True
     
     def test_detect_corrupted_learning_confidence_too_low(self):
         """Test detection of learning_confidence corruption - system gave up."""
-        # Arrange: Set corrupted confidence (known bad value from real issue)
-        self.model.learning_confidence = 0.0  # System gave up learning
-        
-        # Act & Assert: Should detect corruption
+        self.model.learning_confidence = 0.0
         assert self.model._detect_parameter_corruption() is True
     
     def test_corruption_detection_with_valid_parameters(self):
         """Test that valid parameters are NOT flagged as corrupted."""
-        # Arrange: Parameters are already set to good values in setup
-        # equilibrium_ratio = 0.408, total_conductance = 0.194,
-        # learning_confidence = 3.0
-        
-        # Act & Assert: Should NOT detect corruption
         assert self.model._detect_parameter_corruption() is False
     
     def test_corruption_detection_boundary_values_valid(self):
         """Test boundary values that should be considered valid."""
-        # Test minimum valid values
-        # Just above corruption threshold
-        self.model.equilibrium_ratio = 0.3
-        # Just above corruption threshold
-        self.model.total_conductance = 0.02
-        # Just above corruption threshold
-        self.model.learning_confidence = 0.1
-        
-        # Act & Assert: Should NOT detect corruption
+        self.model.heat_loss_coefficient = 0.01
+        self.model.outlet_effectiveness = 0.5
+        self.model.thermal_time_constant = 3.0
+        self.model.learning_confidence = 0.01
         assert self.model._detect_parameter_corruption() is False
         
-        # Test maximum valid values
-        self.model.equilibrium_ratio = 0.9  # Just below corruption threshold
-        self.model.total_conductance = 0.3  # Just below corruption threshold
-        self.model.learning_confidence = 10.0  # High but valid confidence
-        
-        # Act & Assert: Should NOT detect corruption
-        assert self.model._detect_parameter_corruption() is False
-    
-    def test_corruption_detection_boundary_values_invalid(self):
-        """Test boundary values that should be considered corrupted."""
-        # Test values just below minimum thresholds
-        self.model.equilibrium_ratio = 0.29  # Just below valid threshold
-        assert self.model._detect_parameter_corruption() is True
-        
-        # Reset to good values and test next parameter
-        self.model.equilibrium_ratio = 0.408
-        self.model.total_conductance = 0.019  # Just below valid threshold
-        assert self.model._detect_parameter_corruption() is True
-        
-        # Reset to good values and test next parameter  
-        self.model.total_conductance = 0.194
-        self.model.learning_confidence = 0.009  # Just below valid threshold
-        assert self.model._detect_parameter_corruption() is True
-        
-        # Reset to good values and test upper bounds
-        self.model.learning_confidence = 3.0
-        self.model.equilibrium_ratio = 0.91  # Just above valid threshold
-        assert self.model._detect_parameter_corruption() is True
-        
-        # Reset and test conductance upper bound
-        self.model.equilibrium_ratio = 0.408  
-        self.model.total_conductance = 0.31  # Just above valid threshold
-        assert self.model._detect_parameter_corruption() is True
-    
-    def test_real_world_corrupted_values_detection(self):
-        """Test detection using actual corrupted values from production issue."""
-        # Arrange: Set exact corrupted values that caused original problem
-        self.model.equilibrium_ratio = 0.1      # Original corrupted value
-        self.model.total_conductance = 0.266    # Original corrupted value
-        self.model.learning_confidence = 0.0    # Original corrupted value
-        
-        # Act & Assert: Should definitely detect this corruption
-        assert self.model._detect_parameter_corruption() is True
-    
-    def test_known_good_calibrated_values_not_corrupted(self):
-        """Test that known good calibrated values are not flagged as corrupt."""
-        # Arrange: Set the exact calibrated values that work correctly
-        # Known good calibrated value
-        self.model.equilibrium_ratio = 0.408
-        # Known good calibrated value
-        self.model.total_conductance = 0.194
-        # Known good calibrated value
-        self.model.learning_confidence = 3.0
-        
-        # Act & Assert: Should NOT detect corruption
+        self.model.heat_loss_coefficient = 0.5
+        self.model.outlet_effectiveness = 1.0
+        self.model.thermal_time_constant = 8.0
         assert self.model._detect_parameter_corruption() is False
 
+    def test_corruption_detection_boundary_values_invalid(self):
+        """Test boundary values that should be considered corrupted."""
+        self.model.heat_loss_coefficient = 0.009
+        assert self.model._detect_parameter_corruption() is True
+        self.model.heat_loss_coefficient = 0.1
+
+        self.model.outlet_effectiveness = 0.49
+        assert self.model._detect_parameter_corruption() is True
+        self.model.outlet_effectiveness = 0.8
+        
+        self.model.thermal_time_constant = 2.9
+        assert self.model._detect_parameter_corruption() is True
+        self.model.thermal_time_constant = 5.0
+        
+        self.model.learning_confidence = 0.009
+        assert self.model._detect_parameter_corruption() is True
+        self.model.learning_confidence = 3.0
+
+        self.model.heat_loss_coefficient = 0.51
+        assert self.model._detect_parameter_corruption() is True
+        self.model.heat_loss_coefficient = 0.1
+
+        self.model.outlet_effectiveness = 1.01
+        assert self.model._detect_parameter_corruption() is True
+        self.model.outlet_effectiveness = 0.8
+
+        self.model.thermal_time_constant = 8.1
+        assert self.model._detect_parameter_corruption() is True
+        self.model.thermal_time_constant = 5.0
 
 class TestCorruptionDetectionIntegration:
     """Test corruption detection integration with learning system."""
@@ -200,7 +160,7 @@ class TestCorruptionDetectionIntegration:
     def test_learning_skipped_when_corruption_detected(self):
         """Test that learning is skipped when parameters are corrupted."""
         # Arrange: Set corrupted parameters
-        self.model.equilibrium_ratio = 0.1  # Corrupted value
+        self.model.heat_loss_coefficient = 0.001  # Corrupted value
         
         # Mock the parameter adaptation method to verify it's not called
         mock_adapt_path = '_adapt_parameters_from_recent_errors'
@@ -229,8 +189,9 @@ class TestCorruptionDetectionIntegration:
     def test_learning_proceeds_when_parameters_valid(self):
         """Test that learning proceeds normally when parameters are valid."""
         # Arrange: Set valid parameters
-        self.model.equilibrium_ratio = 0.408
-        self.model.total_conductance = 0.194
+        self.model.heat_loss_coefficient = 0.1
+        self.model.outlet_effectiveness = 0.8
+        self.model.thermal_time_constant = 5.0
         self.model.learning_confidence = 3.0
         
         # Enable adaptive learning
@@ -243,13 +204,10 @@ class TestCorruptionDetectionIntegration:
                 'outlet_temp': 44.0, 
                 'current_indoor': 20.8, 
                 'outdoor_temp': 3.5
-            }
+            },
+            'timestamp': '2023-01-01T00:00:00Z'
         }
-        self.model.prediction_history = [
-            prediction_entry,
-            {'error': 0.1, 'context': prediction_entry['context']},
-            {'error': -0.1, 'context': prediction_entry['context']},
-        ] * 4  # Enough entries to trigger parameter adaptation
+        self.model.prediction_history = [prediction_entry] * self.model.recent_errors_window
         
         # Mock the parameter adaptation method to verify it IS called
         mock_adapt_path = '_adapt_parameters_from_recent_errors'

@@ -33,7 +33,7 @@ class ThermalParameterConfig:
         'outlet_temp_min': 14.0,           # °C
         'thermal_time_constant': 4.0,      # hours
         'equilibrium_ratio': 0.17,         # dimensionless
-        'total_conductance': 0.24,         # 1/hour
+        'total_conductance': 0.8,         # 1/hour
         'pv_heat_weight': 0.002,           # °C/W
         'fireplace_heat_weight': 5.0,      # °C
         'tv_heat_weight': 0.2,             # °C
@@ -41,8 +41,8 @@ class ThermalParameterConfig:
         'learning_confidence': 3.0,
         'min_learning_rate': 0.001,
         'max_learning_rate': 0.1,
-        'heat_loss_coefficient': 0.1,      # 1/hour
-        'outlet_effectiveness': 0.8,      # dimensionless
+        'heat_loss_coefficient': 0.3,      # 1/hour
+        'outlet_effectiveness': 0.5,      # dimensionless
     }
 
     # Parameter bounds (min, max) for optimization and validation

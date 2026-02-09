@@ -16,6 +16,7 @@ import logging
 from typing import Dict, Optional, Tuple
 from datetime import datetime
 
+import numpy as np
 import pandas as pd
 
 # Support both package-relative and direct import for notebooks
@@ -24,7 +25,6 @@ from .unified_thermal_state import get_thermal_state_manager
 from .influx_service import create_influx_service
 from .prediction_metrics import PredictionMetrics
 from . import config
-from .thermal_config import ThermalParameterConfig
 from .ha_client import create_ha_client
 
 
@@ -59,19 +59,13 @@ class EnhancedModelWrapper:
         # UNIFIED FORECAST: Store cycle-aligned forecast conditions for smart rounding
         self.cycle_aligned_forecast = {}
 
-        logging.info("🎯 Model Wrapper initialized with " "ThermalEquilibriumModel")
-        logging.info(
-            f"   - Thermal time constant: "
-            f"{self.thermal_model.thermal_time_constant:.1f}h"
-        )
-        logging.info(
-            f"   - Heat loss coefficient: "
-            f"{self.thermal_model.heat_loss_coefficient:.4f}"
-        )
-        logging.info(
-            f"   - Outlet effectiveness: "
-            f"{self.thermal_model.outlet_effectiveness:.4f}"
-        )
+        logging.info("🎯 Model Wrapper initialized with ThermalEquilibriumModel")
+        logging.info(f"   - Thermal time constant: "
+                     f"{self.thermal_model.thermal_time_constant:.1f}h")
+        logging.info(f"   - Heat loss coefficient: "
+                     f"{self.thermal_model.heat_loss_coefficient:.4f}")
+        logging.info(f"   - Outlet effectiveness: "
+                     f"{self.thermal_model.outlet_effectiveness:.4f}")
         logging.info(
             f"   - Learning confidence: "
             f"{self.thermal_model.learning_confidence:.2f}"
@@ -141,24 +135,32 @@ class EnhancedModelWrapper:
             if current_indoor == 0.0:
                 current_indoor = outdoor_temp + 15.0
 
-            # Use thermal model to predict equilibrium temperature
-            predicted_temp = self.thermal_model.predict_equilibrium_temperature(
+            # Use thermal model to predict temperature at the end of the cycle
+            cycle_hours = config.CYCLE_INTERVAL_MINUTES / 60.0
+            trajectory_result = self.thermal_model.predict_thermal_trajectory(
+                current_indoor=current_indoor,
+                target_indoor=current_indoor,  # Target is not critical for this prediction
                 outlet_temp=outlet_temp,
                 outdoor_temp=outdoor_temp,
-                current_indoor=current_indoor,
+                time_horizon_hours=cycle_hours,
+                time_step_minutes=config.CYCLE_INTERVAL_MINUTES,
                 pv_power=pv_power,
                 fireplace_on=fireplace_on,
                 tv_on=tv_on,
-                _suppress_logging=True,
             )
 
-            # Handle None return from predict_equilibrium_temperature
-            if predicted_temp is None:
+            if (
+                not trajectory_result
+                or "trajectory" not in trajectory_result
+                or not trajectory_result["trajectory"]
+            ):
                 logging.warning(
-                    f"predict_equilibrium_temperature returned None for "
+                    f"predict_thermal_trajectory returned invalid result for "
                     f"outlet={outlet_temp}, outdoor={outdoor_temp}"
                 )
                 return outdoor_temp + 10.0  # Safe fallback
+
+            predicted_temp = trajectory_result["trajectory"][0]
 
             return float(predicted_temp)  # Ensure we return a float
 
@@ -226,15 +228,15 @@ class EnhancedModelWrapper:
         thermal_features["tv_on"] = float(features.get("tv_on", 0))
 
         # Enhanced thermal intelligence features
-        thermal_features["indoor_temp_gradient"] = features.get(
-            "indoor_temp_gradient", 0.0
-        )
-        thermal_features["temp_diff_indoor_outdoor"] = features.get(
-            "temp_diff_indoor_outdoor", 0.0
-        )
-        thermal_features["outlet_indoor_diff"] = features.get("outlet_indoor_diff", 0.0)
+        thermal_features["indoor_temp_gradient"] = \
+            features.get("indoor_temp_gradient", 0.0)
+        thermal_features["temp_diff_indoor_outdoor"] = \
+            features.get("temp_diff_indoor_outdoor", 0.0)
+        thermal_features["outlet_indoor_diff"] = \
+            features.get("outlet_indoor_diff", 0.0)
 
-        # Note: Removed occupancy and cooking features as they don't have corresponding sensors
+        # Note: Removed occupancy and cooking features as they don't have
+        # corresponding sensors
 
         return thermal_features
 
@@ -460,27 +462,35 @@ class EnhancedModelWrapper:
 
             # Predict indoor temperature with this outlet temperature using cycle-aligned conditions
             try:
-                predicted_indoor = self.thermal_model.predict_equilibrium_temperature(
-                    outlet_temp=outlet_mid,
-                    outdoor_temp=avg_outdoor,  # Use cycle-aligned forecast for consistency
+                cycle_hours = config.CYCLE_INTERVAL_MINUTES / 60.0
+                trajectory_result = self.thermal_model.predict_thermal_trajectory(
                     current_indoor=current_indoor,
-                    pv_power=avg_pv,  # Use cycle-aligned forecast for consistency
+                    target_indoor=target_indoor,
+                    outlet_temp=outlet_mid,
+                    outdoor_temp=avg_outdoor,
+                    time_horizon_hours=cycle_hours,
+                    time_step_minutes=config.CYCLE_INTERVAL_MINUTES,
+                    pv_power=avg_pv,
                     fireplace_on=fireplace_on,
                     tv_on=tv_on,
-                    _suppress_logging=True,
                 )
 
-                # Handle None returns from predict_equilibrium_temperature
-                if predicted_indoor is None:
+                if (
+                    not trajectory_result
+                    or "trajectory" not in trajectory_result
+                    or not trajectory_result["trajectory"]
+                ):
                     logging.warning(
-                        f"   Iteration {iteration+1}: predict_equilibrium_temperature returned None "
+                        f"   Iteration {iteration+1}: predict_thermal_trajectory returned invalid result "
                         f"for outlet={outlet_mid:.1f}°C - using fallback"
                     )
-                    return 35.0  # Safe fallback
+                    return 35.0
+
+                predicted_indoor = trajectory_result["trajectory"][0]
 
             except Exception as e:
                 logging.error(
-                    f"   Iteration {iteration+1}: predict_equilibrium_temperature failed: {e}"
+                    f"   Iteration {iteration+1}: predict_thermal_trajectory failed: {e}"
                 )
                 return 35.0  # Safe fallback
 
@@ -503,14 +513,14 @@ class EnhancedModelWrapper:
                 )
 
                 # Show final equilibrium physics for the converged result
-                final_physics = self.thermal_model.predict_equilibrium_temperature(
+                self.thermal_model.predict_equilibrium_temperature(
                     outlet_temp=outlet_mid,
                     outdoor_temp=avg_outdoor,
                     current_indoor=current_indoor,
                     pv_power=avg_pv,
                     fireplace_on=fireplace_on,
                     tv_on=tv_on,
-                    _suppress_logging=False,  # Show the equilibrium physics logging
+                    _suppress_logging=False,  # Show equilibrium physics logging
                 )
 
                 # MULTI-HORIZON FORECAST LOGGING: Show predictions with different forecast horizons
@@ -945,34 +955,31 @@ class EnhancedModelWrapper:
                     # For fast target achievement (< 0.5h), allow larger tolerance (±0.3°C instead of ±0.1°C)
                     if reaches_target_at <= 0.5:  # Very fast achievement
                         relaxed_boundary_violation = (
-                            min_temp <= target_indoor - 0.3  # More lenient boundary
-                            or max_temp >= target_indoor + 0.3  # More lenient boundary
+                            min_temp <= target_indoor - 0.3  # More lenient
+                            or max_temp >= target_indoor + 0.3
                         )
                         if not relaxed_boundary_violation:
                             logging.info(
-                                f"✅ Target will be reached quickly in {reaches_target_at:.1f}h "
-                                f"with minor boundary violation (±0.1-0.2°C range) - no correction needed"
+                                f"✅ Target will be reached quickly in "
+                                f"{reaches_target_at:.1f}h with minor boundary "
+                                f"violation (±0.1-0.2°C range) - no "
+                                f"correction needed"
                             )
                             return outlet_temp
 
             # Apply correction if target not reachable or significant boundary violations
-            if reaches_target_at is None or reaches_target_at > cycle_hours:
+            if trajectory_temps and min(trajectory_temps) > target_indoor:
+                logging.info(
+                    f"⚠️ Overshoot detected: entire trajectory is above target {target_indoor:.1f}°C. "
+                    "Applying correction."
+                )
+            elif reaches_target_at is None or reaches_target_at > cycle_hours:
                 logging.info(
                     f"⚠️ Target will NOT be reached within {cycle_hours:.1f}h cycle - applying physics-based correction"
                 )
-            else:
-                logging.info(
-                    f"⚠️ Target reachable in {reaches_target_at:.1f}h but significant boundary violations detected - applying correction"
-                )
-
-            # Apply physics-based adaptive correction
-            if temp_boundary_violation:
+            elif temp_boundary_violation:
                 logging.info(
                     f"⚠️ Temperature boundary violations detected (min: {min_temp:.2f}°C, max: {max_temp:.2f}°C) - applying correction"
-                )
-            else:
-                logging.info(
-                    f"⚠️ Target will NOT be reached within {cycle_hours:.1f}h cycle - applying physics-based correction"
                 )
 
             # Calculate physics-based correction
@@ -1043,78 +1050,63 @@ class EnhancedModelWrapper:
                 else:
                     temp_error = 0.0
 
-            # GRADUATED RESPONSE ZONES - Priority 2 Enhancement
-            response_zone = self._get_response_zone(initial_deviation)
-            
-            # Physics-based scaling
-            time_constant = self.thermal_model.thermal_time_constant
+            # USER FEEDBACK: Implement exponential correction based on deviation from target.
+            # This ensures a strong pull towards the target when the temperature is far
+            # away, and a gentler approach as it gets closer.
 
-            # The new 'outlet_effectiveness' is a conductance, not a ratio. A typical value is ~0.05.
-            # A simple heuristic is that higher effectiveness means less correction is needed.
-            # We want a scale around 2-7. So we can use a value like (1.0 / outlet_effectiveness) * 0.2
+            # k controls the aggression of the exponential curve. A higher value means
+            # a more aggressive response to temperature deviations.
+            k = 1.5
+            aggression_factor = np.exp(k * initial_deviation)
+
+            # Physics-based scaling using house thermal characteristics.
             if self.thermal_model.outlet_effectiveness > 0.01:
                 base_scale = (1.0 / self.thermal_model.outlet_effectiveness) * 0.2
             else:
                 base_scale = 15.0  # Fallback
 
-            # Zone-specific scaling factors
-            zone_multipliers = {
-                "maintenance": 0.5,      # Gentle adjustments
-                "fine_tuning": 0.8,      # Moderate adjustments  
-                "active_control": 1.0,   # Standard response
-                "rapid_correction": 1.5  # Aggressive action
-            }
+            physics_scale = base_scale
 
-            physics_scale = base_scale * zone_multipliers[response_zone]
-
-            # Time pressure calculation
+            # Time pressure calculation (how urgently we need to correct).
             time_pressure = self._calculate_time_pressure(trajectory, cycle_hours)
+            urgency_multiplier = 1.0 + 2.0 * (time_pressure ** 2)
 
-            # Unified urgency calculation for all scenarios
-            if time_pressure > 0.8:
-                urgency_multiplier = 1.3  # Reduced for stability
-            elif time_pressure > 0.5:
-                urgency_multiplier = 1.15
+            # Calculate the final correction, applying aggression only when undershooting.
+            if temp_error > 0:
+                # Apply exponential aggression when we are below target.
+                correction = (
+                    temp_error * physics_scale * urgency_multiplier * aggression_factor
+                )
+                logging.info(
+                    "   Exponential Correction for undershoot: "
+                    f"aggression_factor={aggression_factor:.2f}x"
+                )
             else:
-                urgency_multiplier = 1.0
+                # When overshooting, apply a gentle, non-exponential correction to prevent
+                # the system from pulling back too hard.
+                overshoot_dampening = 0.4
+                correction = (
+                    temp_error * physics_scale * urgency_multiplier * overshoot_dampening
+                )
+                logging.info(
+                    "   Gentle Correction for overshoot: dampened by "
+                    f"{overshoot_dampening:.0%}"
+                )
 
-            # Calculate base correction
-            correction = temp_error * physics_scale * urgency_multiplier
+            # Clamp the correction to a reasonable maximum to prevent extreme values.
+            max_correction = 20.0
+            correction = max(-max_correction, min(max_correction, correction))
 
-            # Apply zone-specific bounds
-            zone_bounds = {
-                "maintenance": (1.0, -1.0),        # ±1°C max
-                "fine_tuning": (3.0, -3.0),        # ±3°C max
-                "active_control": (8.0, -8.0),     # ±8°C max  
-                "rapid_correction": (15.0, -15.0)  # ±15°C max
-            }
-
-            max_heating, max_cooling = zone_bounds[response_zone]
-
-            # Proximity dampening to prevent overshooting
-            proximity_dampen = 1.0
-            if temp_error < 0:  # Overshooting scenario
-                proximity_dampen = min(1.0, abs(temp_error) / 0.5)
-                effective_max_heating = max_heating * proximity_dampen
-                correction = min(effective_max_heating, correction)
-
-            # Apply zone bounds
-            correction = max(max_cooling, min(max_heating, correction))
-
-            # Final outlet temperature
+            # Final outlet temperature.
             corrected_outlet = outlet_temp + correction
             corrected_outlet = max(
                 config.CLAMP_MIN_ABS, min(config.CLAMP_MAX_ABS, corrected_outlet)
             )
 
             logging.info(
-                f"🎯 Graduated correction [{response_zone}]: "
-                f"{outlet_temp:.1f}°C + {correction:+.1f}°C = "
-                f"{corrected_outlet:.1f}°C "
-                f"(deviation: {initial_deviation:.1f}°C, "
-                f"temp_error: {temp_error:+.2f}°C, "
-                f"time_pressure: {time_pressure:.2f}, "
-                f"urgency: {urgency_multiplier:.2f}x)"
+                f"🎯 Corrected outlet: {corrected_outlet:.1f}°C "
+                f"({outlet_temp:.1f}°C + {correction:+.1f}°C) "
+                f"(deviation: {initial_deviation:.1f}°C, temp_error: {temp_error:+.2f}°C)"
             )
 
             return corrected_outlet
@@ -1122,21 +1114,6 @@ class EnhancedModelWrapper:
         except Exception as e:
             logging.error(f"Physics-based correction failed: {e}")
             return outlet_temp
-
-    def _get_response_zone(self, deviation: float) -> str:
-        """
-        Determine graduated response zone based on temperature deviation.
-        
-        PRIORITY 2 ENHANCEMENT: Graduated response with hysteresis
-        """
-        if deviation < 0.1:
-            return "maintenance"      # Minimal adjustments
-        elif deviation < 0.3:
-            return "fine_tuning"      # Gentle corrections
-        elif deviation < 0.7:
-            return "active_control"   # Standard response
-        else:
-            return "rapid_correction" # Aggressive action
 
     def _calculate_time_pressure(self, trajectory: Dict, cycle_hours: float) -> float:
         """
