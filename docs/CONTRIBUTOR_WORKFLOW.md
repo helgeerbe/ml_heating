@@ -1,50 +1,39 @@
-# ML Heating Contributor Workflow Guide
+# Development Workflow - Alpha-Based Multi-Add-on Architecture
 
-## 🎯 Alpha-Based Dual-Channel Release Strategy
+## Overview
 
-The ML Heating project uses an **alpha-based dual-channel release system** inspired by the t0bst4r approach. This professional deployment strategy provides separate stable and alpha channels with dynamic version management during builds.
+This document captures the comprehensive alpha-based dual-channel development workflow implemented for the ML Heating project. The system uses a t0bst4r-inspired approach with separate stable and alpha channels, each with distinct add-ons and deployment strategies.
 
-## 📋 Channel Overview
+## Alpha-Based Multi-Add-on Architecture
 
-| Channel | Add-on Name | Auto-Update | Tag Format | Container | Use Case |
-|---------|-------------|-------------|------------|-----------|----------|
-| **🎯 Stable** | "ML Heating Control" | ✅ **Enabled** | `v0.1.0`, `v1.0.0` | `ghcr.io/helgeerbe/ml_heating:0.1.0` | Production releases |
-| **🚧 Alpha** | "ML Heating Control (Alpha {version})" | ❌ **Disabled** | `v0.1.0-alpha.1` | `ghcr.io/helgeerbe/ml_heating:0.1.0-alpha.1` | Testing/development |
+### Dual Channel Strategy
 
-## 🏗️ Multi-Add-on Architecture
+**Stable Channel** (`ml_heating`):
+- **Git Tags**: `v*` (e.g., `v0.1.0`, `v0.2.0`) - excludes alpha releases
+- **Add-on Config**: `ml_heating_addons/ml_heating/config.yaml`
+- **Container**: `ghcr.io/helgeerbe/ml_heating:{version}`
+- **Auto-Updates**: ✅ Enabled for production reliability
+- **Target Users**: Production deployments, general public
 
-### Dual Add-on Structure
-```
-ml_heating_addons/
-├── ml_heating/          # Stable channel add-on
-│   ├── config.yaml      # Production configuration
-│   └── build.json       # Stable build context
-└── ml_heating_dev/      # Alpha channel add-on
-    ├── config.yaml      # Development configuration  
-    └── build.json       # Alpha build context
-```
+**Alpha Channel** (`ml_heating_dev`):
+- **Git Tags**: `v*-alpha.*` (e.g., `v0.1.0-alpha.1`, `v0.1.0-alpha.8`)
+- **Add-on Config**: `ml_heating_addons/ml_heating_dev/config.yaml`
+- **Container**: `ghcr.io/helgeerbe/ml_heating:{alpha-version}`
+- **Auto-Updates**: ❌ Disabled (manual testing)
+- **Target Users**: Beta testers, developers, early adopters
 
-### Dynamic Version Management (t0bst4r-inspired)
-The build workflows automatically update add-on configurations during builds:
+### Branch Strategy
+- **`main`** - Primary development branch, source for both channels
+- **Feature branches** - Temporary branches for specific development work
+- **All releases built from `main`** - Single source of truth for releases
 
-**Alpha Builds:**
+## Alpha Development Workflow
+
+### Alpha Release Cycle
+
+#### Alpha Development Process
 ```bash
-# Extract version from git tag: v0.1.0-alpha.8 → 0.1.0-alpha.8
-yq eval ".version = \"$VERSION\"" -i ml_heating_addons/ml_heating_dev/config.yaml
-yq eval ".name = \"ML Heating Control (Alpha $VERSION)\"" -i ml_heating_addons/ml_heating_dev/config.yaml
-```
-
-**Stable Builds:**
-```bash
-# Update stable configuration: v0.1.0 → 0.1.0
-sed -i "s/^version: .*/version: \"$VERSION\"/" ml_heating_addons/ml_heating/config.yaml
-```
-
-## 🔄 Workflow Process
-
-### 🚧 Alpha Release Workflow (Main Development Flow)
-```bash
-# 1. Make changes and commit to main branch
+# 1. Make changes and commit to main
 git add .
 git commit -m "feat(physics): improve seasonal learning algorithm"
 git push origin main
@@ -53,311 +42,1244 @@ git push origin main
 git tag v0.1.0-alpha.9
 git push origin v0.1.0-alpha.9
 
-# ✅ Result: 
-# - "ML Heating Control (Alpha 0.1.0-alpha.9)" add-on available
-# - Auto-updates disabled (manual testing)
-# - Development warnings in release notes
-# - Multi-platform containers built
+# 3. GitHub Actions automatically:
+#    - Validates alpha add-on configuration with HA linter
+#    - Updates version dynamically: "dev" → "0.1.0-alpha.9"
+#    - Updates add-on name: "ML Heating Control (Alpha 0.1.0-alpha.9)"
+#    - Builds multi-platform containers (amd64, aarch64, armhf)
+#    - Creates alpha release with development warnings
+
+# 4. Community tests alpha release
+# 5. Iterate with more alpha builds as needed
 ```
 
-### 🎯 Stable Release Workflow
-```bash
-# 1. Alpha releases tested extensively by community
-# 2. No critical bugs reported for 1+ weeks
-# 3. Documentation updated and complete
+#### Alpha Tag Examples
+- `v0.1.0-alpha.1` - First alpha build of v0.1.0
+- `v0.1.0-alpha.8` - Latest testing iteration
+- `v0.2.0-alpha.1` - New feature development cycle
 
-# 4. Create stable release
+### Stable Release Cycle
+
+#### When to Create Stable Releases
+- Alpha releases tested extensively by community
+- No critical bugs reported for 1+ weeks
+- All planned features for version complete
+- Documentation updated and comprehensive
+- Automated workflows tested and validated
+
+#### Stable Release Process
+```bash
+# When alpha testing is complete
 git tag v0.1.0
 git push origin v0.1.0
 
-# ✅ Result:
-# - "ML Heating Control" add-on available  
-# - Auto-updates enabled for production reliability
-# - Comprehensive release notes
-# - Both alpha and stable add-ons available simultaneously
+# GitHub Actions automatically:
+# - Detects stable release (not alpha)
+# - Updates stable add-on version: "0.1.0" → "0.1.0"
+# - Builds production containers
+# - Creates production release with comprehensive documentation
+# - Enables auto-updates for stable users
 ```
 
-## 🤖 Build System Behavior
+### Dynamic Version Management (t0bst4r-inspired)
 
-### Workflow Triggers
+#### Alpha Build Version Updates
+The development workflow automatically updates add-on configuration during build:
 
-**Alpha Development Workflow** (`.github/workflows/build-dev.yml`):
+```bash
+# Extract version from git tag
+TAG_NAME=${GITHUB_REF#refs/tags/}
+VERSION=${TAG_NAME#v}  # v0.1.0-alpha.8 → 0.1.0-alpha.8
+
+# Update alpha add-on configuration dynamically
+yq eval ".version = \"$VERSION\"" -i ml_heating_addons/ml_heating_dev/config.yaml
+yq eval ".name = \"ML Heating Control (Alpha $VERSION)\"" -i ml_heating_addons/ml_heating_dev/config.yaml
+```
+
+#### Stable Build Version Updates
+```bash
+# Update stable add-on configuration
+sed -i "s/^version: .*/version: \"$VERSION\"/" ml_heating_addons/ml_heating/config.yaml
+```
+
+This ensures:
+- **Alpha add-ons** show specific version (e.g., "0.1.0-alpha.8") and include version in name
+- **Stable add-ons** show clean semantic version (e.g., "0.1.0") with standard name
+- **No manual configuration updates** needed - all handled by workflow automation
+
+## Workflow Trigger Architecture
+
+### Alpha Development Workflow (`.github/workflows/build-dev.yml`)
+
 ```yaml
+name: Build Development Release
+
 on:
   push:
-    tags: ['v*-alpha.*']  # Only alpha tags
+    tags: ['v*-alpha.*']  # Only alpha tags trigger this workflow
+  workflow_dispatch:
+
+jobs:
+  validate:     # HA linter validation for alpha add-on
+  build-addon:  # Dynamic version update + multi-platform build  
+  release:      # Alpha release with development warnings
 ```
 
-**Stable Release Workflow** (`.github/workflows/build-stable.yml`):
+**Key Features**:
+- **Alpha-only triggering**: Only `v*-alpha.*` tags activate this workflow
+- **Dynamic configuration**: Version and name updated automatically during build
+- **Development warnings**: Release notes emphasize experimental nature
+- **Disabled auto-updates**: Manual updates required for safety
+
+### Stable Release Workflow (`.github/workflows/build-stable.yml`)
+
 ```yaml
+name: Build Stable Release
+
 on:
   push:
     tags: ['v*']         # All version tags
     branches-ignore: ['**']
 
 jobs:
-  check-release-type:    
-    if: ${{ !contains(github.ref, 'alpha') }}  # Skip alpha releases
+  check-release-type:    # Skip if alpha/dev tags detected
+  validate:             # HA linter validation (if stable)
+  build-addon:          # Version update + production build
+  release:              # Production release
 ```
 
-### Version Processing Examples
-```bash
-# Alpha builds
-v0.1.0-alpha.1 → 
-  - Alpha add-on version: "0.1.0-alpha.1"
-  - Alpha add-on name: "ML Heating Control (Alpha 0.1.0-alpha.1)"
-  - Container: ghcr.io/helgeerbe/ml_heating:0.1.0-alpha.1
+**Key Features**:
+- **Smart filtering**: Automatically skips alpha releases using condition checks
+- **Production configuration**: Enables auto-updates and optimized settings
+- **Comprehensive releases**: Full feature documentation and upgrade guides
+- **Multi-platform builds**: Same architecture support as alpha channel
 
-# Stable builds  
-v0.1.0 →
-  - Stable add-on version: "0.1.0"
-  - Stable add-on name: "ML Heating Control"
-  - Container: ghcr.io/helgeerbe/ml_heating:0.1.0
-  - Latest tag: ghcr.io/helgeerbe/ml_heating:latest
+## Development Best Practices
+
+### Alpha Development Guidelines
+
+#### When to Create Alpha Releases
+- **New feature development**: Initial implementation ready for testing
+- **Bug fixes**: Community-reported issues requiring validation
+- **Performance improvements**: Optimizations needing real-world measurement
+- **Configuration changes**: Add-on setting modifications requiring testing
+- **Integration enhancements**: InfluxDB, Home Assistant, or external service improvements
+
+#### Alpha Release Frequency
+- **Active development**: Multiple alpha releases per week
+- **Feature completion**: Alpha series until feature is stable
+- **Community feedback**: Iterate based on tester reports
+- **No time pressure**: Release when ready, not on schedule
+
+#### Alpha Naming Convention
+```bash
+# Feature development progression
+v0.1.0-alpha.1  →  Initial feature implementation
+v0.1.0-alpha.2  →  Bug fixes from testing
+v0.1.0-alpha.3  →  Performance improvements
+v0.1.0-alpha.4  →  Final polish and documentation
+v0.1.0          →  Stable release
+
+# Next feature cycle
+v0.2.0-alpha.1  →  New major feature development
+# ... iterate through alpha testing
+v0.2.0          →  Next stable release
 ```
 
-## 📝 Version Naming Rules
+### Stable Release Guidelines
 
-### ✅ Valid Alpha Tag Examples
+#### Version Progression Rules
+- **Alpha Build (+alpha.N)**: Testing iterations, experimental features
+- **Patch (+0.0.1)**: Bug fixes, minor improvements, no breaking changes
+- **Minor (+0.1.0)**: New features, significant improvements, backward compatible
+- **Major (+1.0.0)**: Breaking changes, major architecture changes
+
+#### Quality Gates for Stable Release
+- [ ] **Community Testing**: Multiple alpha releases tested by users
+- [ ] **Documentation Complete**: Installation guides, configuration docs updated
+- [ ] **Issue Resolution**: No critical bugs reported in latest alphas
+- [ ] **Feature Completeness**: All planned features implemented and tested
+- [ ] **Workflow Validation**: CI/CD processes tested and working correctly
+
+## Git Workflow Commands
+
+### Standard Development Commands
 ```bash
-# Alpha development cycle toward v0.1.0
-v0.1.0-alpha.1    # First alpha build
-v0.1.0-alpha.2    # Bug fixes from community testing
-v0.1.0-alpha.3    # Feature additions
-v0.1.0-alpha.8    # Final testing iteration
+# Check current status and branch
+git status
+git branch -a
 
-# Next feature development cycle
-v0.2.0-alpha.1    # New major features
-v0.2.0-alpha.5    # After multiple iterations
-
-# Patch development
-v0.1.1-alpha.1    # Patch improvements testing
-```
-
-### ✅ Valid Stable Tag Examples
-```bash
-v0.1.0    # First stable release (after alpha testing)
-v0.2.0    # Major feature release  
-v0.1.1    # Patch release
-v1.0.0    # Production-ready major release
-```
-
-### ❌ Invalid Tag Examples
-```bash
-# Old "dev" format (no longer used)
-v0.1.0-dev.1     ❌ Use -alpha.N instead
-v0.2.0-dev.2     ❌ Use -alpha.N instead
-
-# Other prerelease formats (not supported)
-v0.1.0-beta.1    ❌ Use -alpha.N format
-v0.2.0-rc1       ❌ Use -alpha.N format
-v1.0.0-pre       ❌ Use -alpha.N format
-```
-
-## 🔧 Practical Workflows
-
-### Feature Development Workflow
-```bash
-# 1. Develop new feature on main branch
-git checkout main
-git pull origin main
-
-# ... implement feature ...
-git add .
-git commit -m "feat(heating): add multi-zone temperature control"
+# Standard commit workflow
+git add <files>
+git commit -m "feat(scope): description following conventional commits"
 git push origin main
 
-# 2. Create alpha release for community testing
+# Alpha release tagging
+git tag v0.1.0-alpha.9
+git push origin v0.1.0-alpha.9
+
+# Stable release tagging  
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+### Branch Management
+```bash
+# Create feature branch for complex development
+git checkout -b feature/new-heating-algorithm
+git push -u origin feature/new-heating-algorithm
+
+# Merge back to main when complete
+git checkout main
+git merge feature/new-heating-algorithm
+git push origin main
+git branch -d feature/new-heating-algorithm
+```
+
+### Tag Management
+```bash
+# List existing tags
+git tag -l
+
+# Delete incorrect tag (local and remote)
+git tag -d v0.1.0-alpha.9
+git push origin :refs/tags/v0.1.0-alpha.9
+
+# Check tag details
+git show v0.1.0-alpha.8
+```
+
+## Testing Standards and Requirements
+
+### Core Principle: Test-Driven Quality and Development
+
+**All development is now strictly Test-Driven (TDD)**. All new features and bug fixes **MUST** begin with writing tests. The project maintains a **100% test success rate** standard (currently 207/207 tests passing). **No task is considered complete until all tests pass.**
+
+### Current Test Coverage Status (As of Feb 10, 2026)
+
+**Test Suite Health: EXCELLENT**
+- ✅ **207/207 tests passing (100% success rate)**
+- ✅ **Comprehensive Coverage**: Unit tests for all critical modules are now in place.
+- ✅ **Structural Integrity**: Tests are organized into `unit` and `integration` directories for clarity and maintainability.
+
+**Previously identified coverage gaps have been filled:**
+- ✅ `model_wrapper.py`
+- ✅ `thermal_equilibrium_model.py`
+- ✅ `unified_thermal_state.py`
+- ✅ `heating_controller.py`
+- ✅ `main.py` (integration tests)
+- ✅ `adaptive_fireplace_learning.py`
+- ✅ `multi_heat_source_physics.py`
+- ✅ `physics_calibration.py`
+- ✅ `forecast_analytics.py`
+- ✅ `thermal_state_validator.py`
+- ✅ `utils_metrics.py`
+- ✅ `temperature_control.py`
+- ✅ `prediction_context.py`
+- ✅ `ha_client.py`
+- ✅ `influx_service.py`
+
+### Testing Requirements for New Development
+
+#### Mandatory Test Coverage
+Every new feature or bug fix MUST include:
+
+1. **Unit Tests** - Test individual functions and methods
+2. **Edge Case Testing** - Boundary conditions, error handling
+3. **Mock External Dependencies** - HA API, InfluxDB, network calls
+4. **Integration Tests** (when applicable) - Cross-component interactions
+5. **Test Success** - All tests must pass before merging
+
+#### Test Coverage Standards
+
+```python
+# Example test structure for new features
+import pytest
+from unittest.mock import Mock, patch
+from src.new_feature import NewFeature
+
+class TestNewFeature:
+    """Comprehensive tests for NewFeature functionality."""
+    
+    def test_basic_functionality(self):
+        """Test core feature behavior."""
+        feature = NewFeature()
+        result = feature.process(input_data)
+        assert result == expected_output
+    
+    def test_edge_cases(self):
+        """Test boundary conditions."""
+        feature = NewFeature()
+        # Test with empty input
+        assert feature.process([]) == default_value
+        # Test with extreme values
+        assert feature.process(large_value) == clamped_value
+    
+    @patch('src.new_feature.external_api')
+    def test_with_mocked_dependencies(self, mock_api):
+        """Test with external dependencies mocked."""
+        mock_api.return_value = test_data
+        feature = NewFeature()
+        result = feature.process()
+        assert result uses test_data
+    
+    def test_error_handling(self):
+        """Test error conditions and recovery."""
+        feature = NewFeature()
+        with pytest.raises(ValueError):
+            feature.process(invalid_input)
+```
+
+### Test File Organization
+
+```
+tests/
+├── unit/                       # Unit tests for individual components
+│   ├── test_model_wrapper.py
+│   └── ...
+├── integration/                # Integration tests for component interactions
+│   ├── test_main.py
+│   └── ...
+└── conftest.py                 # Pytest configuration
+```
+
+### Running Tests Locally
+
+#### Execute Test Suite
+```bash
+# Run all tests
+pytest tests/
+
+# Run specific test file
+pytest tests/test_heat_balance_controller.py
+
+# Run with coverage report
+pytest tests/ --cov=src --cov-report=html
+
+# Run with verbose output
+pytest tests/ -v
+
+# Run specific test function
+pytest tests/test_heat_balance_controller.py::TestHeatBalanceController::test_charging_mode
+```
+
+#### Expected Test Output
+```bash
+$ pytest tests/
+============================= test session starts ==============================
+collected 16 items
+
+tests/test_blocking_polling.py ....                                      [ 25%]
+tests/test_clamp_baseline.py ...                                         [ 43%]
+tests/test_heat_balance_controller.py .......                            [ 87%]
+tests/test_pv_forecast.py .                                              [ 93%]
+tests/test_state_manager.py .                                            [100%]
+
+========================== 207 passed, 1 warning in 1.26s ===========================
+```
+
+### Mocking Strategies
+
+#### Mock External Dependencies
+```python
+# Mock Home Assistant API calls
+@patch('src.ha_client.HAClient.get_state')
+def test_with_ha_mock(mock_get_state):
+    mock_get_state.return_value = 21.5
+    result = function_using_ha()
+    assert result is correct
+
+# Mock InfluxDB queries
+@patch('src.influx_service.InfluxService.fetch_history')
+def test_with_influx_mock(mock_fetch):
+    mock_fetch.return_value = [21.0, 21.2, 21.5]
+    result = function_using_influx()
+    assert result processes mock_data
+
+# Mock time-dependent functions
+@patch('src.main.datetime')
+def test_with_time_mock(mock_datetime):
+    mock_datetime.now.return_value = fixed_time
+    result = time_dependent_function()
+    assert result is deterministic
+```
+
+### CI/CD Integration
+
+#### Automated Testing
+All tests run automatically on:
+- **Pull Requests** - Tests must pass before merge
+- **Push to main** - Validates code quality
+- **Alpha releases** - Ensures stability before tagging
+
+#### Test Failure Protocol
+If tests fail:
+1. **Local debugging** - Run tests locally to reproduce
+2. **Fix or skip** - Fix the issue or skip flaky tests temporarily
+3. **Never merge failing tests** - Maintain 100% success rate
+4. **Document skipped tests** - Create issue to fix properly
+
+### Test-Driven Development (TDD) Workflow
+
+#### Recommended Approach
+```bash
+# 1. Write test first (it will fail - that's expected!)
+# tests/test_new_feature.py
+def test_new_functionality():
+    result = new_function(input)
+    assert result == expected
+
+# 2. Run test (should fail)
+pytest tests/test_new_feature.py
+# FAILED: NameError: new_function not defined
+
+# 3. Implement minimal code to pass test
+# src/new_feature.py
+def new_function(input):
+    return expected  # Simplest implementation
+
+# 4. Run test (should pass)
+pytest tests/test_new_feature.py
+# PASSED
+
+# 5. Refactor and improve
+# Enhance implementation while keeping tests passing
+
+# 6. Add more test cases
+# Cover edge cases, error conditions, etc.
+```
+
+### Testing Checklist for Issues
+
+Include in every issue's task plan:
+```markdown
+## Task Plan
+- [ ] Design architecture/approach
+- [ ] Implement core functionality
+- [ ] **Write unit tests (aim for comprehensive coverage)**
+- [ ] **Test edge cases and error handling**
+- [ ] **Mock external dependencies properly**
+- [ ] **Verify all tests pass locally**
+- [ ] Update configuration examples
+- [ ] Update documentation
+- [ ] Create monitoring/dashboard updates
+- [ ] Test in development environment
+- [ ] Update CHANGELOG.md
+- [ ] Create alpha release for testing
+```
+
+### Future Test Development Priorities
+
+When expanding test coverage, prioritize:
+
+**Phase 1: Core ML Logic (Critical)**
+1. `test_physics_model.py` - Multi-lag learning, seasonal adaptation, predictions
+2. `test_model_wrapper.py` - 7-stage pipeline, optimization, monotonic enforcement
+3. `test_physics_features.py` - Feature engineering and aggregation
+
+**Phase 2: Integration Points**
+4. `test_ha_client.py` - Home Assistant API with comprehensive mocking
+5. `test_influx_service.py` - InfluxDB queries and data persistence
+
+**Phase 3: Supporting Systems**
+6. `test_physics_calibration.py` - Calibration algorithms and metrics
+7. `test_utils_metrics.py` - Utility functions and calculations
+
+### Testing Best Practices
+
+#### DO's ✅
+- ✅ Write tests for ALL new features
+- ✅ Test edge cases and boundary conditions
+- ✅ Mock external dependencies (HA, InfluxDB)
+- ✅ Run tests locally before committing
+- ✅ Keep tests fast (under 5 seconds total)
+- ✅ Make tests deterministic (no randomness)
+- ✅ Use descriptive test names
+- ✅ Maintain 100% test success rate
+
+#### DON'Ts ❌
+- ❌ Commit code without tests
+- ❌ Skip testing "because it's simple"
+- ❌ Write flaky tests that sometimes fail
+- ❌ Test implementation details (test behavior)
+- ❌ Leave commented-out test code
+- ❌ Merge failing tests "to fix later"
+- ❌ Ignore test failures in CI/CD
+
+## Issue-Driven Development Workflow
+
+### Core Principle: Issues Before Code
+
+**All development work must start with a GitHub Issue**. This ensures:
+- Clear problem definition before implementation
+- Detailed task planning and tracking
+- Transparent progress visibility
+- Proper documentation of decisions
+
+### Issue Creation Requirements
+
+#### Before Starting Any Development
+1. **Create GitHub Issue First** - No code without an issue
+2. **Write Detailed Task Plan** - Break down work into specific steps
+3. **Define Success Criteria** - Clear acceptance criteria
+4. **Get Approval (if major)** - Discuss approach before implementation
+
+#### Issue Template Structure
+
+**Bug Report Format:**
+```markdown
+## Bug Description
+Clear description of the issue
+
+## Steps to Reproduce
+1. Step one
+2. Step two
+3. Observed behavior
+
+## Expected Behavior
+What should happen instead
+
+## Environment
+- Version: 
+- Platform:
+- Configuration:
+
+## Task Plan
+- [ ] Identify root cause
+- [ ] Implement fix
+- [ ] **Add/update test coverage (reproduce bug, verify fix)**
+- [ ] **Ensure all tests pass (pytest tests/)**
+- [ ] **Update documentation**
+  - [ ] README.md: Document bug fix
+  - [ ] CHANGELOG.md: Add fix to [Unreleased] section
+  - [ ] Add-on docs if configuration changed
+- [ ] Verify fix in development environment
+- [ ] Create alpha release for validation
+- [ ] Verify in production
+```
+
+**Note**: Bug fixes MUST include tests that reproduce the bug and verify the fix!
+
+**Feature/Enhancement Format:**
+```markdown
+## Feature Description
+Clear description of the new functionality
+
+## Problem Statement
+What problem does this solve?
+
+## Proposed Solution
+How will this be implemented?
+
+## Acceptance Criteria
+- [ ] Criterion 1
+- [ ] Criterion 2
+- [ ] Criterion 3
+
+## Task Plan
+- [ ] Design architecture/approach
+- [ ] Implement core functionality
+- [ ] **Write comprehensive unit tests**
+  - [ ] Test core functionality
+  - [ ] Test edge cases and boundaries
+  - [ ] Mock external dependencies
+  - [ ] Test error handling
+  - [ ] Achieve 100% test success rate
+- [ ] **Update documentation (mandatory)**
+  - [ ] README.md: Feature list, configuration, usage examples
+  - [ ] CHANGELOG.md: Document all changes in [Unreleased]
+  - [ ] Add-on docs: ml_heating/README.md and ml_heating_dev/README.md
+  - [ ] Config examples: .env_sample, config.yaml files
+  - [ ] Memory bank: systemPatterns.md, activeContext.md
+- [ ] Create monitoring/dashboard updates (if applicable)
+- [ ] Test in development environment
+- [ ] **Verify all 207+ tests pass locally (pytest)**
+- [ ] Update CHANGELOG.md
+- [ ] Create alpha release for testing
+
+## Technical Considerations
+- Dependencies:
+- Breaking changes:
+- Migration path:
+```
+
+### Task Planning Standards
+
+#### Detailed Task Breakdown Required
+Every issue must include a **checklist of specific tasks**:
+
+```markdown
+## Task Plan
+- [ ] Design architecture/approach
+- [ ] Implement core functionality
+- [ ] **Write unit tests (comprehensive coverage required)**
+- [ ] **Test edge cases and error handling**
+- [ ] **Mock external dependencies (HA, InfluxDB)**
+- [ ] **Verify all tests pass locally (pytest tests/)**
+- [ ] Update configuration examples
+- [ ] Update documentation
+- [ ] Create monitoring/dashboard updates (if applicable)
+- [ ] Test in development environment
+- [ ] Update CHANGELOG.md
+- [ ] Create alpha release for testing
+```
+
+**Note**: Testing is mandatory - no feature is complete without tests!
+
+#### Task Update Protocol
+**As work progresses, update the issue:**
+
+```bash
+# Mark task complete by editing issue description
+# Change [ ] to [x] for completed tasks
+
+# Example progression:
+- [x] Step 1: Specific, measurable task  ✅ Completed
+- [x] Step 2: Another specific task      ✅ Completed
+- [ ] Step 3: Testing task               🔄 In Progress
+- [ ] Step 4: Documentation task         ⏳ Pending
+```
+
+#### Progress Comments
+Add comments to track progress and decisions:
+
+```bash
+gh issue comment <issue-number> --body "**Progress Update**: 
+- Completed architecture design
+- Implemented core controller logic
+- Next: Add test coverage"
+```
+
+### Development Workflow with Issues
+
+#### Complete Issue-Driven Workflow
+
+```bash
+# 1. CREATE ISSUE FIRST (Required)
+gh issue create \
+  --title "feat: Add adaptive trajectory horizon controller" \
+  --body "$(cat issue-template.md)" \
+  --label "enhancement" \
+  --assignee @me
+
+# Issue created: #16
+
+# 2. REFERENCE ISSUE IN COMMITS
+git commit -m "feat(controller): implement base trajectory logic
+
+- Add trajectory prediction framework
+- Implement horizon calculation
+- Add configuration parameters
+
+Related to #16"
+
+# 3. UPDATE ISSUE PROGRESS
+# Edit issue description to check off completed tasks
+# Or add progress comments:
+gh issue comment 16 --body "✅ Completed: Base trajectory logic implemented"
+
+# 4. LINK COMMITS TO ISSUE
+# All commits should reference the issue number
+git commit -m "test: add trajectory controller tests
+
+- Comprehensive test suite for new controller
+- 100% coverage achieved
+- All edge cases covered
+
+Closes #16"
+
+# 5. CLOSE ISSUE WHEN COMPLETE
+# Using "Closes #16" in commit message auto-closes when merged
+# Or manually close:
+gh issue close 16 --comment "Completed and merged to main. Released in v0.2.0-alpha.1"
+```
+
+#### Commit Message Format with Issue References
+
+```bash
+# Standard format:
+<type>(<scope>): <description>
+
+<body>
+
+Related to #<issue-number>
+# or
+Closes #<issue-number>
+
+# Examples:
+git commit -m "feat(physics): improve seasonal adaptation algorithm
+
+- Enhanced cos/sin modulation
+- Better convergence for edge cases
+- Reduced learning time by 30%
+
+Related to #15"
+
+git commit -m "fix(controller): correct trajectory stability calculation
+
+- Fixed oscillation penalty weight application
+- Improved final destination scoring
+- Added bounds checking
+
+Closes #14"
+```
+
+### Issue Lifecycle Management
+
+#### Issue States and Labels
+
+**Status Labels:**
+- `planning` - Issue created, planning in progress
+- `in-progress` - Active development underway
+- `testing` - Implementation complete, testing phase
+- `review-needed` - Ready for code review
+- `blocked` - Waiting on external dependency
+- `completed` - Work finished and merged
+
+**Type Labels:**
+- `bug` - Production bugs requiring fixes
+- `enhancement` - New features or improvements
+- `documentation` - Documentation updates
+- `refactoring` - Code quality improvements
+- `alpha-testing` - Alpha release testing
+
+**Priority Labels:**
+- `priority-critical` - Blocking production issues
+- `priority-high` - Important improvements
+- `priority-medium` - Standard enhancements
+- `priority-low` - Nice-to-have features
+
+#### Issue Lifecycle Flow
+
+```
+1. CREATE ISSUE (with detailed task plan)
+   ↓
+2. LABEL & ASSIGN (planning, priority, type)
+   ↓
+3. UPDATE TO in-progress (when development starts)
+   ↓
+4. COMMIT WITH REFERENCES (all commits reference issue)
+   ↓
+5. UPDATE TASK CHECKLIST (as tasks complete)
+   ↓
+6. UPDATE TO testing (when code complete)
+   ↓
+7. CREATE ALPHA RELEASE (for community testing)
+   ↓
+8. CLOSE ISSUE (with completion comment)
+```
+
+### Best Practices
+
+#### DO's ✅
+- ✅ Create issue BEFORE starting any code
+- ✅ Include detailed task breakdown
+- ✅ Update issue as work progresses
+- ✅ Reference issue in ALL related commits
+- ✅ Add progress comments for visibility
+- ✅ Close with summary of what was accomplished
+- ✅ Link to related PRs, releases, or documentation
+
+#### DON'Ts ❌
+- ❌ Start coding without an issue
+- ❌ Create vague issues without task plans
+- ❌ Forget to update issue progress
+- ❌ Commit without referencing issue number
+- ❌ Close issues without completion comment
+- ❌ Leave issues open after work is merged
+
+### GitHub CLI Commands Reference
+
+#### Issue Creation
+```bash
+# Create bug report
+gh issue create --title "bug: Description" --label "bug,priority-high"
+
+# Create feature request
+gh issue create --title "feat: Description" --label "enhancement"
+
+# Create with body from file
+gh issue create --title "feat: New feature" --body-file issue-template.md
+```
+
+#### Issue Management
+```bash
+# List all open issues
+gh issue list
+
+# List by label
+gh issue list --label "in-progress"
+
+# View issue details
+gh issue view 16
+
+# Add comment
+gh issue comment 16 --body "Progress update..."
+
+# Close issue
+gh issue close 16 --comment "Completed in v0.2.0-alpha.1"
+
+# Reopen if needed
+gh issue reopen 16
+```
+
+#### Issue Search and Filtering
+```bash
+# Search issues
+gh issue list --search "trajectory"
+
+# Filter by assignee
+gh issue list --assignee @me
+
+# Filter by state
+gh issue list --state closed
+
+# Complex search
+gh issue list --label "enhancement" --search "controller" --state open
+```
+
+## GitHub Issue Management
+
+### GitHub CLI Setup
+Ensure GitHub CLI is installed and authenticated for efficient issue management:
+
+```bash
+# Check authentication
+gh auth status
+
+# Set default repository
+gh repo set-default helgeerbe/ml_heating
+```
+
+### Alpha Release Issue Workflow
+
+#### Creating Alpha Testing Issues
+```bash
+# Create alpha testing issue
+gh issue create \
+  --title "Alpha Testing: v0.1.0-alpha.8 - New Seasonal Learning" \
+  --body "## Testing Request
+
+**Alpha Version**: v0.1.0-alpha.8
+**Focus Areas**: Seasonal learning improvements, PV lag optimization
+
+### What's New
+- Enhanced seasonal adaptation algorithm
+- Improved PV lag coefficient learning
+- Better error handling for edge cases
+
+### Testing Instructions
+1. Install alpha add-on from repository
+2. Monitor learning progress for 24-48 hours
+3. Report any unusual behavior or errors
+4. Check dashboard metrics for improvements
+
+### Feedback Requested
+- Learning convergence speed
+- Prediction accuracy changes
+- Any error messages or issues
+- Performance vs previous version
+
+**⚠️ Alpha Warning**: This is experimental software for testing only." \
+  --label "alpha-testing,community" \
+  --assignee helgeerbe
+
+# Link to alpha release
+gh issue comment <issue-number> --body "Released as [v0.1.0-alpha.8](https://github.com/helgeerbe/ml_heating/releases/tag/v0.1.0-alpha.8)"
+```
+
+#### Community Feedback Management
+```bash
+# List alpha testing issues
+gh issue list --label "alpha-testing"
+
+# Update issue with feedback
+gh issue comment <issue-number> --body "**Update**: Fixed reported issue with PV coefficient learning"
+
+# Close resolved alpha issues
+gh issue close <issue-number> --comment "Resolved in v0.1.0-alpha.9. Thank you for testing!"
+```
+
+### Issue Labels for Multi-Add-on Project
+```bash
+# Alpha channel labels
+alpha-testing     # Community testing of alpha releases
+alpha-feedback    # User feedback on alpha features
+alpha-bug        # Bugs found in alpha releases
+
+# Stable channel labels  
+stable-release   # Stable release planning
+production-bug   # Issues in stable releases
+enhancement      # Feature requests for stable
+
+# Component labels
+workflow         # CI/CD and build process issues
+documentation    # Docs updates for dual-channel setup
+multi-addon      # Issues related to dual add-on architecture
+```
+
+## Container and Deployment Workflow
+
+### Multi-Platform Building
+Both alpha and stable channels support all Home Assistant platforms:
+- **linux/amd64** - Standard x86_64 systems (Intel/AMD)
+- **linux/aarch64** - Raspberry Pi 4, Apple Silicon, newer ARM64
+- **linux/arm/v7** - Raspberry Pi 3, older ARM systems
+
+Home Assistant Builder automatically handles cross-compilation.
+
+### Container Tagging Strategy
+
+#### Alpha Containers
+```bash
+# Each alpha gets specific container tag
+v0.1.0-alpha.1  →  ghcr.io/helgeerbe/ml_heating:0.1.0-alpha.1
+v0.1.0-alpha.8  →  ghcr.io/helgeerbe/ml_heating:0.1.0-alpha.8
+v0.2.0-alpha.1  →  ghcr.io/helgeerbe/ml_heating:0.2.0-alpha.1
+```
+
+#### Stable Containers
+```bash
+# Stable versions get semantic tags plus latest
+v0.1.0  →  ghcr.io/helgeerbe/ml_heating:0.1.0
+v0.2.0  →  ghcr.io/helgeerbe/ml_heating:0.2.0, :latest
+```
+
+### Deployment Validation
+
+#### Alpha Testing Workflow
+```bash
+# 1. Monitor GitHub Actions build
+gh run list --workflow="Build Development Release"
+
+# 2. Verify container publication
+# Check packages at: https://github.com/helgeerbe/ml_heating/pkgs/container/ml_heating
+
+# 3. Test Home Assistant discovery
+# Add repository in HA: https://github.com/helgeerbe/ml_heating
+# Verify "ML Heating Control (Development)" appears
+
+# 4. Installation testing
+# Install alpha add-on and verify functionality
+# Check logs for errors or warnings
+
+# 5. Community notification
+gh issue create --title "Alpha Testing Available: v0.1.0-alpha.X" --body "..."
+```
+
+#### Stable Release Validation
+```bash
+# 1. Final alpha testing complete
+# Ensure latest alpha has been thoroughly tested
+
+# 2. Pre-release checklist
+# [ ] Documentation updated
+# [ ] CHANGELOG.md entries complete  
+# [ ] No critical alpha issues reported
+# [ ] Community feedback incorporated
+
+# 3. Create stable release
+git tag v0.1.0
+git push origin v0.1.0
+
+# 4. Post-release validation
+# [ ] Both add-ons available in HA
+# [ ] Auto-updates working for stable channel
+# [ ] Release notes complete and accurate
+# [ ] Community announcement posted
+```
+
+## Documentation Requirements
+
+### Core Principle: Documentation is Mandatory
+
+**All new features and significant changes MUST include documentation updates**. Incomplete documentation prevents users from benefiting from new functionality and creates support burden.
+
+### Documentation Files That Require Updates
+
+#### When Adding New Features
+
+**Always Update:**
+1. **README.md** (Project root)
+   - Add new feature to feature list
+   - Update configuration examples if needed
+   - Add usage examples for new functionality
+   - Update system requirements if changed
+
+2. **CHANGELOG.md** (Project root)
+   - Document all changes in unreleased section
+   - Follow semantic versioning guidelines
+   - Include breaking changes prominently
+   - Reference related GitHub issue numbers
+
+3. **Add-on README Files**
+   - `ml_heating/README.md` (Stable channel)
+   - `ml_heating_dev/README.md` (Alpha channel)
+   - Update feature descriptions
+   - Add new configuration parameters
+   - Include usage examples
+   - Update screenshots if UI changed
+
+**Update When Applicable:**
+4. **docs/INSTALLATION_GUIDE.md**
+   - New dependencies or requirements
+   - Changed installation procedures
+   - New configuration steps
+
+5. **docs/QUICK_START.md**
+   - New quick start examples
+   - Updated workflow diagrams
+   - Changed default configurations
+
+6. **Configuration Examples**
+   - `.env_sample` - New environment variables
+   - Config YAML files - New parameters with descriptions
+   - Home Assistant integration examples
+
+7. **Memory Bank Files**
+   - `memory-bank/systemPatterns.md` - New architecture patterns
+   - `memory-bank/activeContext.md` - Current development state
+   - `memory-bank/progress.md` - Feature completion status
+
+### Documentation Update Checklist
+
+#### For Each New Feature
+```markdown
+## Documentation Updates Required
+- [ ] **README.md**: Add feature to feature list with description
+- [ ] **README.md**: Update configuration section if parameters added
+- [ ] **README.md**: Add usage examples
+- [ ] **CHANGELOG.md**: Document changes in [Unreleased] section
+- [ ] **ml_heating/README.md**: Update stable add-on documentation
+- [ ] **ml_heating_dev/README.md**: Update alpha add-on documentation
+- [ ] **.env_sample**: Add new environment variables with descriptions
+- [ ] **Config files**: Document new parameters with defaults and descriptions
+- [ ] **docs/**: Update relevant guide documents
+- [ ] **Memory bank**: Update systemPatterns.md with new architecture
+```
+
+### Documentation Standards
+
+#### README.md Structure
+```markdown
+# ML Heating Control
+
+## Features
+- Existing feature 1
+- Existing feature 2
+- **NEW: Your new feature description**
+
+## Configuration
+
+### New Feature Configuration
+\```yaml
+new_feature_parameter: value  # Description of what this does
+another_parameter: default    # When and why to change this
+\```
+
+### Usage Example
+\```python
+# How to use the new feature
+example_code_here()
+\```
+
+## Changelog
+See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
+```
+
+#### CHANGELOG.md Format
+```markdown
+# Changelog
+
+## [Unreleased]
+
+### Added
+- New feature name: Brief description (#issue-number)
+- Another feature: What it does (#issue-number)
+
+### Changed
+- Modified behavior: What changed and why (#issue-number)
+
+### Fixed
+- Bug description: What was fixed (#issue-number)
+
+### Breaking Changes
+- ⚠️ Important change that breaks compatibility
+- Migration steps: How to upgrade
+
+## [0.1.0] - 2025-12-01
+Previous release notes...
+```
+
+#### Configuration Documentation
+```yaml
+# .env_sample or config.yaml
+# New Parameter Name
+NEW_FEATURE_ENABLED: true
+# Description: Enable/disable the new feature
+# Default: true
+# When to change: Set to false if you experience issues
+# Related: See docs/NEW_FEATURE.md for details
+
+NEW_FEATURE_THRESHOLD: 0.5
+# Description: Threshold value for feature activation
+# Default: 0.5
+# Range: 0.0 to 1.0
+# Impact: Higher values = more conservative behavior
+```
+
+### Documentation Update Workflow
+
+#### Step-by-Step Process
+
+```bash
+# 1. IMPLEMENT FEATURE
+git add src/new_feature.py
+git commit -m "feat(feature): implement new functionality"
+
+# 2. UPDATE MAIN README
+# Edit README.md - add feature, configuration, examples
+git add README.md
+git commit -m "docs(readme): document new feature"
+
+# 3. UPDATE CHANGELOG
+# Edit CHANGELOG.md - add to [Unreleased] section
+git add CHANGELOG.md
+git commit -m "docs(changelog): add new feature entry"
+
+# 4. UPDATE ADD-ON DOCUMENTATION
+# Edit ml_heating/README.md and ml_heating_dev/README.md
+git add ml_heating/README.md ml_heating_dev/README.md
+git commit -m "docs(addon): update add-on documentation"
+
+# 5. UPDATE CONFIGURATION EXAMPLES
+# Edit .env_sample and config files
+git add .env_sample ml_heating/config.yaml ml_heating_dev/config.yaml
+git commit -m "docs(config): add new configuration parameters"
+
+# 6. UPDATE MEMORY BANK
+# Edit relevant memory-bank files
+git add memory-bank/systemPatterns.md memory-bank/activeContext.md
+git commit -m "docs(memory-bank): document new architecture patterns"
+
+# 7. CREATE ALPHA RELEASE
 git tag v0.2.0-alpha.1
 git push origin v0.2.0-alpha.1
-
-# 3. Community tests alpha release
-# - Alpha add-on appears in Home Assistant
-# - Users install and provide feedback
-# - Issues reported via GitHub
-
-# 4. Iterate based on feedback
-git add .
-git commit -m "fix(heating): resolve multi-zone configuration issue"
-git push origin main
-
-git tag v0.2.0-alpha.2
-git push origin v0.2.0-alpha.2
-
-# 5. When alpha testing complete and stable:
-git tag v0.2.0
-git push origin v0.2.0
-# Now both alpha and stable channels available
 ```
 
-### Hotfix Workflow
-```bash
-# 1. Critical bug found in stable release
-git checkout main
+### Documentation Quality Standards
 
-# 2. Create fix
-git add .
-git commit -m "fix(physics): critical temperature calculation error"
-git push origin main
+#### DO's ✅
+- ✅ Update documentation in the same PR as code changes
+- ✅ Include code examples for new features
+- ✅ Document all configuration parameters
+- ✅ Explain WHY a feature exists, not just WHAT it does
+- ✅ Include screenshots for UI changes
+- ✅ Update CHANGELOG.md for every change
+- ✅ Reference GitHub issue numbers
+- ✅ Use clear, concise language
 
-# 3. Optional: Test with alpha first
-git tag v0.1.1-alpha.1  
-git push origin v0.1.1-alpha.1
-# Community can test alpha before stable release
+#### DON'Ts ❌
+- ❌ Commit code without documentation updates
+- ❌ Use technical jargon without explanation
+- ❌ Leave configuration parameters undocumented
+- ❌ Skip CHANGELOG.md entries
+- ❌ Forget to update add-on README files
+- ❌ Assume users understand implementation details
+- ❌ Leave outdated documentation in place
 
-# 4. Create stable hotfix release
-git tag v0.1.1
-git push origin v0.1.1
-# Stable users get automatic update
+### Documentation Review Checklist
+
+Before creating alpha release, verify:
+```markdown
+## Documentation Completeness
+- [ ] README.md updated with new features
+- [ ] CHANGELOG.md includes all changes
+- [ ] Add-on documentation synchronized
+- [ ] Configuration examples updated
+- [ ] Code examples provided and tested
+- [ ] Memory bank reflects current architecture
+- [ ] No outdated information remains
+- [ ] All links and references work
+- [ ] Screenshots updated if UI changed
+- [ ] Breaking changes clearly marked
 ```
 
-### Feature Branch Development (Advanced)
+## Documentation Maintenance
+
+### Memory Bank Updates
+
+#### When to Update Memory Bank
+- **After major alpha releases**: Document new features and architecture changes
+- **Before stable releases**: Ensure all documentation reflects current state
+- **When user requests**: **"update memory bank"** trigger comprehensive review
+- **After workflow changes**: Update development processes and CI/CD changes
+
+#### Memory Bank Update Process
 ```bash
-# 1. Create feature branch for complex development
-git checkout -b feature/advanced-forecasting
-git push -u origin feature/advanced-forecasting
+# 1. Review all memory bank files (required for triggered updates)
+git status memory-bank/
 
-# 2. Develop feature
-# ... multiple commits ...
+# 2. Update key files based on recent changes
+# - activeContext.md: Current development phase and recent accomplishments
+# - systemPatterns.md: Architecture changes and new patterns
+# - versionStrategy.md: Release strategy updates
+# - developmentWorkflow.md: Process improvements
 
-# 3. Test with alpha release from feature branch
-git tag v0.3.0-alpha.1
-git push origin v0.3.0-alpha.1
+# 3. Commit memory bank updates
+git add memory-bank/
+git commit -m "docs(memory-bank): update for alpha architecture v0.1.0-alpha.8
 
-# 4. When feature complete, merge to main
-git checkout main
-git merge feature/advanced-forecasting
-git push origin main
-
-# 5. Continue alpha testing on main
-git tag v0.3.0-alpha.2
-git push origin v0.3.0-alpha.2
-
-# 6. Final stable release
-git tag v0.3.0
-git push origin v0.3.0
+- Document successful multi-add-on implementation
+- Update workflow processes for alpha/stable channels  
+- Capture lessons learned from t0bst4r-inspired approach"
 ```
 
-## 🏠 Home Assistant User Experience
+### Project Documentation Updates
 
-### Stable Channel Users (Production)
-- ✅ **Automatic updates** for stable releases
-- 🎯 **Production-ready** features only
-- 🔒 **Reliability** prioritized over latest features
-- 📧 **Release notifications** for major updates
+#### Documentation Files Requiring Updates
+- **README.md**: Dual-channel installation instructions
+- **docs/INSTALLATION_GUIDE.md**: Separate alpha vs stable installation
+- **docs/CONTRIBUTOR_WORKFLOW.md**: Alpha development process
+- **CHANGELOG.md**: Track both alpha and stable releases
 
-### Alpha Channel Users (Testing Community)
-- ❌ **Manual updates** required for safety
-- 🧪 **Early access** to new features and improvements
-- 🔄 **Frequent releases** during active development
-- 💬 **Direct feedback** to development team
-- 🚧 **Development warnings** about experimental nature
+#### Documentation Standards
+```markdown
+# Example installation section structure
 
-### Dual Installation (Advanced Users)
-- 🎛️ **Both channels** can be installed simultaneously
-- 🔄 **A/B testing** between stable and alpha
-- 📊 **Performance comparison** between versions
-- 🔀 **Easy switching** between channels
+## Installation
 
-## 🛠️ Troubleshooting
+### Stable Channel (Recommended for Production)
+Use this for production heating control with automatic updates.
 
-### Alpha Build Fails
-```bash
-# Check tag format
-git tag -l | grep alpha
-
-# Delete incorrect tag if needed
-git tag -d v0.1.0-alpha.1
-git push origin :refs/tags/v0.1.0-alpha.1
-
-# Create correct alpha tag
-git tag v0.1.0-alpha.1
-git push origin v0.1.0-alpha.1
+### Alpha Channel (Testing and Development)  
+Use this to test latest features and provide feedback to development.
 ```
 
-### Stable Build Accidentally Triggered by Alpha
-- **Automatic prevention**: Stable workflow skips alpha tags
-- **Condition check**: `${{ !contains(github.ref, 'alpha') }}`
-- **Result**: No stable build created for alpha tags
+## Troubleshooting Common Issues
 
-### Alpha Add-on Not Appearing
-1. **Check build success**: GitHub Actions completed
-2. **Verify container**: Published to GitHub Container Registry
-3. **Clear HA cache**: Remove and re-add repository
-4. **Check version format**: Must be valid semantic version
+### Workflow Build Failures
 
-### Version Confusion
+#### Alpha Workflow Issues
 ```bash
-# Check what version containers exist
-gh api repos/helgeerbe/ml_heating/packages/container/ml_heating/versions
-
-# Check which tags triggered which workflows
+# Check workflow status
 gh run list --workflow="Build Development Release"
-gh run list --workflow="Build Stable Release"
-```
 
-## 📊 Release Dashboard & Monitoring
-
-### GitHub Resources
-- **Releases**: https://github.com/helgeerbe/ml_heating/releases
-- **Container Registry**: https://github.com/helgeerbe/ml_heating/pkgs/container/ml_heating
-- **Alpha Workflow**: https://github.com/helgeerbe/ml_heating/actions/workflows/build-dev.yml
-- **Stable Workflow**: https://github.com/helgeerbe/ml_heating/actions/workflows/build-stable.yml
-
-### Release Monitoring
-```bash
-# Monitor workflow runs
-gh run list --limit 20
-
-# Check specific workflow run
+# View specific run details
 gh run view <run-id>
 
-# List recent releases
-gh release list --limit 10
-
-# View release details
-gh release view v0.1.0-alpha.8
+# Common issues:
+# - Missing files in build context
+# - HA linter validation failures  
+# - Docker tag format problems
+# - Platform build failures
 ```
 
-## 📈 Alpha Testing Guidelines
+#### Stable Workflow Issues
+```bash
+# Verify stable workflow triggers correctly
+gh run list --workflow="Build Stable Release"
 
-### For Contributors Creating Alphas
-- 🎯 **Clear focus**: Each alpha should test specific features
-- 📝 **Detailed notes**: Explain what's new and needs testing
-- 🔄 **Iteration ready**: Expect to create multiple alphas
-- 📧 **Community engagement**: Monitor feedback and respond to issues
-
-### For Alpha Testers
-- 🚨 **Backup first**: Alpha is experimental software
-- 📊 **Monitor performance**: Compare against previous stable
-- 🐛 **Report issues**: Use GitHub issues for bug reports
-- 💡 **Provide feedback**: Suggest improvements and share experience
-
-### Alpha Testing Process
-1. **Install alpha add-on** from repository
-2. **Monitor for 24-48 hours** for stability
-3. **Report any issues** via GitHub
-4. **Test new features** and provide feedback
-5. **Compare performance** against stable if possible
-
-## 🎉 Benefits of Alpha Architecture
-
-### For Contributors
-- ✅ **Safe iteration**: Alpha testing protects stable users
-- 🚀 **Fast deployment**: Quick alpha releases for community feedback
-- 📊 **Real-world testing**: Community validates changes in production environments
-- 🔧 **Professional CI/CD**: Automated multi-platform builds
-
-### For Community
-- 🧪 **Early access**: Test features before stable release
-- 🤝 **Collaborative development**: Direct feedback shapes final product
-- 🔒 **Safety**: Alpha channel clearly marked as experimental
-- 🎛️ **Choice**: Pick stability (stable) or features (alpha)
-
-### For Project
-- 📈 **Quality assurance**: Community testing improves release quality
-- 🔄 **Rapid feedback**: Issues found and fixed before stable
-- 🌍 **Broader testing**: Multiple environments and configurations
-- 📊 **Professional appearance**: Matches industry-standard practices
-
-This alpha-based dual-channel system provides professional release management while enabling rapid development and comprehensive community testing! 🚀
+# Common issues:
+# - Alpha release accidentally triggering stable
+# - Version format problems

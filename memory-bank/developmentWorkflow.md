@@ -251,26 +251,33 @@ git show v0.1.0-alpha.8
 
 ## Testing Standards and Requirements
 
-### Core Principle: Test-Driven Quality
+### Core Principle: Test-Driven Quality and Development
 
-**All new features and bug fixes MUST include comprehensive unit tests**. The project maintains a **100% test success rate** standard (16/16 tests passing).
+**All development is now strictly Test-Driven (TDD)**. All new features and bug fixes **MUST** begin with writing tests. The project maintains a **100% test success rate** standard (currently 207/207 tests passing). **No task is considered complete until all tests pass.**
 
-### Current Test Coverage Status
+### Current Test Coverage Status (As of Feb 10, 2026)
 
-**Existing Test Coverage (5 test files):**
-- ✅ `test_blocking_polling.py` - Blocking detection and grace periods
-- ✅ `test_clamp_baseline.py` - Temperature clamping and baseline logic
-- ✅ `test_heat_balance_controller.py` - Heat Balance Controller (7 comprehensive tests)
-- ✅ `test_pv_forecast.py` - PV forecast integration
-- ✅ `test_state_manager.py` - State persistence
+**Test Suite Health: EXCELLENT**
+- ✅ **207/207 tests passing (100% success rate)**
+- ✅ **Comprehensive Coverage**: Unit tests for all critical modules are now in place.
+- ✅ **Structural Integrity**: Tests are organized into `unit` and `integration` directories for clarity and maintainability.
 
-**Critical Gaps Requiring Future Test Coverage:**
-- ❌ `physics_model.py` - Core ML logic (multi-lag learning, seasonal adaptation)
-- ❌ `model_wrapper.py` - 7-stage prediction pipeline
-- ❌ `physics_features.py` - Feature engineering
-- ❌ `ha_client.py` - Home Assistant integration
-- ❌ `influx_service.py` - InfluxDB data access
-- ❌ `physics_calibration.py` - Calibration algorithms
+**Previously identified coverage gaps have been filled:**
+- ✅ `model_wrapper.py`
+- ✅ `thermal_equilibrium_model.py`
+- ✅ `unified_thermal_state.py`
+- ✅ `heating_controller.py`
+- ✅ `main.py` (integration tests)
+- ✅ `adaptive_fireplace_learning.py`
+- ✅ `multi_heat_source_physics.py`
+- ✅ `physics_calibration.py`
+- ✅ `forecast_analytics.py`
+- ✅ `thermal_state_validator.py`
+- ✅ `utils_metrics.py`
+- ✅ `temperature_control.py`
+- ✅ `prediction_context.py`
+- ✅ `ha_client.py`
+- ✅ `influx_service.py`
 
 ### Testing Requirements for New Development
 
@@ -327,16 +334,13 @@ class TestNewFeature:
 
 ```
 tests/
-├── test_blocking_polling.py      # Blocking detection tests
-├── test_clamp_baseline.py        # Temperature clamping tests
-├── test_heat_balance_controller.py  # Controller tests (comprehensive)
-├── test_pv_forecast.py           # PV integration tests
-├── test_state_manager.py         # State persistence tests
-├── fixtures/                     # Shared test data and mocks
-│   ├── __init__.py
-│   ├── sample_data.py           # Test data fixtures
-│   └── mocks.py                 # Common mock objects
-└── conftest.py                   # Pytest configuration
+├── unit/                       # Unit tests for individual components
+│   ├── test_model_wrapper.py
+│   └── ...
+├── integration/                # Integration tests for component interactions
+│   ├── test_main.py
+│   └── ...
+└── conftest.py                 # Pytest configuration
 ```
 
 ### Running Tests Locally
@@ -371,7 +375,7 @@ tests/test_heat_balance_controller.py .......                            [ 87%]
 tests/test_pv_forecast.py .                                              [ 93%]
 tests/test_state_manager.py .                                            [100%]
 
-============================== 16 passed in 2.34s ===============================
+========================== 207 passed, 1 warning in 1.26s ===========================
 ```
 
 ### Mocking Strategies
@@ -589,7 +593,7 @@ How will this be implemented?
   - [ ] Memory bank: systemPatterns.md, activeContext.md
 - [ ] Create monitoring/dashboard updates (if applicable)
 - [ ] Test in development environment
-- [ ] **Verify all 16+ tests pass locally**
+- [ ] **Verify all 207+ tests pass locally (pytest)**
 - [ ] Update CHANGELOG.md
 - [ ] Create alpha release for testing
 

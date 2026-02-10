@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+### Changed
+
+### Fixed
+
+### Technical Achievements
+
+
+
+## [0.2.0] - 2026-02-10
+
+### Added
 - **Gentle Trajectory Correction System**: Intelligent additive correction preventing outlet temperature spikes during thermal trajectory deviations
 - **Enhanced Forecast Integration**: Fixed feature storage during binary search for accurate trajectory verification with real PV/temperature forecast data
 - **Open Window Adaptation**: System automatically detects sudden heat loss changes and restabilizes when disturbances end

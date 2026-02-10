@@ -366,30 +366,38 @@ ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID=sensor.ml_vorlauftemperatur
 
 Switch to active mode when you're confident in ML performance through shadow mode observation.
 
-### ML State Sensor
+### Monitoring & Diagnostics
 
-The system publishes `sensor.ml_heating_state` with numeric state codes and rich diagnostic attributes:
+The system publishes a suite of detailed sensors to Home Assistant for comprehensive monitoring and diagnostics:
 
-**State Codes:**
-| Code | Name | Meaning |
-|------|------|---------|
-| 0 | OK | Prediction completed successfully |
-| 1 | LOW_CONFIDENCE | Model confidence below threshold - logged for monitoring |
-| 2 | BLOCKED | Blocking activity active (DHW/defrost/etc) - cycle skipped |
-| 3 | NETWORK_ERROR | Failed to communicate with Home Assistant |
-| 4 | NO_DATA | Missing critical sensors or insufficient history |
-| 5 | TRAINING | Running initial calibration |
-| 6 | HEATING_OFF | Heating not in 'heat' or 'auto' mode - cycle skipped |
-| 7 | MODEL_ERROR | Exception during prediction or learning |
+#### `sensor.ml_heating_learning`
+- **State**: Learning confidence score.
+- **Key Attributes**:
+    - `thermal_time_constant`, `total_conductance`, `equilibrium_ratio`, `heat_loss_coefficient`, `outlet_effectiveness`: Learned thermal parameters.
+    - `cycle_count`, `parameter_updates`: Learning progress indicators.
+    - `model_health`: Overall health status of the model.
+    - `is_improving`, `improvement_percentage`: Trend of model performance.
 
-**Key Attributes:**
-- `state_description`: Human-readable status
-- `confidence`: Model confidence metrics
-- `suggested_temp`, `final_temp`, `predicted_indoor`: Latest values
-- `blocking_reasons`: List of active blocking events
-- `missing_sensors`: List of unavailable critical sensors
-- `last_prediction_time`, `last_updated`: Timestamps
-- `last_error`: Error message for troubleshooting
+#### `sensor.ml_model_mae`
+- **State**: All-time Mean Absolute Error (MAE).
+- **Key Attributes**:
+    - `mae_1h`, `mae_6h`, `mae_24h`: Time-windowed MAE metrics.
+    - `trend_direction`: "improving", "degrading", or "stable".
+    - `prediction_count`: Total number of predictions.
+
+#### `sensor.ml_model_rmse`
+- **State**: All-time Root Mean Squared Error (RMSE).
+- **Key Attributes**:
+    - `recent_max_error`: The maximum prediction error in the recent past.
+    - `std_error`: Standard deviation of prediction errors.
+    - `mean_bias`: Systematic over/under-prediction.
+
+#### `sensor.ml_prediction_accuracy`
+- **State**: Percentage of "good" control actions in the last 24 hours (prediction within ±0.2°C of actual).
+- **Key Attributes**:
+    - `perfect_accuracy_pct`, `tolerable_accuracy_pct`, `poor_accuracy_pct`: Breakdown of prediction accuracy over 24 hours.
+    - `excellent_all_time_pct`, `good_all_time_pct`: All-time accuracy metrics.
+    - `prediction_count_24h`: Number of predictions in the last 24 hours.
 
 ## Analysis & Debugging
 
@@ -472,10 +480,11 @@ ml_heating/
 │   ├── model_wrapper.py            # Enhanced prediction wrapper
 │   ├── physics_features.py         # Feature engineering
 │   ├── physics_calibration.py      # Historical training
-│   ├── ha_client.py                # Home Assistant integration
+│   ├── ha_client.py                # Home Assistant integration (manages sensor publishing)
 │   ├── influx_service.py           # InfluxDB queries
 │   ├── state_manager.py            # State persistence
 │   ├── prediction_metrics.py       # Performance tracking
+│   ├── adaptive_learning_metrics_schema.py # Defines the schema for learning metrics
 │   ├── thermal_*.py                # Thermal parameter system
 │   └── config.py                   # Configuration
 ├── ml_heating/                     # Stable Home Assistant Add-on

@@ -75,7 +75,7 @@ class MAE:
         # support scalar or sequence
         try:
             import numpy as _np
-            if _np is not None and (_np.ndim(y_true) if hasattr(y_true, '__array__') else 0):
+            if hasattr(y_true, '__len__') and not isinstance(y_true, str):
                 y_t = _np.array(y_true, dtype=float)
                 y_p = _np.array(y_pred, dtype=float)
                 self._sum_abs_errors += float(_np.sum(_np.abs(y_t - y_p)))
@@ -102,7 +102,7 @@ class RMSE:
         """Update metric with a single sample or with arrays (vectorized)."""
         try:
             import numpy as _np
-            if _np is not None and (_np.ndim(y_true) if hasattr(y_true, '__array__') else 0):
+            if hasattr(y_true, '__len__') and not isinstance(y_true, str):
                 y_t = _np.array(y_true, dtype=float)
                 y_p = _np.array(y_pred, dtype=float)
                 self._sum_squared_errors += float(_np.sum((y_t - y_p) ** 2))

@@ -39,6 +39,7 @@ else:
     HASS_URL = os.getenv("HASS_URL", "http://localhost:8123")
     HASS_TOKEN = os.getenv("HASS_TOKEN", "").strip()
 
+
 HASS_HEADERS: dict[str, str] = {
     "Authorization": f"Bearer {HASS_TOKEN}",
     "Content-Type": "application/json",
@@ -48,19 +49,38 @@ INFLUX_TOKEN: str = os.getenv("INFLUX_TOKEN", "")
 INFLUX_ORG: str = os.getenv("INFLUX_ORG", "erbehome")
 INFLUX_BUCKET: str = os.getenv("INFLUX_BUCKET", "home_assistant/autogen")
 
-INFLUX_FEATURES_BUCKET: str = os.getenv("INFLUX_FEATURES_BUCKET", "ml_heating_features")
+INFLUX_FEATURES_BUCKET: str = os.getenv(
+    "INFLUX_FEATURES_BUCKET", "ml_heating_features"
+)
+
 
 # --- File Paths ---
 # Defines where the application's persistent data is stored.
-# For Home Assistant addon, uses /data/ directory; for standalone, uses current directory.
-# MODEL_FILE: The trained machine learning model.
-# STATE_FILE: The application's state, like prediction history.
+# For Home Assistant addon, uses /data/ directory; for standalone, uses current
+# directory.
+# UNIFIED_STATE_FILE: Path to the JSON file for unified thermal state.
 if _is_addon_environment():
-    MODEL_FILE: str = os.getenv("MODEL_FILE_PATH", "/data/models/ml_model.pkl")
-    STATE_FILE: str = os.getenv("STATE_FILE_PATH", "/data/models/ml_state.pkl")
+    UNIFIED_STATE_FILE: str = os.getenv(
+        "STATE_FILE_PATH", "/data/thermal_state.json"
+    )
 else:
-    MODEL_FILE = os.getenv("MODEL_FILE", "/opt/ml_heating/ml_model.pkl")
-    STATE_FILE = os.getenv("STATE_FILE", "/opt/ml_heating/ml_state.pkl")
+    UNIFIED_STATE_FILE: str = os.getenv(
+        "STATE_FILE_PATH", "/opt/ml_heating/thermal_state.json"
+    )
+
+# --- File Paths ---
+# Defines where the application's persistent data is stored.
+# For Home Assistant addon, uses /data/ directory; for standalone, uses current
+# directory.
+# UNIFIED_STATE_FILE: Path to the JSON file for unified thermal state.
+if _is_addon_environment():
+    UNIFIED_STATE_FILE: str = os.getenv(
+        "STATE_FILE_PATH", "/data/thermal_state.json"
+    )
+else:
+    UNIFIED_STATE_FILE: str = os.getenv(
+        "STATE_FILE_PATH", "/opt/ml_heating/thermal_state.json"
+    )
 
 # --- Model & History Parameters ---
 # These parameters control the time windows for feature creation and prediction.
@@ -75,9 +95,7 @@ PREDICTION_HORIZON_STEPS: int = int(
     os.getenv("PREDICTION_HORIZON_STEPS", "24")
 )
 # The number of hours of historical data to use for initial training.
-TRAINING_LOOKBACK_HOURS: int = int(
-    os.getenv("TRAINING_LOOKBACK_HOURS", "168")
-)
+TRAINING_LOOKBACK_HOURS: int = int(os.getenv("TRAINING_LOOKBACK_HOURS", "168"))
 
 # --- Core Entity IDs ---
 # These are the most critical entities for the script's operation.
@@ -201,7 +219,8 @@ RMSE_ENTITY_ID: str = os.getenv("RMSE_ENTITY_ID", "sensor.ml_model_rmse")
 
 # --- Multi-Lag Learning Configuration ---
 # Enable time-delayed learning for external heat sources (PV, fireplace, TV)
-# to capture realistic time delays (e.g., PV warming peaks 60-90min after production)
+# to capture realistic time delays (e.g., PV warming peaks 60-90min
+# after production)
 ENABLE_MULTI_LAG_LEARNING: bool = (
     os.getenv("ENABLE_MULTI_LAG_LEARNING", "true").lower() == "true"
 )
@@ -292,19 +311,28 @@ OVERSHOOT_DETECTION_ENABLED: bool = (
 
 # --- Historical Calibration System (Phase 0) ---
 # Physics-based historical parameter optimization
-CALIBRATION_BASELINE_FILE: str = os.getenv("CALIBRATION_BASELINE_FILE", "/data/calibrated_baseline.json")
-STABILITY_TEMP_CHANGE_THRESHOLD: float = float(os.getenv("STABILITY_TEMP_CHANGE_THRESHOLD", "0.1"))
-MIN_STABLE_PERIOD_MINUTES: int = int(os.getenv("MIN_STABLE_PERIOD_MINUTES", "30"))
+CALIBRATION_BASELINE_FILE: str = os.getenv(
+    "CALIBRATION_BASELINE_FILE", "/data/calibrated_baseline.json"
+)
+STABILITY_TEMP_CHANGE_THRESHOLD: float = float(
+    os.getenv("STABILITY_TEMP_CHANGE_THRESHOLD", "0.1")
+)
+MIN_STABLE_PERIOD_MINUTES: int = int(
+    os.getenv("MIN_STABLE_PERIOD_MINUTES", "30")
+)
 OPTIMIZATION_METHOD: str = os.getenv("OPTIMIZATION_METHOD", "L-BFGS-B")
 
 # --- Delta Temperature Forecast Calibration ---
-# Enable local calibration of weather forecasts using measured temperature offset
-# This corrects for systematic biases between weather station and actual location
+# Enable local calibration of weather forecasts using measured temperature
+# offset. This corrects for systematic biases between weather station and
+# actual location.
 ENABLE_DELTA_FORECAST_CALIBRATION: bool = (
     os.getenv("ENABLE_DELTA_FORECAST_CALIBRATION", "true").lower() == "true"
 )
-# Maximum allowed temperature offset to prevent unrealistic corrections
-DELTA_CALIBRATION_MAX_OFFSET: float = float(os.getenv("DELTA_CALIBRATION_MAX_OFFSET", "10.0"))
+# Maximum allowed temperature offset to prevent unrealistic corrections.
+DELTA_CALIBRATION_MAX_OFFSET: float = float(
+    os.getenv("DELTA_CALIBRATION_MAX_OFFSET", "10.0")
+)
 
 # Absolute clamp values for outlet temperature
 CLAMP_MIN_ABS: float = float(os.getenv("CLAMP_MIN_ABS", "25.0"))
@@ -314,12 +342,10 @@ CLAMP_MAX_ABS: float = float(os.getenv("CLAMP_MAX_ABS", "55.0"))
 PV_HEAT_WEIGHT: float = float(os.getenv("PV_HEAT_WEIGHT", "0.002"))
 FIREPLACE_HEAT_WEIGHT: float = float(os.getenv("FIREPLACE_HEAT_WEIGHT", "5.0"))
 TV_HEAT_WEIGHT: float = float(os.getenv("TV_HEAT_WEIGHT", "0.2"))
-THERMAL_TIME_CONSTANT: float = float(os.getenv("THERMAL_TIME_CONSTANT",
-                                               "4.0"))
+THERMAL_TIME_CONSTANT: float = float(os.getenv("THERMAL_TIME_CONSTANT", "4.0"))
 EQUILIBRIUM_RATIO: float = float(os.getenv("EQUILIBRIUM_RATIO", "0.17"))
 TOTAL_CONDUCTANCE: float = float(os.getenv("TOTAL_CONDUCTANCE", "0.24"))
-ADAPTIVE_LEARNING_RATE: float = float(os.getenv("ADAPTIVE_LEARNING_RATE",
-                                                  "0.01"))
+ADAPTIVE_LEARNING_RATE: float = float(os.getenv("ADAPTIVE_LEARNING_RATE", "0.01"))
 LEARNING_CONFIDENCE: float = float(os.getenv("LEARNING_CONFIDENCE", "3.0"))
 MIN_LEARNING_RATE: float = float(os.getenv("MIN_LEARNING_RATE", "0.001"))
 MAX_LEARNING_RATE: float = float(os.getenv("MAX_LEARNING_RATE", "0.1"))

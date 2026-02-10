@@ -6,6 +6,7 @@ using historical target temperature data and actual house behavior.
 """
 
 import logging
+import json
 
 try:
     from scipy.optimize import minimize
@@ -99,7 +100,7 @@ def train_thermal_equilibrium_model():
     thermal_model.external_source_weights['tv'] = tv_weight
 
     # Set reasonable learning confidence based on optimization success
-    thermal_model.learning_confidence = 0.8  # High confidence from scipy
+    thermal_model.learning_confidence = 3.0  # High confidence from scipy
 
     logging.info("\n=== OPTIMIZED THERMAL PARAMETERS ===")
     logging.info(
@@ -140,6 +141,9 @@ def train_thermal_equilibrium_model():
         state_manager.set_calibrated_baseline(
             calibrated_params, calibration_cycles=len(stable_periods)
         )
+
+        # Explicitly set confidence to 3.0 after calibration
+        state_manager.update_learning_state(learning_confidence=3.0)
 
         logging.info(
             "✅ Calibrated parameters (scipy-optimized) saved to unified thermal state"
@@ -234,7 +238,7 @@ def validate_thermal_model():
         initial_confidence = thermal_model.learning_confidence
 
         # Simulate good predictions
-        for _ in range(5):
+        for _ in range(10):
             predicted = thermal_model.predict_equilibrium_temperature(
                 **test_context,
                 _suppress_logging=True
@@ -444,7 +448,6 @@ def filter_stable_periods(df, temp_change_threshold=0.1, min_duration=30):
         f"✅ Found {len(stable_periods)} stable periods with blocking state filtering"
     )
 
-    import json
     with open("/opt/ml_heating/stable_periods.json", "w") as f:
         json.dump(stable_periods, f, indent=2, default=str)
 

@@ -38,9 +38,8 @@ class ThermalParameterManager:
     ThermalParameterConfig, providing a single, consistent API for the application.
     """
     
-    _PARAMETERS: Dict[str, ParameterInfo] = {}
-
     def __init__(self):
+        self._PARAMETERS: Dict[str, ParameterInfo] = {}
         """Initialize the thermal parameter manager."""
         self._cache = {}
         self._initialize_parameters()

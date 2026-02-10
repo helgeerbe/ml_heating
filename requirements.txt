@@ -24,3 +24,5 @@ pytest>=7.0.0
 # - json, os, sys, logging, datetime, time, math, typing, collections, dataclasses
 # - tempfile, shutil, zipfile, hashlib, pathlib, subprocess, argparse, warnings
 # These are part of Python standard library and don't need to be listed
+pytest-mock
+pytest-cov

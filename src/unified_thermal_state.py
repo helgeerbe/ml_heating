@@ -22,8 +22,10 @@ import numpy as np
 # Import centralized thermal configuration
 try:
     from .thermal_config import ThermalParameterConfig
+    from .config import UNIFIED_STATE_FILE
 except ImportError:
     from thermal_config import ThermalParameterConfig
+    from config import UNIFIED_STATE_FILE
 
 
 class ThermalStateManager:
@@ -37,8 +39,7 @@ class ThermalStateManager:
     With single thermal_state.json containing everything.
     """
 
-    def __init__(self, state_file: str =
-                 "/opt/ml_heating/thermal_state.json"):
+    def __init__(self, state_file: str = UNIFIED_STATE_FILE):
         self.state_file = state_file
         self.state = self._get_default_state()
 

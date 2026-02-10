@@ -20,12 +20,12 @@ import numpy as np
 import pandas as pd
 
 # Support both package-relative and direct import for notebooks
-from .thermal_equilibrium_model import ThermalEquilibriumModel
-from .unified_thermal_state import get_thermal_state_manager
-from .influx_service import create_influx_service
-from .prediction_metrics import PredictionMetrics
-from . import config
-from .ha_client import create_ha_client
+from src.thermal_equilibrium_model import ThermalEquilibriumModel
+from src.unified_thermal_state import get_thermal_state_manager
+from src.influx_service import create_influx_service
+from src.prediction_metrics import PredictionMetrics
+from src import config
+from src.ha_client import create_ha_client
 
 
 # Singleton pattern to prevent multiple model instantiation
@@ -1260,7 +1260,7 @@ class EnhancedModelWrapper:
                 self._export_metrics_to_influxdb()
 
             # Export metrics to Home Assistant every cycle for real-time monitoring
-            self._export_metrics_to_ha()
+            self.export_metrics_to_ha()
 
             # Log learning cycle completion
             if prediction_error is not None:
@@ -1273,7 +1273,7 @@ class EnhancedModelWrapper:
         except Exception as e:
             logging.error(f"Learning from feedback failed: {e}", exc_info=True)
 
-    def _export_metrics_to_ha(self):
+    def export_metrics_to_ha(self):
         """Export metrics to Home Assistant sensors."""
         try:
             ha_client = create_ha_client()

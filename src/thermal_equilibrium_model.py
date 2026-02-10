@@ -223,7 +223,7 @@ class ThermalEquilibriumModel:
 
         self.prediction_history: List[Dict] = []
         self.parameter_history: List[Dict] = []
-        self.learning_confidence = thermal_params.get("learning_confidence") or 3.0
+        self.learning_confidence = 3.0
         self.min_learning_rate = thermal_params.get("min_learning_rate") or 0.001
         self.max_learning_rate = thermal_params.get("max_learning_rate") or 0.1
         self.confidence_decay_rate = PhysicsConstants.CONFIDENCE_DECAY_RATE
@@ -387,16 +387,15 @@ class ThermalEquilibriumModel:
 
         if len(self.prediction_history) > 200:
             self.prediction_history = self.prediction_history[-100:]
-
-        error_magnitude = abs(prediction_error)
-        if error_magnitude < 0.25:  # Good prediction
-            self.learning_confidence *= self.confidence_boost_rate
-        elif error_magnitude > 1.0:  # Bad prediction
-            self.learning_confidence *= self.confidence_decay_rate
-
-        self.learning_confidence = np.clip(self.learning_confidence, 0.1, 5.0)
-
+            
         if len(self.prediction_history) >= self.recent_errors_window:
+            error_magnitude = abs(prediction_error)
+            if error_magnitude < 0.25:  # Good prediction
+                self.learning_confidence *= self.confidence_boost_rate
+            elif error_magnitude > 1.0:  # Bad prediction
+                self.learning_confidence *= self.confidence_decay_rate
+
+            self.learning_confidence = np.clip(self.learning_confidence, 0.1, 5.0)
             self._adapt_parameters_from_recent_errors()
 
         logging.debug(
@@ -485,16 +484,20 @@ class ThermalEquilibriumModel:
         max_heat_loss_coefficient_change = 0.02
         heat_loss_coefficient_update = np.clip(
             heat_loss_coefficient_update,
-            -max_heat_loss_coefficient_change, max_heat_loss_coefficient_change
+            -max_heat_loss_coefficient_change,
+            max_heat_loss_coefficient_change,
         )
         max_outlet_effectiveness_change = 0.02
         outlet_effectiveness_update = np.clip(
             outlet_effectiveness_update,
-            -max_outlet_effectiveness_change, max_outlet_effectiveness_change
+            -max_outlet_effectiveness_change,
+            max_outlet_effectiveness_change,
         )
         max_thermal_time_constant_change = 0.5
         thermal_update = np.clip(
-            thermal_update, -max_thermal_time_constant_change, max_thermal_time_constant_change
+            thermal_update,
+            -max_thermal_time_constant_change,
+            max_thermal_time_constant_change,
         )
 
         self.thermal_time_constant = float(
@@ -1086,7 +1089,10 @@ class ThermalEquilibriumModel:
         Save learned parameter adjustments to unified thermal state.
         """
         try:
-            from .unified_thermal_state import get_thermal_state_manager
+            try:
+                from .unified_thermal_state import get_thermal_state_manager
+            except ImportError:
+                from unified_thermal_state import get_thermal_state_manager
 
             state_manager = get_thermal_state_manager()
             learning_state = state_manager.state.get("learning_state", {})
