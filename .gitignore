@@ -232,3 +232,4 @@ thermal_state.json
 
 # Calibration artifacts
 stable_periods.json
+thermal_state*.json
