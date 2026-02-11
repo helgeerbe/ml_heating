@@ -952,12 +952,14 @@ class EnhancedModelWrapper:
             else:
                 # FIXED: Use cycle-aligned conditions instead of 4-hour averages
                 # This ensures trajectory matches the cycle-aligned forecast shown in logs
+                # RESOLUTION FIX: Use cycle interval for time steps to capture behavior within the cycle
                 trajectory = self.thermal_model.predict_thermal_trajectory(
                     current_indoor=current_indoor,
                     target_indoor=target_indoor,
                     outlet_temp=outlet_temp,
                     outdoor_temp=avg_outdoor,  # Use cycle-aligned outdoor temp
                     time_horizon_hours=config.TRAJECTORY_STEPS,
+                    time_step_minutes=config.CYCLE_INTERVAL_MINUTES,  # Match simulation step to control cycle
                     pv_power=avg_pv,  # Use cycle-aligned PV power
                     fireplace_on=thermal_features.get("fireplace_on", 0.0),
                     tv_on=thermal_features.get("tv_on", 0.0),
@@ -970,41 +972,80 @@ class EnhancedModelWrapper:
 
             # TRAJECTORY-BASED DECISION: Check if target reachable within cycle time
             cycle_hours = config.CYCLE_INTERVAL_MINUTES / 60.0
+            # Allow a small tolerance (e.g. 15 mins) for reaching target
+            # This prevents correcting just because we are a few minutes late, supporting "fast push"
+            tolerance_hours = 15.0 / 60.0
 
             # DEBUG: Log trajectory details for diagnosis
             trajectory_temps = trajectory.get("trajectory", [])
-            first_hour_temp = (
+            first_step_temp = (
                 trajectory_temps[0] if trajectory_temps else current_indoor
             )
             reaches_target_at = trajectory.get("reaches_target_at")
 
+            # Get time of first step for accurate logging
+            trajectory_times = trajectory.get("times", [])
+            first_step_time = trajectory_times[0] if trajectory_times else config.CYCLE_INTERVAL_MINUTES / 60.0
+
             logging.debug(
-                f"🔍 Trajectory DEBUG: outlet={outlet_temp:.1f}°C → 1h_prediction={first_hour_temp:.2f}°C "
-                f"(vs target {target_indoor:.1f}°C, error: {first_hour_temp - target_indoor:+.3f}°C), "
+                f"🔍 Trajectory DEBUG: outlet={outlet_temp:.1f}°C → {first_step_time:.1f}h_prediction={first_step_temp:.2f}°C "
+                f"(vs target {target_indoor:.1f}°C, error: {first_step_temp - target_indoor:+.3f}°C), "
                 f"reaches_target_at={reaches_target_at}h, cycle_time={cycle_hours:.1f}h"
             )
 
             # NEW LOGIC: Check for temperature boundary violations regardless of target achievement
             # This ensures comfort boundaries are respected even when target is theoretically reachable
             trajectory_temps = trajectory.get("trajectory", [])
+            trajectory_times = trajectory.get("times", [])
+
             if trajectory_temps:
                 min_temp = min(trajectory_temps)
                 max_temp = max(trajectory_temps)
-                temp_boundary_violation = (
-                    min_temp
-                    <= target_indoor - 0.1  # Temperature drops below comfort boundary
-                    or max_temp
-                    >= target_indoor + 0.1  # Temperature rises above comfort boundary
-                )
+
+                # Check if immediate cycle is safe (no overshoot)
+                # If we are safe for the current cycle, we can be more lenient with future predictions
+                # as we will have a chance to correct in the next cycle.
+                immediate_overshoot = False
+                if trajectory_times and trajectory_times[0] <= cycle_hours + 0.01:
+                    if trajectory_temps[0] > target_indoor + 0.1:
+                        immediate_overshoot = True
+                else:
+                    # Fallback if times not available or first step is far future
+                    if trajectory_temps[0] > target_indoor + 0.1:
+                        immediate_overshoot = True
+
+                if not immediate_overshoot:
+                    # Immediate cycle is safe - allow relaxed boundaries for future
+                    # Allow up to 0.5°C overshoot in future steps (vs 0.1°C strict)
+                    # This enables "fast push" strategies where we heat aggressively now
+                    # knowing we can back off in the next cycle.
+                    temp_boundary_violation = (
+                        min_temp <= target_indoor - 0.1  # Keep strict undershoot protection
+                        or max_temp >= target_indoor + 0.5  # Relaxed overshoot
+                    )
+                    
+                    # Log if we are ignoring a future overshoot that would have been caught by strict rules
+                    if (max_temp >= target_indoor + 0.1) and (max_temp < target_indoor + 0.5):
+                        logging.debug(
+                            f"Ignoring minor future overshoot (max={max_temp:.2f}°C) "
+                            f"because immediate cycle is safe ({trajectory_temps[0]:.2f}°C)"
+                        )
+                else:
+                    # Immediate overshoot detected - enforce strict boundaries
+                    temp_boundary_violation = (
+                        min_temp <= target_indoor - 0.1
+                        or max_temp >= target_indoor + 0.1
+                    )
             else:
                 temp_boundary_violation = False
 
             # Enhanced logic: If target reached quickly, be more lenient with boundary violations
-            if reaches_target_at is not None and reaches_target_at <= cycle_hours:
+            # Use tolerance to allow reaching target slightly after cycle end
+            if reaches_target_at is not None and reaches_target_at <= (cycle_hours + tolerance_hours):
                 if not temp_boundary_violation:
                     logging.info(
                         f"✅ Target will be reached in {reaches_target_at:.1f}h "
-                        f"(within {cycle_hours:.1f}h cycle) and no boundary violations - no correction needed"
+                        f"(within {cycle_hours:.1f}h cycle + tolerance) and no boundary violations - no correction needed"
                     )
                     return outlet_temp
                 else:
@@ -1030,10 +1071,10 @@ class EnhancedModelWrapper:
                     "⚠️ Overshoot detected: entire trajectory is above target "
                     f"{target_indoor:.1f}°C. Applying correction."
                 )
-            elif reaches_target_at is None or reaches_target_at > cycle_hours:
+            elif reaches_target_at is None or reaches_target_at > (cycle_hours + tolerance_hours):
                 logging.info(
                     f"⚠️ Target will NOT be reached within {cycle_hours:.1f}h "
-                    "cycle - applying physics-based correction"
+                    "cycle (+tolerance) - applying physics-based correction"
                 )
             elif temp_boundary_violation:
                 logging.info(

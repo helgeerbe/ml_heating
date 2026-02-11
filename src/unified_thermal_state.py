@@ -294,8 +294,8 @@ class ThermalStateManager:
 
     # === LEARNING STATE MANAGEMENT ===
 
-    def update_learning_state(self, cycle_count: int = 0,
-                            learning_confidence: float = 0.0,
+    def update_learning_state(self, cycle_count: int = None,
+                            learning_confidence: float = None,
                             parameter_adjustments:
                             Dict[str, float] = None) -> None:
         """Update learning state parameters."""
