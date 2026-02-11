@@ -226,6 +226,7 @@ prediction_metrics.json
 
 # Unified thermal state
 thermal_state.json
+unified_thermal_state.json
 
 # Python backup files
 *_backup_*.py
