@@ -27,7 +27,7 @@ def clean_state():
     unified_thermal_state._thermal_state_manager = None
 
     # Initialize a fresh ThermalStateManager with the test state file
-    # This bypasses the default UNIFIED_STATE_FILE path which might point to /data/
+    # This bypasses the default UNIFIED_STATE_FILE path which might point to /opt/ml_heating/
     manager = unified_thermal_state.ThermalStateManager(state_file=test_state_file)
     unified_thermal_state._thermal_state_manager = manager
 

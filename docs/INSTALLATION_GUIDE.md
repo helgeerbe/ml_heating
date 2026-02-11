@@ -157,8 +157,8 @@ This section details all available configuration parameters for the ML Heating C
 
 #### Model and State Storage
 
-*   **MODEL_FILE**: Absolute path where the trained machine learning model file (`.pkl`) will be stored. Default: `/opt/ml_heating/ml_model.pkl`.
-*   **STATE_FILE**: Absolute path where the last application state (features) for online learning will be stored. Default: `/opt/ml_heating/ml_state.pkl`.
+*   **UNIFIED_STATE_FILE**: Absolute path where the unified thermal state (including model parameters and learning history) is stored. Default: `/data/unified_thermal_state.json`.
+*   **CALIBRATION_BASELINE_FILE**: Path to the file storing the calibrated physics baseline. Default: `/data/calibrated_baseline.json`.
 
 #### Script Behavior and Learning Parameters
 
@@ -168,7 +168,6 @@ This section details all available configuration parameters for the ML Heating C
 *   **TRAINING_LOOKBACK_HOURS**: The number of hours of historical data to use for the initial training or calibration of the model.
 *   **CYCLE_INTERVAL_MINUTES**: The time in minutes between each full cycle of learning and prediction. Default: `10`.
 *   **MAX_TEMP_CHANGE_PER_CYCLE**: The maximum allowable integer change (in degrees Celsius) for the heat pump's outlet temperature setpoint in a single cycle. This prevents abrupt temperature changes. Default: `2`.
-*   **SMOOTHING_ALPHA**: The smoothing factor for the exponential moving average applied to the model's temperature predictions. A lower value (e.g., 0.1) results in more aggressive smoothing, while a higher value (e.g., 0.8) makes the output more responsive. Default: `0.3`.
 *   **INFLUX_FEATURES_BUCKET**: InfluxDB bucket for exporting feature importances and learning parameters for analysis.
 
 #### Home Assistant Entity IDs (Critical)
@@ -190,14 +189,13 @@ These parameters define which Home Assistant entities the add-on will read from 
 *   **OUTDOOR_TEMP_ENTITY_ID**: The outdoor temperature sensor, preferably compensated or located near the heat pump.
 *   **HEATING_STATUS_ENTITY_ID**: The climate entity for your heating system, used to check if it's in 'heat' or 'auto' mode. Example: `climate.your_heating_entity`.
 *   **OPENWEATHERMAP_TEMP_ENTITY_ID**: An external weather forecast temperature sensor (e.g., from OpenWeatherMap) for proactive adjustments.
+*   **ML_HEATING_CONTROL_ENTITY_ID**: An `input_boolean` to enable/disable ML control. When 'on', ML actively controls heating (Active Mode). When 'off', it runs in Shadow Mode. Example: `input_boolean.ml_heating`.
 
 #### PV (Solar) Power Entity IDs
 
-These entities are used to measure current solar power generation and forecast. Add or remove as needed.
+These entities are used to measure current solar power generation and forecast.
 
-*   **PV1_POWER_ENTITY_ID**: Sensor for the first PV power source. Example: `sensor.your_pv1_power_sensor`.
-*   **PV2_POWER_ENTITY_ID**: Sensor for the second PV power source. Example: `sensor.your_pv2_power_sensor`.
-*   **PV3_POWER_ENTITY_ID**: Sensor for the third PV power source. Example: `sensor.your_pv3_power_sensor`.
+*   **PV_POWER_ENTITY_ID**: A single aggregated sensor for total PV power generation. Example: `sensor.power_pv`.
 *   **PV_FORECAST_ENTITY_ID**: The Home Assistant sensor that provides today's PV forecast with attributes (e.g., `watts` for 15-min samples) used to compute hourly forecast means. Example: `sensor.energy_production_today_4`.
 
 #### Debugging and Monitoring
@@ -236,6 +234,79 @@ These settings enable automatic seasonal learning to adapt to changing condition
 #### Summer Learning
 
 *   **ENABLE_SUMMER_LEARNING**: Set to `true` to enable learning from periods when HVAC is off (typically during summer). This provides a cleaner signal for external source effects without heating interference, significantly improving PV and TV coefficients.
+
+#### Hybrid Learning Strategy (Phase 2)
+
+These settings control the intelligent learning phase classification system.
+
+*   **HYBRID_LEARNING_ENABLED**: Set to `true` to enable the hybrid learning strategy.
+*   **STABILITY_CLASSIFICATION_ENABLED**: Enable classification of periods into stable, transition, or chaotic.
+*   **HIGH_CONFIDENCE_WEIGHT**: Learning weight for stable periods (high confidence). Default: `1.0`.
+*   **LOW_CONFIDENCE_WEIGHT**: Learning weight for controlled transitions (low confidence). Default: `0.3`.
+*   **LEARNING_PHASE_SKIP_WEIGHT**: Learning weight for chaotic periods (skip learning). Default: `0.0`.
+
+#### Prediction Metrics Tracking
+
+Settings for the comprehensive prediction accuracy tracking system.
+
+*   **PREDICTION_METRICS_ENABLED**: Enable tracking of MAE and RMSE over time windows.
+*   **METRICS_WINDOW_1H**: Number of samples for 1-hour window (default 12 for 5-min steps).
+*   **METRICS_WINDOW_6H**: Number of samples for 6-hour window (default 72).
+*   **METRICS_WINDOW_24H**: Number of samples for 24-hour window (default 288).
+*   **PREDICTION_ACCURACY_THRESHOLD**: Temperature difference (°C) to consider a prediction "accurate". Default: `0.3`.
+
+#### Trajectory Prediction Enhancement
+
+Settings for the advanced trajectory prediction system.
+
+*   **TRAJECTORY_PREDICTION_ENABLED**: Enable trajectory-based optimization.
+*   **WEATHER_FORECAST_INTEGRATION**: Use weather forecasts in trajectory prediction.
+*   **PV_FORECAST_INTEGRATION**: Use PV forecasts in trajectory prediction.
+*   **OVERSHOOT_DETECTION_ENABLED**: Enable detection and prevention of temperature overshoot.
+*   **TRAJECTORY_STEPS**: Number of hours to predict in trajectory optimization. Default: `4`.
+
+#### Delta Temperature Forecast Calibration
+
+*   **ENABLE_DELTA_FORECAST_CALIBRATION**: Enable local calibration of weather forecasts using measured temperature offset.
+*   **DELTA_CALIBRATION_MAX_OFFSET**: Maximum allowed temperature offset (°C) to prevent unrealistic corrections. Default: `10.0`.
+
+#### Thermal Equilibrium Model Parameters
+
+These parameters control the physics-based calculations and can be tuned for different building characteristics.
+
+*   **THERMAL_TIME_CONSTANT**: Building thermal response time in hours. Default: `4.0`.
+*   **HEAT_LOSS_COEFFICIENT**: Heat loss rate per degree difference. Default: `0.3`.
+*   **OUTLET_EFFECTIVENESS**: Heat pump outlet efficiency (0.5-1.0). Default: `0.5`.
+*   **OUTDOOR_COUPLING**: Outdoor temperature influence factor. Default: `0.3`.
+*   **THERMAL_BRIDGE_FACTOR**: Thermal bridging losses. Default: `0.1`.
+*   **EQUILIBRIUM_RATIO**: Ratio defining the equilibrium point. Default: `0.17`.
+*   **TOTAL_CONDUCTANCE**: Total thermal conductance of the building. Default: `0.24`.
+
+#### External Heat Source Weights
+
+Weights for external heat sources (only used if corresponding sensors are configured).
+
+*   **PV_HEAT_WEIGHT**: Solar heating contribution per 100W of PV power. Default: `0.002`.
+*   **FIREPLACE_HEAT_WEIGHT**: Fireplace heating contribution per unit time. Default: `5.0`.
+*   **TV_HEAT_WEIGHT**: Electronics heating contribution. Default: `0.2`.
+
+#### Adaptive Learning Parameters
+
+Parameters controlling how the model learns from prediction errors.
+
+*   **ADAPTIVE_LEARNING_RATE**: Base learning rate for parameter updates. Default: `0.01`.
+*   **MIN_LEARNING_RATE**: Minimum allowed learning rate. Default: `0.001`.
+*   **MAX_LEARNING_RATE**: Maximum allowed learning rate. Default: `0.01`.
+*   **LEARNING_CONFIDENCE**: Initial confidence level for learning. Default: `3.0`.
+*   **RECENT_ERRORS_WINDOW**: Number of recent errors to consider for adaptive learning. Default: `10`.
+
+#### Historical Calibration System
+
+Parameters for the physics-based historical parameter optimization.
+
+*   **STABILITY_TEMP_CHANGE_THRESHOLD**: °C change threshold for stability filtering. Default: `0.1`.
+*   **MIN_STABLE_PERIOD_MINUTES**: Minimum duration for stable periods. Default: `30`.
+*   **OPTIMIZATION_METHOD**: Scipy optimization method. Default: `L-BFGS-B`.
 
 #### Optional: Model Metrics Entity IDs
 

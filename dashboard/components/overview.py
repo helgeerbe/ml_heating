@@ -18,10 +18,9 @@ sys.path.append('/app')
 def load_ml_state():
     """Load ML system state if available"""
     try:
-        if os.path.exists('/data/models/ml_state.pkl'):
-            import pickle
-            with open('/data/models/ml_state.pkl', 'rb') as f:
-                return pickle.load(f)
+        if os.path.exists('/data/models/unified_thermal_state.json'):
+            with open('/data/models/unified_thermal_state.json', 'r') as f:
+                return json.load(f)
     except Exception as e:
         st.error(f"Error loading ML state: {e}")
     return None
@@ -29,17 +28,17 @@ def load_ml_state():
 def get_system_metrics():
     """Get current system performance metrics"""
     try:
-        # Try to read from Home Assistant ML state sensor
-        # This would be available when the ML system is running
+        # Try to read from unified state file
         state = load_ml_state()
-        if state:
+        if state and 'learning_state' in state:
+            learning_state = state['learning_state']
             return {
-                'confidence': state.get('confidence', 0.0),
-                'mae': state.get('mae', 0.0),
-                'rmse': state.get('rmse', 0.0),
-                'cycle_count': state.get('cycle_count', 0),
-                'last_prediction': state.get('last_prediction', 0.0),
-                'status': state.get('status', 'unknown')
+                'confidence': learning_state.get('learning_confidence', 0.0),
+                'mae': learning_state.get('mae', 0.0),
+                'rmse': learning_state.get('rmse', 0.0),
+                'cycle_count': learning_state.get('cycle_count', 0),
+                'last_prediction': learning_state.get('last_prediction', 0.0),
+                'status': state.get('metadata', {}).get('status', 'unknown')
             }
     except Exception:
         pass
@@ -253,15 +252,15 @@ def render_system_status():
         st.progress(progress)
         st.write(f"Cycle {cycle_count:,}")
         
-        # Model file status
-        if os.path.exists('/data/models/ml_model.pkl'):
-            stat = os.stat('/data/models/ml_model.pkl')
-            model_size = stat.st_size / 1024  # KB
+        # State file status
+        if os.path.exists('/data/models/unified_thermal_state.json'):
+            stat = os.stat('/data/models/unified_thermal_state.json')
+            state_size = stat.st_size / 1024  # KB
             last_updated = datetime.fromtimestamp(stat.st_mtime)
-            st.success(f"💾 Model: {model_size:.1f}KB")
+            st.success(f"💾 State: {state_size:.1f}KB")
             st.caption(f"Updated: {last_updated.strftime('%Y-%m-%d %H:%M')}")
         else:
-            st.warning("💾 Model: Not found")
+            st.warning("💾 State: Not found")
 
 def render_configuration_summary():
     """Render current configuration summary"""

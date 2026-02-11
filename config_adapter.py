@@ -17,13 +17,16 @@ def log_info(message):
     """Log info message"""
     print(f"[INFO] {message}")
 
+
 def log_warning(message):
     """Log warning message"""
     print(f"[WARNING] {message}")
 
+
 def log_error(message):
     """Log error message"""
     print(f"[ERROR] {message}")
+
 
 def load_addon_config():
     """Load Home Assistant add-on configuration"""
@@ -43,53 +46,72 @@ def setup_data_directories():
     """Create necessary data directories with proper permissions"""
     directories = [
         '/data/models',
-        '/data/backups', 
+        '/data/backups',
         '/data/logs',
         '/data/config'
     ]
-    
+
     for directory in directories:
         Path(directory).mkdir(parents=True, exist_ok=True)
         log_info(f"Created directory: {directory}")
 
+
 def convert_addon_to_env(config):
     """Convert add-on options to environment variables for existing ML system"""
-    
+
     # Home Assistant API configuration (internal supervisor access)
     env_vars = {
         'HASS_URL': 'http://supervisor/core',
         'HASS_TOKEN': os.environ.get('SUPERVISOR_TOKEN', ''),
-        
+
         # Core entity mappings - Complete coverage
-        'TARGET_INDOOR_TEMP_ENTITY_ID': config.get('target_indoor_temp_entity', ''),
+        'TARGET_INDOOR_TEMP_ENTITY_ID': config.get(
+            'target_indoor_temp_entity', ''
+        ),
         'INDOOR_TEMP_ENTITY_ID': config.get('indoor_temp_entity', ''),
         'OUTDOOR_TEMP_ENTITY_ID': config.get('outdoor_temp_entity', ''),
         'HEATING_STATUS_ENTITY_ID': config.get('heating_control_entity', ''),
         'ACTUAL_OUTLET_TEMP_ENTITY_ID': config.get('outlet_temp_entity', ''),
-        'TARGET_OUTLET_TEMP_ENTITY_ID': config.get('target_outlet_temp_entity', ''),
-        'ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID': config.get('actual_target_outlet_temp_entity', ''),
-        'OPENWEATHERMAP_TEMP_ENTITY_ID': config.get('openweathermap_temp_entity', ''),
-        'AVG_OTHER_ROOMS_TEMP_ENTITY_ID': config.get('avg_other_rooms_temp_entity', ''),
+        'TARGET_OUTLET_TEMP_ENTITY_ID': config.get(
+            'target_outlet_temp_entity', ''
+        ),
+        'ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID': config.get(
+            'actual_target_outlet_temp_entity', ''
+        ),
+        'OPENWEATHERMAP_TEMP_ENTITY_ID': config.get(
+            'openweathermap_temp_entity', ''
+        ),
+        'AVG_OTHER_ROOMS_TEMP_ENTITY_ID': config.get(
+            'avg_other_rooms_temp_entity', ''
+        ),
         'PV_FORECAST_ENTITY_ID': config.get('pv_forecast_entity', ''),
-        
+
         # ML learning parameters
         'LEARNING_RATE': str(config.get('learning_rate', 0.01)),
-        'PREDICTION_HORIZON_MINUTES': str(config.get('prediction_horizon_minutes', 30)),
-        'CYCLE_INTERVAL_MINUTES': str(config.get('cycle_interval_minutes', 30)),
-        'MAX_TEMP_CHANGE_PER_CYCLE': str(config.get('max_temp_change_per_cycle', 2.0)),
-        
+        'PREDICTION_HORIZON_MINUTES': str(
+            config.get('prediction_horizon_minutes', 30)
+        ),
+        'CYCLE_INTERVAL_MINUTES': str(
+            config.get('cycle_interval_minutes', 30)
+        ),
+        'MAX_TEMP_CHANGE_PER_CYCLE': str(
+            config.get('max_temp_change_per_cycle', 2.0)
+        ),
+
         # Safety configuration
         'SAFETY_MAX_TEMP': str(config.get('safety_max_temp', 25.0)),
         'SAFETY_MIN_TEMP': str(config.get('safety_min_temp', 18.0)),
         'CLAMP_MIN_ABS': str(config.get('clamp_min_abs', 14.0)),
         'CLAMP_MAX_ABS': str(config.get('clamp_max_abs', 65.0)),
-        
+
         # External heat sources (optional)
         'PV_POWER_ENTITY_ID': config.get('pv_power_entity', ''),
-        'FIREPLACE_STATUS_ENTITY_ID': config.get('fireplace_status_entity', ''),
+        'FIREPLACE_STATUS_ENTITY_ID': config.get(
+            'fireplace_status_entity', ''
+        ),
         'TV_POWER_ENTITY_ID': config.get('tv_power_entity', ''),
-        
-        # InfluxDB configuration  
+
+        # InfluxDB configuration
         'INFLUXDB_HOST': config.get('influxdb_host', 'a0d7b954-influxdb'),
         'INFLUXDB_PORT': str(config.get('influxdb_port', 8086)),
         'INFLUXDB_DATABASE': config.get('influxdb_database', 'homeassistant'),
@@ -98,96 +120,129 @@ def convert_addon_to_env(config):
         'INFLUXDB_TOKEN': config.get('influxdb_token', ''),
         'INFLUXDB_ORG': config.get('influxdb_org', ''),
         'INFLUXDB_BUCKET': config.get('influxdb_bucket', 'homeassistant'),
-        'INFLUX_FEATURES_BUCKET': config.get('influx_features_bucket', 'ml_heating_features'),
+        'INFLUX_FEATURES_BUCKET': config.get(
+            'influx_features_bucket', 'ml_heating_features'
+        ),
 
         # Advanced Features
-        'HYBRID_LEARNING_ENABLED': str(config.get('hybrid_learning_enabled', True)).lower(),
-        'PREDICTION_METRICS_ENABLED': str(config.get('prediction_metrics_enabled', True)).lower(),
-        'TRAJECTORY_PREDICTION_ENABLED': str(config.get('trajectory_prediction_enabled', True)).lower(),
-        
+        'HYBRID_LEARNING_ENABLED': str(
+            config.get('hybrid_learning_enabled', True)
+        ).lower(),
+        'PREDICTION_METRICS_ENABLED': str(
+            config.get('prediction_metrics_enabled', True)
+        ).lower(),
+        'TRAJECTORY_PREDICTION_ENABLED': str(
+            config.get('trajectory_prediction_enabled', True)
+        ).lower(),
+
         # Blocking detection entities
         'DHW_STATUS_ENTITY_ID': config.get('dhw_status_entity', ''),
         'DEFROST_STATUS_ENTITY_ID': config.get('defrost_status_entity', ''),
-        'DISINFECTION_STATUS_ENTITY_ID': config.get('disinfection_status_entity', ''),
-        'DHW_BOOST_HEATER_ENTITY_ID': config.get('dhw_boost_heater_entity', ''),
-        
+        'DISINFECTION_STATUS_ENTITY_ID': config.get(
+            'disinfection_status_entity', ''
+        ),
+        'DHW_BOOST_HEATER_ENTITY_ID': config.get(
+            'dhw_boost_heater_entity', ''
+        ),
+
         # Add-on specific paths (different from standalone)
-        'MODEL_FILE_PATH': '/data/models/ml_model.pkl',
-        'STATE_FILE_PATH': '/data/models/ml_state.pkl',
+        'UNIFIED_STATE_FILE': '/data/models/unified_thermal_state.json',
         'BACKUP_DIR': '/data/backups',
         'LOG_FILE_PATH': '/data/logs/ml_heating.log',
-        
+
         # Performance tuning
-        'SMOOTHING_ALPHA': str(config.get('smoothing_alpha', 0.3)),
         'CONFIDENCE_THRESHOLD': str(config.get('confidence_threshold', 0.7)),
-        'PHYSICS_VALIDATION_ENABLED': str(config.get('physics_validation_enabled', True)),
-        'SEASONAL_LEARNING_ENABLED': str(config.get('seasonal_learning_enabled', True)),
-        
+        'PHYSICS_VALIDATION_ENABLED': str(
+            config.get('physics_validation_enabled', True)
+        ),
+        'SEASONAL_LEARNING_ENABLED': str(
+            config.get('seasonal_learning_enabled', True)
+        ),
+
         # Logging and development
         'LOG_LEVEL': config.get('log_level', 'INFO'),
         'ENABLE_DEV_API': str(config.get('enable_dev_api', False)),
         'DEV_API_KEY': config.get('dev_api_key', ''),
-        
+
         # Dashboard settings
-        'DASHBOARD_UPDATE_INTERVAL': str(config.get('dashboard_update_interval', 30)),
-        'SHOW_ADVANCED_METRICS': str(config.get('show_advanced_metrics', True)),
+        'DASHBOARD_UPDATE_INTERVAL': str(
+            config.get('dashboard_update_interval', 30)
+        ),
+        'SHOW_ADVANCED_METRICS': str(
+            config.get('show_advanced_metrics', True)
+        ),
         'DASHBOARD_THEME': config.get('dashboard_theme', 'auto'),
-        
+
         # Model management
         'AUTO_BACKUP_ENABLED': str(config.get('auto_backup_enabled', True)),
         'BACKUP_RETENTION_DAYS': str(config.get('backup_retention_days', 30)),
-        
+
         # Core ML parameters mapping to existing core variables
         'HISTORY_STEPS': str(config.get('history_steps', 6)),
         'HISTORY_STEP_MINUTES': str(config.get('history_step_minutes', 10)),
-        'TRAINING_LOOKBACK_HOURS': str(config.get('training_lookback_hours', 168)),
-        'PREDICTION_HORIZON_STEPS': str(config.get('prediction_horizon_steps', 24)),
-        
+        'TRAINING_LOOKBACK_HOURS': str(
+            config.get('training_lookback_hours', 168)
+        ),
+        'PREDICTION_HORIZON_STEPS': str(
+            config.get('prediction_horizon_steps', 24)
+        ),
+
         # Advanced Learning Features - Multi-lag learning
         'PV_LAG_STEPS': str(config.get('pv_lag_steps', 4)),
         'FIREPLACE_LAG_STEPS': str(config.get('fireplace_lag_steps', 4)),
         'TV_LAG_STEPS': str(config.get('tv_lag_steps', 2)),
-        
+
         # Seasonal Adaptation
-        'SEASONAL_LEARNING_RATE': str(config.get('seasonal_learning_rate', 0.01)),
+        'SEASONAL_LEARNING_RATE': str(
+            config.get('seasonal_learning_rate', 0.01)
+        ),
         'MIN_SEASONAL_SAMPLES': str(config.get('min_seasonal_samples', 100)),
-        
+
         # System Behavior
-        'GRACE_PERIOD_MAX_MINUTES': str(config.get('grace_period_max_minutes', 30)),
-        'BLOCKING_POLL_INTERVAL_SECONDS': str(config.get('blocking_poll_interval_seconds', 60)),
+        'GRACE_PERIOD_MAX_MINUTES': str(
+            config.get('grace_period_max_minutes', 30)
+        ),
+        'BLOCKING_POLL_INTERVAL_SECONDS': str(
+            config.get('blocking_poll_interval_seconds', 60)
+        ),
     }
-    
+
     # Set environment variables for the ML system
     for key, value in env_vars.items():
         if value is not None and value != '':
             os.environ[key] = str(value)
-    
-    log_info(f"Set {len([v for v in env_vars.values() if v])} environment variables")
+
+    log_info(
+        f"Set {len([v for v in env_vars.values() if v])} environment variables"
+    )
     return env_vars
 
+
 def import_existing_model(source_path):
-    """Import existing model from standalone installation"""
+    """Import existing unified state from standalone installation"""
     try:
         if not os.path.exists(source_path):
-            log_warning(f"Model file not found: {source_path}")
+            log_warning(f"State file not found: {source_path}")
             return False
             
-        # Backup existing model if present
-        target_path = '/data/models/ml_model.pkl'
+        # Backup existing state if present
+        target_path = '/data/models/unified_thermal_state.json'
         if os.path.exists(target_path):
-            backup_name = f"pre_import_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_name = f"pre_import_{timestamp}.json"
             backup_path = f"/data/backups/{backup_name}"
             shutil.copy(target_path, backup_path)
-            log_info(f"Backed up existing model to {backup_path}")
-        
-        # Import new model
+            log_info(f"Backed up existing state to {backup_path}")
+
+        # Import new state
         shutil.copy(source_path, target_path)
-        log_info(f"Model imported successfully from {source_path}")
+        log_info(f"State imported successfully from {source_path}")
         return True
-        
+
     except Exception as e:
-        log_error(f"Model import failed: {e}")
+        log_error(f"State import failed: {e}")
         return False
+
 
 def validate_configuration(config):
     """Validate critical configuration settings"""
@@ -208,22 +263,31 @@ def validate_configuration(config):
         log_error("Missing required entity configurations:")
         for entity in missing_entities:
             log_error(f"  - {entity}")
-        log_error("Please configure all required entities in the add-on settings")
+        log_error(
+            "Please configure all required entities in the add-on settings"
+        )
         return False
-    
+
     # Validate numeric ranges
     learning_rate = config.get('learning_rate', 0.01)
     if not (0.001 <= learning_rate <= 0.1):
-        log_warning(f"Learning rate {learning_rate} outside recommended range [0.001, 0.1]")
-    
+        log_warning(
+            f"Learning rate {learning_rate} outside recommended range "
+            "[0.001, 0.1]"
+        )
+
     max_temp = config.get('safety_max_temp', 25.0)
     min_temp = config.get('safety_min_temp', 18.0)
     if max_temp <= min_temp:
-        log_error(f"Safety max temp ({max_temp}) must be greater than min temp ({min_temp})")
+        log_error(
+            f"Safety max temp ({max_temp}) must be greater than "
+            f"min temp ({min_temp})"
+        )
         return False
-    
+
     log_info("Configuration validation passed")
     return True
+
 
 def save_config_backup(config):
     """Save configuration backup for troubleshooting"""
@@ -242,6 +306,7 @@ def save_config_backup(config):
         
     except Exception as e:
         log_warning(f"Failed to save config backup: {e}")
+
 
 def initialize_addon_environment():
     """Initialize add-on environment for ML system"""
@@ -264,17 +329,19 @@ def initialize_addon_environment():
         
         # Convert to environment variables
         env_vars = convert_addon_to_env(addon_config)
-        
+
         # Import existing model if specified
-        if addon_config.get('import_existing_model') and addon_config.get('existing_model_path'):
+        if (addon_config.get('import_existing_model') and
+                addon_config.get('existing_model_path')):
             import_existing_model(addon_config['existing_model_path'])
-        
+
         log_info("Add-on environment initialized successfully")
         return env_vars
-        
+
     except Exception as e:
         log_error(f"Add-on environment initialization failed: {e}")
         return False
+
 
 def main():
     """Main configuration adapter function"""
@@ -293,16 +360,27 @@ def main():
         # Print summary for debugging
         addon_config = load_addon_config()
         log_info("=== Configuration Summary ===")
-        log_info(f"Target Indoor Temp Entity: {addon_config.get('target_indoor_temp_entity')}")
-        log_info(f"Indoor Temp Entity: {addon_config.get('indoor_temp_entity')}")
-        log_info(f"Outdoor Temp Entity: {addon_config.get('outdoor_temp_entity')}")
+        log_info(
+            f"Target Indoor Temp Entity: "
+            f"{addon_config.get('target_indoor_temp_entity')}"
+        )
+        log_info(
+            f"Indoor Temp Entity: {addon_config.get('indoor_temp_entity')}"
+        )
+        log_info(
+            f"Outdoor Temp Entity: {addon_config.get('outdoor_temp_entity')}"
+        )
         log_info(f"Learning Rate: {addon_config.get('learning_rate')}")
-        log_info(f"Cycle Interval: {addon_config.get('cycle_interval_minutes')} minutes")
+        log_info(
+            f"Cycle Interval: "
+            f"{addon_config.get('cycle_interval_minutes')} minutes"
+        )
         log_info("=============================")
-        
+
     except Exception as e:
         log_error(f"Configuration adapter failed: {e}")
         sys.exit(1)
+
 
 if __name__ == '__main__':
     main()

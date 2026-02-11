@@ -31,12 +31,8 @@ except ImportError:
 class ThermalStateManager:
     """Unified thermal state manager using single JSON file.
 
-    Replaces:
-    - ml_state.pkl (pickle format)
-    - calibrated_baseline.json (separate file)
-    - prediction_metrics.json (separate file)
-
-    With single thermal_state.json containing everything.
+    Replaces legacy pickle files and separate JSON configurations
+    with single thermal_state.json containing everything.
     """
 
     def __init__(self, state_file: str = UNIFIED_STATE_FILE):

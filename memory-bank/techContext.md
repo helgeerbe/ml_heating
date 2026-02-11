@@ -323,8 +323,7 @@ WantedBy=multi-user.target
 ├── memory-bank/          # Documentation and context
 ├── .env                  # Configuration (not in git)
 ├── requirements.txt      # Python dependencies
-├── ml_model.pkl         # Trained model state
-└── ml_state.pkl         # Application state
+└── unified_thermal_state.json # Unified thermal state
 ```
 
 ### Integration Patterns

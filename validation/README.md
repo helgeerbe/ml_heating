@@ -206,7 +206,7 @@ Check InfluxDB configuration in `../src/config.py`:
 
 ### Model Loading Errors
 Verify model files exist:
-- `../ml_model.pkl` (production model)
+- `../unified_thermal_state.json` (production state)
 - `../physics_model_validation.pkl` (validation model)
 
 ## Related Documentation

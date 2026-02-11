@@ -59,10 +59,10 @@ INFLUX_FEATURES_BUCKET: str = os.getenv(
 
 # --- File Paths ---
 UNIFIED_STATE_FILE: str = os.getenv(
-    "UNIFIED_STATE_FILE", "/data/unified_thermal_state.json"
+    "UNIFIED_STATE_FILE", "/opt/ml_heating/unified_thermal_state.json"
 )
 CALIBRATION_BASELINE_FILE: str = os.getenv(
-    "CALIBRATION_BASELINE_FILE", "/data/calibrated_baseline.json"
+    "CALIBRATION_BASELINE_FILE", "/opt/ml_heating/calibrated_baseline.json"
 )
 
 # --- Model & History Parameters ---

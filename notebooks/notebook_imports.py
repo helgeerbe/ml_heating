@@ -66,28 +66,31 @@ def load_model():
     if metrics is None:
         raise RuntimeError("Metrics module could not be imported. Check src/utils_metrics.py.")
     try:
-        with open(config.MODEL_FILE, "rb") as f:
-            saved_data = pickle.load(f)
-            if isinstance(saved_data, dict):
-                base_model = saved_data["model"]
-                mae = saved_data.get("mae", metrics.MAE())
-                rmse = saved_data.get("rmse", metrics.RMSE())
-            else:
-                base_model = saved_data
-                mae = metrics.MAE()
-                rmse = metrics.RMSE()
-        if mae is None:
-            mae = metrics.MAE()
-            mae._sum_abs_errors = 1.5
-            mae._n = 10
-        if rmse is None:
-            rmse = metrics.RMSE()
-            rmse._sum_squared_errors = 2.25
-            rmse._n = 10
-        print("  ✓ Loaded production RealisticPhysicsModel")
+        # Load unified thermal state
+        from src.unified_thermal_state import ThermalStateManager
+        state_manager = ThermalStateManager()
+        
+        # Create model from state
+        from src.thermal_equilibrium_model import ThermalEquilibriumModel
+        base_model = ThermalEquilibriumModel()
+        
+        # Load parameters from state
+        params = state_manager.get_parameters()
+        base_model.update_parameters(params)
+        
+        # Get metrics from state
+        learning_state = state_manager.state.get('learning_state', {})
+        
+        mae = metrics.MAE()
+        mae._sum_abs_errors = learning_state.get('mae', 1.5) * 10
+        mae._n = 10
+        
+        rmse = metrics.RMSE()
+        rmse._sum_squared_errors = learning_state.get('rmse', 2.25) * 10
+        rmse._n = 10
+        
+        print("  ✓ Loaded production ThermalEquilibriumModel from unified state")
         return base_model, mae, rmse
-    except FileNotFoundError:
-        raise FileNotFoundError("ml_model.pkl not found. Please train and export the model.")
     except Exception as e:
         raise RuntimeError(f"Error loading production model: {e}")
 
