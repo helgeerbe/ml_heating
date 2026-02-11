@@ -13,8 +13,6 @@ from src import thermal_equilibrium_model
 @pytest.fixture(scope="function")
 def clean_model():
     """Fixture to ensure a clean model instance for each test function."""
-    # Reset the singleton by setting the module's instance variable to None
-    thermal_equilibrium_model._thermal_equilibrium_model_instance = None
     model = thermal_equilibrium_model.ThermalEquilibriumModel()
     # Set realistic test parameters
     model.thermal_time_constant = 4.0
@@ -25,9 +23,7 @@ def clean_model():
         "fireplace": 1.5,
         "tv": 0.1
     }
-    yield model
-    # Reset the singleton again after the test
-    thermal_equilibrium_model._thermal_equilibrium_model_instance = None
+    return model
 
 
 class TestCorrectedThermalPhysics:

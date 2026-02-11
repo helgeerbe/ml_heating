@@ -22,39 +22,19 @@ except ImportError:
     from thermal_constants import PhysicsConstants  # type: ignore
     import config  # type: ignore
 
-# Singleton pattern for ThermalEquilibriumModel to prevent excessive
-# instantiation
-_thermal_equilibrium_model_instance = None
-
-
 class ThermalEquilibriumModel:
     """
     A physics-based thermal model that predicts indoor temperature equilibrium
     and adapts its parameters based on real-world feedback.
-
-    Implements singleton pattern to prevent excessive logging during calibration.
     """
 
-    def __new__(cls):
-        global _thermal_equilibrium_model_instance
-        if _thermal_equilibrium_model_instance is None:
-            _thermal_equilibrium_model_instance = super().__new__(cls)
-            _thermal_equilibrium_model_instance._initialized = False
-        return _thermal_equilibrium_model_instance
-
     def __init__(self):
-        # Only initialize once due to singleton pattern
-        if not getattr(self, "_initialized", False):
-            # Load calibrated parameters first, fallback to config defaults
-            self._load_thermal_parameters()
+        # Load calibrated parameters first, fallback to config defaults
+        self._load_thermal_parameters()
 
-            # self.outdoor_coupling = config.OUTDOOR_COUPLING
-            # thermal_bridge_factor removed in Phase 2: was not used in
-            # calculations
-            self._initialized = True
-        else:
-            # Singleton instance already initialized, skip redundant initialization
-            pass
+        # self.outdoor_coupling = config.OUTDOOR_COUPLING
+        # thermal_bridge_factor removed in Phase 2: was not used in
+        # calculations
 
     def _load_thermal_parameters(self):
         """
@@ -212,7 +192,10 @@ class ThermalEquilibriumModel:
         )
         self.momentum_decay_rate = PhysicsConstants.MOMENTUM_DECAY_RATE
 
-        self.learning_rate = thermal_params.get("adaptive_learning_rate") or 0.01
+        self.learning_rate = (
+            thermal_params.get("adaptive_learning_rate")
+            or PhysicsConstants.DEFAULT_LEARNING_RATE
+        )
         self.equilibrium_samples = []
         self.trajectory_samples = []
         self.overshoot_events = []
@@ -223,9 +206,15 @@ class ThermalEquilibriumModel:
 
         self.prediction_history: List[Dict] = []
         self.parameter_history: List[Dict] = []
-        self.learning_confidence = 3.0
-        self.min_learning_rate = thermal_params.get("min_learning_rate") or 0.001
-        self.max_learning_rate = thermal_params.get("max_learning_rate") or 0.1
+        self.learning_confidence = PhysicsConstants.INITIAL_LEARNING_CONFIDENCE
+        self.min_learning_rate = (
+            thermal_params.get("min_learning_rate")
+            or PhysicsConstants.MIN_LEARNING_RATE
+        )
+        self.max_learning_rate = (
+            thermal_params.get("max_learning_rate")
+            or PhysicsConstants.MAX_LEARNING_RATE
+        )
         self.confidence_decay_rate = PhysicsConstants.CONFIDENCE_DECAY_RATE
         self.confidence_boost_rate = PhysicsConstants.CONFIDENCE_BOOST_RATE
         self.recent_errors_window = config.RECENT_ERRORS_WINDOW
@@ -245,8 +234,12 @@ class ThermalEquilibriumModel:
             "outlet_effectiveness"
         )
 
-        self.parameter_stability_threshold = 0.05
-        self.error_improvement_threshold = 0.05
+        self.parameter_stability_threshold = (
+            PhysicsConstants.THERMAL_STABILITY_THRESHOLD
+        )
+        self.error_improvement_threshold = (
+            PhysicsConstants.ERROR_IMPROVEMENT_THRESHOLD
+        )
 
     def predict_equilibrium_temperature(
         self,
@@ -481,19 +474,25 @@ class ThermalEquilibriumModel:
             current_learning_rate * outlet_effectiveness_gradient
         )
 
-        max_heat_loss_coefficient_change = 0.02
+        max_heat_loss_coefficient_change = (
+            PhysicsConstants.MAX_HEAT_LOSS_COEFFICIENT_CHANGE
+        )
         heat_loss_coefficient_update = np.clip(
             heat_loss_coefficient_update,
             -max_heat_loss_coefficient_change,
             max_heat_loss_coefficient_change,
         )
-        max_outlet_effectiveness_change = 0.02
+        max_outlet_effectiveness_change = (
+            PhysicsConstants.MAX_OUTLET_EFFECTIVENESS_CHANGE
+        )
         outlet_effectiveness_update = np.clip(
             outlet_effectiveness_update,
             -max_outlet_effectiveness_change,
             max_outlet_effectiveness_change,
         )
-        max_thermal_time_constant_change = 0.5
+        max_thermal_time_constant_change = (
+            PhysicsConstants.MAX_THERMAL_TIME_CONSTANT_CHANGE
+        )
         thermal_update = np.clip(
             thermal_update,
             -max_thermal_time_constant_change,
@@ -676,7 +675,9 @@ class ThermalEquilibriumModel:
         Calculate heat loss coefficient gradient.
         """
         return self._calculate_parameter_gradient(
-            "heat_loss_coefficient", 0.001, recent_predictions
+            "heat_loss_coefficient",
+            PhysicsConstants.HEAT_LOSS_COEFFICIENT_EPSILON,
+            recent_predictions,
         )
 
     def _calculate_outlet_effectiveness_gradient(
@@ -686,7 +687,9 @@ class ThermalEquilibriumModel:
         Calculate outlet effectiveness gradient.
         """
         return self._calculate_parameter_gradient(
-            "outlet_effectiveness", 0.001, recent_predictions
+            "outlet_effectiveness",
+            PhysicsConstants.OUTLET_EFFECTIVENESS_EPSILON,
+            recent_predictions,
         )
 
     def _calculate_adaptive_learning_rate(self) -> float:

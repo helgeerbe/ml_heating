@@ -7,6 +7,24 @@
 - ✅ 11.4% better RMSE performance
 - ✅ Production deployment in shadow mode
 
+## 🛠️ **Technical Debt & Architecture Improvements (New)**
+**Priority: CRITICAL** | **Impact: HIGH** | **Effort: Medium**
+
+Based on a deep architectural analysis, the following improvements are required to ensure long-term maintainability and reliability:
+
+### **1. Architectural Refactoring**
+- **Centralize Configuration**: Move "magic numbers" (learning rates, timeouts, bounds) from `main.py` and `thermal_equilibrium_model.py` to `src/thermal_constants.py`.
+- **Type-Safe State Management**: Replace error-prone dictionary state (`state.get("key")`) with a `SystemState` dataclass in `src/state_manager.py`.
+- **Decompose "God Object"**: Refactor `main.py` to delegate low-level sensor validation and blocking logic to `HeatingController` and `SensorDataManager`.
+- **Remove Singleton Pattern**: Refactor `ThermalEquilibriumModel` to use dependency injection, improving testability and removing hidden dependencies.
+
+### **2. Testing Strategy Overhaul**
+- **Fix Brittle Tests**: Refactor `tests/integration/test_main.py` to rely less on mocks and more on component interaction.
+- **Sociable Unit Tests**: Implement tests that verify interactions between `HeatingController` and `SensorDataManager` without full mocking.
+- **Property-Based Testing**: Add hypothesis tests for `ThermalEquilibriumModel` to verify physics bounds across all possible inputs.
+
+---
+
 ## 🚀 **Next-Level Improvements Available:**
 
 ### **1. Advanced Monitoring & Alert System**
@@ -133,6 +151,7 @@
 
 | Improvement | Priority | Impact | Effort | Quick Win? | Expected Benefit |
 |-------------|----------|---------|---------|------------|------------------|
+| **Technical Debt & Architecture** | 🔴 CRITICAL | 🔴 HIGH | 🟡 Medium | ✅ Yes | Maintainability, reliability, testability |
 | **Monitoring & Alerts** | 🔴 HIGH | 🔴 HIGH | 🟡 Medium | ✅ Yes | Prevent failures, optimize performance |
 | **Seasonal Adaptation** | 🔴 HIGH | 🔴 VERY HIGH | 🟡 Medium | ✅ Yes | 15-25% seasonal accuracy boost |
 | **Trajectory Prediction** | 🟡 Medium | 🔴 HIGH | 🔴 High | ❌ No | Better long-term planning |
@@ -143,6 +162,11 @@
 ---
 
 ## 🎯 **Recommended Next Steps (Quick Wins):**
+
+### **Phase 0: Foundation (Immediate)**
+1. **Centralize Configuration**: Move constants to `src/thermal_constants.py`.
+2. **Type-Safe State**: Implement `SystemState` dataclass.
+3. **Refactor Main**: Decompose `main.py` logic.
 
 ### **Phase 1: Monitoring & Alerts (1-2 weeks)**
 1. **Model performance monitoring** with automated alerts
@@ -188,11 +212,12 @@
 
 ## 🎉 **Expected Combined Impact:**
 
-Implementing the **Phase 1 & 2 quick wins** could deliver:
+Implementing the **Phase 0, 1 & 2 quick wins** could deliver:
+- **Robust, maintainable codebase** with high test confidence
 - **25-35% improvement in seasonal prediction accuracy**
 - **Early detection of 85%+ of potential system failures**
 - **15-20% reduction in energy costs through optimization**
 - **Significantly better user experience with proactive alerts**
 - **Enhanced system reliability and longevity**
 
-**Would you like me to start implementing any of these improvements? I'd recommend beginning with the Monitoring & Alerts system as it provides immediate value and sets up infrastructure for the other enhancements.**
+**Would you like me to start implementing any of these improvements? I'd recommend beginning with the Technical Debt & Architecture phase to build a solid foundation for future features.**

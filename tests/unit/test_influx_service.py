@@ -28,9 +28,11 @@ def mock_config():
 @pytest.fixture
 def influx_service(mock_config):
     """Returns an initialized InfluxService instance."""
-    return InfluxService(
+    service = InfluxService(
         url="http://localhost:8086", token="test-token", org="test-org"
     )
+    yield service
+    service.close()
 
 
 def test_get_pv_forecast_success(influx_service):
@@ -88,6 +90,12 @@ def test_singleton_logic(mock_config):
     instance1 = get_influx_service()
     instance2 = get_influx_service()
     assert instance1 is instance2
+    
+    # Reset should close instance1
     reset_influx_service()
+    
     instance3 = get_influx_service()
     assert instance1 is not instance3
+    
+    # Clean up final instance
+    reset_influx_service()

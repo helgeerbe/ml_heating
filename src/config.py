@@ -26,12 +26,16 @@ load_dotenv()
 
 # --- API Credentials and Endpoints ---
 # This section contains the connection details for external services.
+
+
 # Detect if running in Home Assistant addon environment
 def _is_addon_environment():
     """Detect if running in Home Assistant addon environment."""
     return os.getenv("SUPERVISOR_TOKEN") is not None
 
-# For Home Assistant addon, uses internal supervisor API; for standalone, uses .env
+
+# For Home Assistant addon, uses internal supervisor API;
+# for standalone, uses .env
 if _is_addon_environment():
     HASS_URL: str = os.getenv("HASS_URL", "http://supervisor/core")
     HASS_TOKEN: str = os.getenv("SUPERVISOR_TOKEN", "").strip()
@@ -53,37 +57,16 @@ INFLUX_FEATURES_BUCKET: str = os.getenv(
     "INFLUX_FEATURES_BUCKET", "ml_heating_features"
 )
 
-
 # --- File Paths ---
-# Defines where the application's persistent data is stored.
-# For Home Assistant addon, uses /data/ directory; for standalone, uses current
-# directory.
-# UNIFIED_STATE_FILE: Path to the JSON file for unified thermal state.
-if _is_addon_environment():
-    UNIFIED_STATE_FILE: str = os.getenv(
-        "STATE_FILE_PATH", "/data/thermal_state.json"
-    )
-else:
-    UNIFIED_STATE_FILE: str = os.getenv(
-        "STATE_FILE_PATH", "/opt/ml_heating/thermal_state.json"
-    )
-
-# --- File Paths ---
-# Defines where the application's persistent data is stored.
-# For Home Assistant addon, uses /data/ directory; for standalone, uses current
-# directory.
-# UNIFIED_STATE_FILE: Path to the JSON file for unified thermal state.
-if _is_addon_environment():
-    UNIFIED_STATE_FILE: str = os.getenv(
-        "STATE_FILE_PATH", "/data/thermal_state.json"
-    )
-else:
-    UNIFIED_STATE_FILE: str = os.getenv(
-        "STATE_FILE_PATH", "/opt/ml_heating/thermal_state.json"
-    )
+UNIFIED_STATE_FILE: str = os.getenv(
+    "UNIFIED_STATE_FILE", "/data/unified_thermal_state.json"
+)
+CALIBRATION_BASELINE_FILE: str = os.getenv(
+    "CALIBRATION_BASELINE_FILE", "/data/calibrated_baseline.json"
+)
 
 # --- Model & History Parameters ---
-# These parameters control the time windows for feature creation and prediction.
+# These parameters control time windows for feature creation and prediction.
 # HISTORY_STEPS: Number of historical time slices to use for features.
 # HISTORY_STEP_MINUTES: The interval in minutes between each history step.
 # PREDICTION_HORIZON_STEPS: How many steps into the future the model
@@ -270,7 +253,8 @@ ML_HEATING_CONTROL_ENTITY_ID: str = os.getenv(
 # Environment variables set for these will be loaded by the manager.
 
 # Adaptive Learning Parameters (Priority 3 - Advanced Tuning)
-RECENT_ERRORS_WINDOW: int = int(os.getenv("RECENT_ERRORS_WINDOW", "10"))         # Error analysis window size
+# Error analysis window size
+RECENT_ERRORS_WINDOW: int = int(os.getenv("RECENT_ERRORS_WINDOW", "10"))
 
 # --- Hybrid Learning Strategy (Phase 2 Enhancement) ---
 # Enable intelligent learning phase classification with weighted periods
@@ -280,9 +264,15 @@ HYBRID_LEARNING_ENABLED: bool = (
 STABILITY_CLASSIFICATION_ENABLED: bool = (
     os.getenv("STABILITY_CLASSIFICATION_ENABLED", "true").lower() == "true"
 )
-HIGH_CONFIDENCE_WEIGHT: float = float(os.getenv("HIGH_CONFIDENCE_WEIGHT", "1.0"))
-LOW_CONFIDENCE_WEIGHT: float = float(os.getenv("LOW_CONFIDENCE_WEIGHT", "0.3"))
-LEARNING_PHASE_SKIP_WEIGHT: float = float(os.getenv("LEARNING_PHASE_SKIP_WEIGHT", "0.0"))
+HIGH_CONFIDENCE_WEIGHT: float = float(
+    os.getenv("HIGH_CONFIDENCE_WEIGHT", "1.0")
+)
+LOW_CONFIDENCE_WEIGHT: float = float(
+    os.getenv("LOW_CONFIDENCE_WEIGHT", "0.3")
+)
+LEARNING_PHASE_SKIP_WEIGHT: float = float(
+    os.getenv("LEARNING_PHASE_SKIP_WEIGHT", "0.0")
+)
 
 # --- MAE/RMSE Tracking System (Phase 2 Enhancement) ---
 # Enable comprehensive prediction accuracy tracking
@@ -292,7 +282,9 @@ PREDICTION_METRICS_ENABLED: bool = (
 METRICS_WINDOW_1H: int = int(os.getenv("METRICS_WINDOW_1H", "12"))
 METRICS_WINDOW_6H: int = int(os.getenv("METRICS_WINDOW_6H", "72"))
 METRICS_WINDOW_24H: int = int(os.getenv("METRICS_WINDOW_24H", "288"))
-PREDICTION_ACCURACY_THRESHOLD: float = float(os.getenv("PREDICTION_ACCURACY_THRESHOLD", "0.3"))
+PREDICTION_ACCURACY_THRESHOLD: float = float(
+    os.getenv("PREDICTION_ACCURACY_THRESHOLD", "0.3")
+)
 
 # --- Trajectory Prediction Enhancement (Phase 2) ---
 # Advanced trajectory prediction with forecast integration
@@ -311,9 +303,6 @@ OVERSHOOT_DETECTION_ENABLED: bool = (
 
 # --- Historical Calibration System (Phase 0) ---
 # Physics-based historical parameter optimization
-CALIBRATION_BASELINE_FILE: str = os.getenv(
-    "CALIBRATION_BASELINE_FILE", "/data/calibrated_baseline.json"
-)
 STABILITY_TEMP_CHANGE_THRESHOLD: float = float(
     os.getenv("STABILITY_TEMP_CHANGE_THRESHOLD", "0.1")
 )
@@ -345,7 +334,9 @@ TV_HEAT_WEIGHT: float = float(os.getenv("TV_HEAT_WEIGHT", "0.2"))
 THERMAL_TIME_CONSTANT: float = float(os.getenv("THERMAL_TIME_CONSTANT", "4.0"))
 EQUILIBRIUM_RATIO: float = float(os.getenv("EQUILIBRIUM_RATIO", "0.17"))
 TOTAL_CONDUCTANCE: float = float(os.getenv("TOTAL_CONDUCTANCE", "0.24"))
-ADAPTIVE_LEARNING_RATE: float = float(os.getenv("ADAPTIVE_LEARNING_RATE", "0.01"))
+ADAPTIVE_LEARNING_RATE: float = float(
+    os.getenv("ADAPTIVE_LEARNING_RATE", "0.01")
+)
 LEARNING_CONFIDENCE: float = float(os.getenv("LEARNING_CONFIDENCE", "3.0"))
 MIN_LEARNING_RATE: float = float(os.getenv("MIN_LEARNING_RATE", "0.001"))
 MAX_LEARNING_RATE: float = float(os.getenv("MAX_LEARNING_RATE", "0.1"))

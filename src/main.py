@@ -25,6 +25,7 @@ import pandas as pd
 from dotenv import load_dotenv
 
 from . import config
+from .thermal_constants import PhysicsConstants
 from .physics_features import build_physics_features
 from .ha_client import create_ha_client, get_sensor_attributes
 from .influx_service import create_influx_service
@@ -34,75 +35,11 @@ from .physics_calibration import (
     validate_thermal_model,
 )
 from .state_manager import load_state, save_state
-from .heating_controller import BlockingStateManager
-
-
-def poll_for_blocking(ha_client, state, blocking_entities):
-    """
-    Poll for blocking events during the idle period so defrost starts/ends
-    are detected quickly. This function encapsulates the idle polling logic
-    so it can be unit tested.
-    """
-    end_time = time.time() + config.CYCLE_INTERVAL_MINUTES * 60
-    while time.time() < end_time:
-        try:
-            all_states_poll = ha_client.get_all_states()
-        except Exception:
-            logging.warning(
-                "Failed to poll HA during idle; will retry.", exc_info=True
-            )
-            time.sleep(config.BLOCKING_POLL_INTERVAL_SECONDS)
-            continue
-
-        blocking_now = any(
-            ha_client.get_state(e, all_states_poll, is_binary=True)
-            for e in blocking_entities
-        )
-
-        # Blocking started during idle -> persist and handle immediately.
-        if blocking_now and not state.get("last_is_blocking", False):
-            try:
-                blocking_reasons_now = [
-                    e
-                    for e in blocking_entities
-                    if ha_client.get_state(e, all_states_poll, is_binary=True)
-                ]
-                save_state(
-                    last_is_blocking=True,
-                    last_final_temp=state.get("last_final_temp"),
-                    last_blocking_reasons=blocking_reasons_now,
-                    last_blocking_end_time=None,
-                )
-                logging.debug(
-                    "Blocking detected during idle poll; handling immediately."
-                )
-            except Exception:
-                logging.warning(
-                    "Failed to persist blocking start during idle poll.",
-                    exc_info=True,
-                )
-            return
-
-        # Blocking ended during idle -> persist end time so grace will run.
-        if state.get("last_is_blocking", False) and not blocking_now:
-            try:
-                save_state(
-                    last_is_blocking=True,
-                    last_blocking_end_time=time.time(),
-                    last_blocking_reasons=[],
-                )
-                logging.debug(
-                    "Blocking ended during idle poll; "
-                    "will run grace on next loop."
-                )
-            except Exception:
-                logging.warning(
-                    "Failed to persist blocking end during idle poll.",
-                    exc_info=True,
-                )
-            return
-
-        time.sleep(config.BLOCKING_POLL_INTERVAL_SECONDS)
+from .heating_controller import (
+    BlockingStateManager,
+    SensorDataManager,
+    HeatingSystemStateChecker,
+)
 
 
 def main():
@@ -124,9 +61,15 @@ def main():
         action="store_true",
         help="Test model behavior and exit.",
     )
-    parser.add_argument("--debug", action="store_true", help="Enable debug logging.")
-    parser.add_argument("--list-backups", action="store_true", help="List available backups.")
-    parser.add_argument("--restore-backup", type=str, help="Restore from a backup file.")
+    parser.add_argument(
+        "--debug", action="store_true", help="Enable debug logging."
+    )
+    parser.add_argument(
+        "--list-backups", action="store_true", help="List available backups."
+    )
+    parser.add_argument(
+        "--restore-backup", type=str, help="Restore from a backup file."
+    )
     args = parser.parse_args()
     # Load environment variables and configure logging.
     load_dotenv()
@@ -226,7 +169,9 @@ def main():
     if args.restore_backup:
         from .unified_thermal_state import get_thermal_state_manager
         state_manager = get_thermal_state_manager()
-        success, message = state_manager.restore_from_backup(args.restore_backup)
+        success, message = state_manager.restore_from_backup(
+            args.restore_backup
+        )
         if success:
             print(f"Successfully restored from backup: {args.restore_backup}")
             print(message)
@@ -346,7 +291,7 @@ def main():
                         "Failed to write NETWORK_ERROR state to HA.",
                         exc_info=True,
                     )
-                time.sleep(300)
+                time.sleep(PhysicsConstants.RETRY_DELAY_SECONDS)
                 continue
 
             # --- Check for blocking modes (DHW, Defrost) ---
@@ -355,21 +300,19 @@ def main():
             # blocking_entities already defined outside try block. Build a
             # list of active blocking reasons so we can distinguish
             # DHW-like (long) blockers from short ones like defrost.
-            blocking_reasons = [
-                e
-                for e in blocking_entities
-                if ha_client.get_state(e, all_states, is_binary=True)
-            ]
-            is_blocking = bool(blocking_reasons)
+            blocking_manager = BlockingStateManager()
+            is_blocking, blocking_reasons = blocking_manager.check_blocking_state(
+                ha_client, all_states
+            )
 
             # --- Step 1: Online Learning from Previous Cycle ---
             # Learn from the results of the previous cycle. This allows the
             # model to continuously adapt to the actual house behavior,
             # whether running in active mode (model controls heating) or
             # shadow mode (heat curve controls heating).
-            last_run_features = state.get("last_run_features")
-            last_indoor_temp = state.get("last_indoor_temp")
-            last_final_temp_stored = state.get("last_final_temp")
+            last_run_features = state.last_run_features
+            last_indoor_temp = state.last_indoor_temp
+            last_final_temp_stored = state.last_final_temp
 
             if (
                 last_run_features is not None
@@ -587,7 +530,8 @@ def main():
                     )
                 else:
                     logging.debug(
-                        "Skipping online learning: " "current indoor temp unavailable"
+                        "Skipping online learning: current indoor temp "
+                        "unavailable"
                     )
             else:
                 logging.debug("Skipping online learning: no data from previous cycle")
@@ -602,36 +546,9 @@ def main():
                 continue  # Skip cycle due to grace period
 
             # --- Check if heating system is active ---
-            # Skip if the climate entity is not in 'heat' mode
-            heating_state = ha_client.get_state(
-                config.HEATING_STATUS_ENTITY_ID, all_states
-            )
-            if heating_state not in ("heat", "auto"):
-                logging.info(
-                    "Heating system not active (state: %s), skipping cycle.",
-                    heating_state,
-                )
-                try:
-                    attributes_state = get_sensor_attributes("sensor.ml_heating_state")
-                    attributes_state.update(
-                        {
-                            "state_description": f"Heating off ({heating_state})",
-                            "heating_state": heating_state,
-                            "last_updated": datetime.now(timezone.utc).isoformat(),
-                        }
-                    )
-                    ha_client.set_state(
-                        "sensor.ml_heating_state",
-                        6,
-                        attributes_state,
-                        round_digits=None,
-                    )
-                except Exception:
-                    logging.debug(
-                        "Failed to write HEATING_OFF state to HA.",
-                        exc_info=True,
-                    )
-                time.sleep(300)
+            heating_checker = HeatingSystemStateChecker()
+            if not heating_checker.check_heating_active(ha_client, all_states):
+                time.sleep(PhysicsConstants.RETRY_DELAY_SECONDS)
                 continue
 
             if is_blocking:
@@ -665,151 +582,32 @@ def main():
                 # blocking so we can avoid learning from DHW-like cycles).
                 save_state(
                     last_is_blocking=True,
-                    last_final_temp=state.get("last_final_temp"),
+                    last_final_temp=state.last_final_temp,
                     last_blocking_reasons=blocking_reasons,
                     last_blocking_end_time=None,
                 )
-                time.sleep(300)
+                time.sleep(PhysicsConstants.RETRY_DELAY_SECONDS)
                 continue
 
             # --- Get current sensor values ---
-            target_indoor_temp = ha_client.get_state(
-                config.TARGET_INDOOR_TEMP_ENTITY_ID, all_states
-            )
-            actual_indoor = ha_client.get_state(
-                config.INDOOR_TEMP_ENTITY_ID, all_states
-            )
-            actual_outlet_temp = ha_client.get_state(
-                config.ACTUAL_OUTLET_TEMP_ENTITY_ID, all_states
-            )
-            avg_other_rooms_temp = ha_client.get_state(
-                config.AVG_OTHER_ROOMS_TEMP_ENTITY_ID, all_states
-            )
-            fireplace_on = ha_client.get_state(
-                config.FIREPLACE_STATUS_ENTITY_ID, all_states, is_binary=True
-            )
-            outdoor_temp = ha_client.get_state(
-                config.OUTDOOR_TEMP_ENTITY_ID, all_states
-            )
-            owm_temp = ha_client.get_state(
-                config.OPENWEATHERMAP_TEMP_ENTITY_ID, all_states
+            sensor_manager = SensorDataManager()
+            sensor_data, missing_sensors = sensor_manager.get_sensor_data(
+                ha_client, cycle_number
             )
 
-            critical_sensors = {
-                config.TARGET_INDOOR_TEMP_ENTITY_ID: target_indoor_temp,
-                config.INDOOR_TEMP_ENTITY_ID: actual_indoor,
-                config.OUTDOOR_TEMP_ENTITY_ID: outdoor_temp,
-                config.OPENWEATHERMAP_TEMP_ENTITY_ID: owm_temp,
-                config.AVG_OTHER_ROOMS_TEMP_ENTITY_ID: avg_other_rooms_temp,
-                config.ACTUAL_OUTLET_TEMP_ENTITY_ID: actual_outlet_temp,
-            }
-            missing_sensors = [
-                name for name, value in critical_sensors.items() if value is None
-            ]
-
-            # ENHANCED DEBUGGING for intermittent state 4 issue
             if missing_sensors:
-                logging.error(
-                    "🚨 STATE 4 - Critical sensors unavailable: %s",
-                    ", ".join(missing_sensors),
-                )
-                # Log detailed sensor status for debugging
-                logging.error("📊 SENSOR DEBUG:")
-                for name, value in critical_sensors.items():
-                    status = "MISSING" if value is None else "OK"
-                    logging.error(f"   {name}: {value} [{status}]")
-
-                # Force retry sensor read to check if it's a temporary glitch
-                logging.info("🔄 RETRY: Attempting fresh sensor read...")
-                try:
-                    fresh_states = ha_client.get_all_states()
-                    retry_sensors = {
-                        config.TARGET_INDOOR_TEMP_ENTITY_ID: ha_client.get_state(
-                            config.TARGET_INDOOR_TEMP_ENTITY_ID, fresh_states
-                        ),
-                        config.INDOOR_TEMP_ENTITY_ID: ha_client.get_state(
-                            config.INDOOR_TEMP_ENTITY_ID, fresh_states
-                        ),
-                        config.OUTDOOR_TEMP_ENTITY_ID: ha_client.get_state(
-                            config.OUTDOOR_TEMP_ENTITY_ID, fresh_states
-                        ),
-                        config.OPENWEATHERMAP_TEMP_ENTITY_ID: ha_client.get_state(
-                            config.OPENWEATHERMAP_TEMP_ENTITY_ID, fresh_states
-                        ),
-                        config.AVG_OTHER_ROOMS_TEMP_ENTITY_ID: ha_client.get_state(
-                            config.AVG_OTHER_ROOMS_TEMP_ENTITY_ID,
-                            fresh_states,
-                        ),
-                        config.ACTUAL_OUTLET_TEMP_ENTITY_ID: ha_client.get_state(
-                            config.ACTUAL_OUTLET_TEMP_ENTITY_ID, fresh_states
-                        ),
-                    }
-                    retry_missing = [
-                        name for name, value in retry_sensors.items() if value is None
-                    ]
-
-                    if retry_missing:
-                        logging.error(
-                            "❌ CONFIRMED: Still missing after retry: %s",
-                            ", ".join(retry_missing),
-                        )
-                        missing_sensors = retry_missing
-                    else:
-                        logging.warning(
-                            "✅ RACE CONDITION: Retry found all sensors working! "
-                            "Using retry data."
-                        )
-                        # Update with working sensor values from retry
-                        target_indoor_temp = retry_sensors[
-                            config.TARGET_INDOOR_TEMP_ENTITY_ID
-                        ]
-                        actual_indoor = retry_sensors[config.INDOOR_TEMP_ENTITY_ID]
-                        outdoor_temp = retry_sensors[config.OUTDOOR_TEMP_ENTITY_ID]
-                        owm_temp = retry_sensors[
-                            config.OPENWEATHERMAP_TEMP_ENTITY_ID
-                        ]
-                        avg_other_rooms_temp = retry_sensors[
-                            config.AVG_OTHER_ROOMS_TEMP_ENTITY_ID
-                        ]
-                        actual_outlet_temp = retry_sensors[
-                            config.ACTUAL_OUTLET_TEMP_ENTITY_ID
-                        ]
-                        missing_sensors = []  # Clear missing list
-
-                except Exception as e:
-                    logging.error("❌ RETRY FAILED: %s", e, exc_info=True)
-
-            # Only set state 4 if sensors are still missing after retry
-            if missing_sensors:
-                try:
-                    attributes_state = get_sensor_attributes(
-                        "sensor.ml_heating_state"
-                    )
-                    attributes_state.update(
-                        {
-                            "state_description": "No data - missing sensors",
-                            "missing_sensors": missing_sensors,
-                            "last_updated": datetime.now(timezone.utc).isoformat(),
-                            "debug_cycle": cycle_number,
-                            "debug_timestamp": datetime.now().isoformat(),
-                        }
-                    )
-                    ha_client.set_state(
-                        "sensor.ml_heating_state",
-                        4,
-                        attributes_state,
-                        round_digits=None,
-                    )
-                    logging.error(
-                        "🚨 STATE 4 SET in HA with missing sensors: %s",
-                        missing_sensors,
-                    )
-                except Exception:
-                    logging.debug(
-                        "Failed to write NO_DATA state to HA.", exc_info=True
-                    )
-                time.sleep(300)
+                sensor_manager.handle_missing_sensors(ha_client, missing_sensors)
+                time.sleep(PhysicsConstants.RETRY_DELAY_SECONDS)
                 continue
+
+            # Unpack sensor data
+            target_indoor_temp = sensor_data["target_indoor_temp"]
+            actual_indoor = sensor_data["actual_indoor"]
+            actual_outlet_temp = sensor_data["actual_outlet_temp"]
+            avg_other_rooms_temp = sensor_data["avg_other_rooms_temp"]
+            fireplace_on = sensor_data["fireplace_on"]
+            outdoor_temp = sensor_data["outdoor_temp"]
+            owm_temp = sensor_data["owm_temp"]
 
             # --- Step 1: State Retrieval ---
             # Heat balance controller doesn't use prediction history anymore.
@@ -827,18 +625,24 @@ def main():
                 )
             else:
                 prediction_indoor_temp = actual_indoor
-                logging.debug("Fireplace is OFF. Using main indoor temp for prediction.")
+                logging.debug(
+                    "Fireplace is OFF. Using main indoor temp for prediction."
+                )
 
-            features, outlet_history = build_physics_features(ha_client, influx_service)
+            features, outlet_history = build_physics_features(
+                ha_client, influx_service
+            )
             # Handle both DataFrame and dict features properly
             if isinstance(features, pd.DataFrame):
                 # Convert DataFrame to dict for safe access
-                features_dict = features.iloc[0].to_dict() if not features.empty else {}
+                features_dict = (
+                    features.iloc[0].to_dict() if not features.empty else {}
+                )
             else:
                 features_dict = features if isinstance(features, dict) else {}
             if features is None:
                 logging.warning("Feature building failed, skipping cycle.")
-                time.sleep(300)
+                time.sleep(PhysicsConstants.RETRY_DELAY_SECONDS)
                 continue
 
             # --- Step 3: Prediction ---
@@ -1086,7 +890,9 @@ def main():
                     # ThermalEquilibriumModel
                     thermal_trust_metrics = metadata.get("thermal_trust_metrics", {})
 
-                    attributes_state = get_sensor_attributes("sensor.ml_heating_state")
+                    attributes_state = get_sensor_attributes(
+                        "sensor.ml_heating_state"
+                    )
                     attributes_state.update(
                         {
                             "state_description": "Confidence - Too Low"
@@ -1235,7 +1041,9 @@ def main():
             logging.error("Error in main loop: %s", e, exc_info=True)
             try:
                 ha_client = create_ha_client()
-                attributes_state = get_sensor_attributes("sensor.ml_heating_state")
+                attributes_state = get_sensor_attributes(
+                    "sensor.ml_heating_state"
+                )
                 attributes_state.update(
                     {
                         "state_description": "Model error",
@@ -1269,10 +1077,10 @@ def main():
         # starts/ends are detected quickly. This call will block until the
         # next cycle is due, or until a blocking event starts or ends.
         logging.debug(
-            f"💤 POLLING START: Waiting {config.CYCLE_INTERVAL_MINUTES}min "
+            f"💤 POLLING START: Waiting {PhysicsConstants.CYCLE_INTERVAL_MINUTES}min "
             "until next cycle..."
         )
-        poll_for_blocking(ha_client, state, blocking_entities)
+        blocking_manager.poll_for_blocking(ha_client, state)
 
         poll_end_time = time.time()
         poll_duration = poll_end_time - cycle_end_time

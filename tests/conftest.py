@@ -16,17 +16,17 @@ ensure that our tests are always aligned with the documented thermal model
 specification.
 """
 import pytest
-import os
+
 
 @pytest.fixture(autouse=True)
 def enforce_tdd_thermal_parameters(monkeypatch):
     """
     Enforces TDD-compliant thermal parameters for all tests.
-    
-    This fixture is automatically applied to every test function (`autouse=True`).
-    It uses `monkeypatch` to set environment variables to the exact values
-    defined in the TDD specification, ensuring a consistent and controlled
-    testing environment.
+
+    This fixture is automatically applied to every test function
+    (`autouse=True`). It uses `monkeypatch` to set environment variables
+    to the exact values defined in the TDD specification, ensuring a
+    consistent and controlled testing environment.
     """
     tdd_params = {
         # Core Thermal Properties
@@ -51,3 +51,11 @@ def enforce_tdd_thermal_parameters(monkeypatch):
     
     for key, value in tdd_params.items():
         monkeypatch.setenv(key, value)
+
+
+@pytest.fixture(autouse=True)
+def cleanup_influx_service():
+    """Ensure InfluxService is cleaned up after every test."""
+    yield
+    from src.influx_service import reset_influx_service
+    reset_influx_service()

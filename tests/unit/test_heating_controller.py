@@ -4,6 +4,7 @@ from unittest.mock import ANY, Mock, patch
 from src.heating_controller import (
     BlockingStateManager, SensorDataManager, HeatingSystemStateChecker
 )
+from src.state_manager import SystemState
 
 
 # Mock HAClient for testing
@@ -35,8 +36,9 @@ class TestBlockingStateManager:
 
     def test_handle_blocking_state(self, blocking_manager, mock_ha_client):
         with patch('src.heating_controller.save_state') as mock_save_state:
+            state = SystemState()
             skip_cycle = blocking_manager.handle_blocking_state(
-                mock_ha_client, True, ["reason"], {})
+                mock_ha_client, True, ["reason"], state)
             assert skip_cycle is True
             mock_save_state.assert_called_once()
 
@@ -46,8 +48,9 @@ class TestBlockingStateManager:
         with patch("src.heating_controller.save_state") as mock_save_state, patch(
             "src.heating_controller.logging"
         ) as mock_logging:
+            state = SystemState()
             skip_cycle = blocking_manager.handle_blocking_state(
-                mock_ha_client, True, ["reason"], {}
+                mock_ha_client, True, ["reason"], state
             )
             assert skip_cycle is True
             mock_save_state.assert_called_once()
@@ -58,14 +61,15 @@ class TestBlockingStateManager:
     def test_handle_grace_period_shadow_mode(self, blocking_manager, mock_ha_client):
         """Test that grace period is skipped in shadow mode."""
         with patch("src.heating_controller.config.SHADOW_MODE", True):
-            skip_cycle = blocking_manager.handle_grace_period(mock_ha_client, {})
+            state = SystemState()
+            skip_cycle = blocking_manager.handle_grace_period(mock_ha_client, state)
             assert skip_cycle is False
 
     def test_handle_grace_period_not_blocking_before(
         self, blocking_manager, mock_ha_client
     ):
         """Test grace period is skipped if not blocking before."""
-        state = {"last_is_blocking": False}
+        state = SystemState(last_is_blocking=False)
         skip_cycle = blocking_manager.handle_grace_period(mock_ha_client, state)
         assert skip_cycle is False
 
@@ -75,7 +79,7 @@ class TestBlockingStateManager:
     ):
         """Test grace period is skipped if it has expired."""
         mock_time.return_value = 10000
-        state = {"last_is_blocking": True, "last_blocking_end_time": 100}
+        state = SystemState(last_is_blocking=True, last_blocking_end_time=100)
         blocking_manager.check_blocking_state = Mock(return_value=(False, []))
 
         with patch("src.heating_controller.config.GRACE_PERIOD_MAX_MINUTES", 5):
@@ -89,7 +93,7 @@ class TestBlockingStateManager:
     ):
         """Test that a grace period is started."""
         mock_time.return_value = 100
-        state = {"last_is_blocking": True}
+        state = SystemState(last_is_blocking=True)
         blocking_manager.check_blocking_state = Mock(return_value=(False, []))
 
         with patch("src.heating_controller.save_state") as mock_save:
@@ -103,7 +107,7 @@ class TestBlockingStateManager:
     @patch("src.heating_controller.BlockingStateManager._wait_for_grace_target")
     def test_grace_period_fallback(self, mock_wait, mock_attrs, mock_time, blocking_manager, mock_ha_client):
         """Test grace period fallback logic when sensors are missing."""
-        state = {"last_is_blocking": True, "last_blocking_end_time": 90, "last_final_temp": 42.0}
+        state = SystemState(last_is_blocking=True, last_blocking_end_time=90, last_final_temp=42.0)
         blocking_manager.check_blocking_state = Mock(return_value=(False, []))
         mock_ha_client.get_state.side_effect = [None, None, None, 40.0]
 
@@ -122,15 +126,24 @@ class TestBlockingStateManager:
         self, mock_influx, mock_build, mock_wrapper_getter, mock_time, blocking_manager, mock_ha_client
     ):
         """Test intelligent recovery when outlet temp is already close to target."""
-        state = {"last_is_blocking": True, "last_blocking_end_time": 90}
+        state = SystemState(last_is_blocking=True, last_blocking_end_time=90)
         blocking_manager.check_blocking_state = Mock(return_value=(False, []))
         mock_ha_client.get_state.side_effect = [21.0, 22.0, 5.0, 44.8]
 
         mock_wrapper = Mock()
         mock_wrapper._calculate_required_outlet_temp.return_value = 45.0
         mock_wrapper_getter.return_value = mock_wrapper
-        mock_build.return_value = ({}, {})
-
+        
+        mock_df = Mock()
+        mock_df.empty = False
+        # Mock iloc[0].to_dict()
+        mock_row = Mock()
+        mock_row.to_dict.return_value = {"some": "features"}
+        # Configure iloc to return mock_row when accessed with index 0
+        mock_df.iloc = [mock_row]
+        
+        mock_build.return_value = (mock_df, {})
+    
         with patch("src.heating_controller.save_state"):
             blocking_manager.handle_grace_period(mock_ha_client, state)
             mock_ha_client.set_state.assert_not_called()

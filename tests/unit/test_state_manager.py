@@ -4,6 +4,7 @@ from unittest.mock import patch, MagicMock, call
 import logging
 
 from src import state_manager
+from src.state_manager import SystemState
 
 @pytest.fixture
 def mock_thermal_state_manager():
@@ -15,12 +16,13 @@ def mock_thermal_state_manager():
 
 def test_load_state_success(mock_thermal_state_manager):
     """Test successful loading of state."""
-    expected_state = {"key": "value"}
-    mock_thermal_state_manager.get_operational_state.return_value = expected_state
+    state_dict = {"last_final_temp": 45.0}
+    mock_thermal_state_manager.get_operational_state.return_value = state_dict
     
     result = state_manager.load_state()
     
-    assert result == expected_state
+    assert isinstance(result, SystemState)
+    assert result.last_final_temp == 45.0
     mock_thermal_state_manager.get_operational_state.assert_called_once()
 
 def test_load_state_failure(mock_thermal_state_manager, caplog):
@@ -30,17 +32,15 @@ def test_load_state_failure(mock_thermal_state_manager, caplog):
     with caplog.at_level(logging.WARNING):
         result = state_manager.load_state()
     
-    default_state = {
-        "last_run_features": None,
-        "last_indoor_temp": None,
-        "last_avg_other_rooms_temp": None,
-        "last_fireplace_on": False,
-        "last_final_temp": None,
-        "last_is_blocking": False,
-        "last_blocking_end_time": None,
-    }
+    assert isinstance(result, SystemState)
+    assert result.last_run_features is None
+    assert result.last_indoor_temp is None
+    assert result.last_avg_other_rooms_temp is None
+    assert result.last_fireplace_on is False
+    assert result.last_final_temp is None
+    assert result.last_is_blocking is False
+    assert result.last_blocking_end_time is None
     
-    assert result == default_state
     assert "Could not load operational state" in caplog.text
     assert "Load error" in caplog.text
 

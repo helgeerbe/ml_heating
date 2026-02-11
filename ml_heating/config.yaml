@@ -137,6 +137,14 @@ options:
   # Advanced Learning Features - Multi-lag and seasonal learning
   # Enable time-delayed learning for external heat sources (PV, fireplace, TV)
   enable_multi_lag_learning: true
+  # Enable learning from periods when HVAC is off (typically summer)
+  enable_summer_learning: true
+  # Enable intelligent learning phase classification with weighted periods
+  hybrid_learning_enabled: true
+  # Enable comprehensive prediction accuracy tracking
+  prediction_metrics_enabled: true
+  # Advanced trajectory prediction with forecast integration
+  trajectory_prediction_enabled: true
   # Number of lag steps for PV effects (each step = 30 minutes)
   pv_lag_steps: 4
   # Number of lag steps for fireplace effects

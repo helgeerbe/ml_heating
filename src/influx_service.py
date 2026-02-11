@@ -28,6 +28,15 @@ class InfluxService:
         self.query_api: QueryApi = self.client.query_api()
         self.write_api = self.client.write_api(write_options=SYNCHRONOUS)
 
+    def close(self):
+        """Closes the InfluxDB client connection."""
+        if hasattr(self, 'client') and self.client:
+            try:
+                self.client.close()
+            except Exception:
+                pass
+            self.client = None
+
     def get_pv_forecast(self) -> list[float]:
         """
         Retrieves the PV (photovoltaic) power forecast for the next 4 hours.
@@ -860,4 +869,18 @@ def get_influx_service():
 def reset_influx_service():
     """Reset the singleton instance (useful for testing)."""
     global _influx_service_instance
+    if _influx_service_instance:
+        try:
+            _influx_service_instance.close()
+        except Exception:
+            pass
     _influx_service_instance = None
+
+
+import atexit
+
+def _cleanup_influx_service():
+    """Cleanup function to close the InfluxService on exit."""
+    reset_influx_service()
+
+atexit.register(_cleanup_influx_service)

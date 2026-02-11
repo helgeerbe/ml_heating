@@ -98,6 +98,12 @@ def convert_addon_to_env(config):
         'INFLUXDB_TOKEN': config.get('influxdb_token', ''),
         'INFLUXDB_ORG': config.get('influxdb_org', ''),
         'INFLUXDB_BUCKET': config.get('influxdb_bucket', 'homeassistant'),
+        'INFLUX_FEATURES_BUCKET': config.get('influx_features_bucket', 'ml_heating_features'),
+
+        # Advanced Features
+        'HYBRID_LEARNING_ENABLED': str(config.get('hybrid_learning_enabled', True)).lower(),
+        'PREDICTION_METRICS_ENABLED': str(config.get('prediction_metrics_enabled', True)).lower(),
+        'TRAJECTORY_PREDICTION_ENABLED': str(config.get('trajectory_prediction_enabled', True)).lower(),
         
         # Blocking detection entities
         'DHW_STATUS_ENTITY_ID': config.get('dhw_status_entity', ''),
@@ -138,21 +144,13 @@ def convert_addon_to_env(config):
         'PREDICTION_HORIZON_STEPS': str(config.get('prediction_horizon_steps', 24)),
         
         # Advanced Learning Features - Multi-lag learning
-        'ENABLE_MULTI_LAG_LEARNING': str(config.get('enable_multi_lag_learning', True)),
         'PV_LAG_STEPS': str(config.get('pv_lag_steps', 4)),
         'FIREPLACE_LAG_STEPS': str(config.get('fireplace_lag_steps', 4)),
         'TV_LAG_STEPS': str(config.get('tv_lag_steps', 2)),
         
         # Seasonal Adaptation
-        'ENABLE_SEASONAL_ADAPTATION': str(config.get('seasonal_learning_enabled', True)),
         'SEASONAL_LEARNING_RATE': str(config.get('seasonal_learning_rate', 0.01)),
         'MIN_SEASONAL_SAMPLES': str(config.get('min_seasonal_samples', 100)),
-        
-        # Summer Learning
-        'ENABLE_SUMMER_LEARNING': str(config.get('enable_summer_learning', True)),
-        
-        # Advanced InfluxDB
-        'INFLUX_FEATURES_BUCKET': config.get('influx_features_bucket', 'ml_heating_features'),
         
         # System Behavior
         'GRACE_PERIOD_MAX_MINUTES': str(config.get('grace_period_max_minutes', 30)),

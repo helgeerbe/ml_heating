@@ -2,6 +2,7 @@
 import pytest
 from unittest.mock import Mock, patch
 from src.heating_controller import BlockingStateManager
+from src.state_manager import SystemState
 
 
 @pytest.fixture
@@ -19,7 +20,7 @@ class TestBlockingStateManager:
     ):
         """Test that the grace period is skipped when in shadow mode."""
         # Arrange
-        state = {"last_is_blocking": True, "last_blocking_end_time": None}
+        state = SystemState(last_is_blocking=True)
 
         # Act
         in_grace_period = blocking_manager.handle_grace_period(
@@ -36,7 +37,7 @@ class TestBlockingStateManager:
         """Test that the grace period is handled when blocking ends."""
         # Arrange
         mock_time.return_value = 1000  # Mock current time
-        state = {"last_is_blocking": True, "last_blocking_end_time": None}
+        state = SystemState(last_is_blocking=True)
         mock_ha_client.get_state.return_value = False  # No longer blocking
 
         with patch.object(
@@ -61,7 +62,7 @@ class TestBlockingStateManager:
     ):
         """Test no grace period if not blocking previously."""
         # Arrange
-        state = {"last_is_blocking": False}
+        state = SystemState(last_is_blocking=False)
 
         # Act
         in_grace_period = blocking_manager.handle_grace_period(
@@ -78,7 +79,7 @@ class TestBlockingStateManager:
     ):
         """Test grace period with no last_final_temp in state."""
         # Arrange
-        state = {}  # No last_final_temp
+        state = SystemState()  # No last_final_temp
         age = 120.0
         mock_config.INDOOR_TEMP_ENTITY_ID = "sensor.indoor_temp"
         mock_ha_client.get_state.return_value = None  # Missing sensors
@@ -104,7 +105,7 @@ class TestBlockingStateManager:
     ):
         """Test grace period when outlet_temp is not available."""
         # Arrange
-        state = {"last_final_temp": 38.0}
+        state = SystemState(last_final_temp=38.0)
         age = 120.0
         # All critical sensors are None
         mock_ha_client.get_state.return_value = None
