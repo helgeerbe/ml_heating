@@ -100,6 +100,18 @@ INDOOR_TEMP_ENTITY_ID: str = os.getenv(
 ACTUAL_OUTLET_TEMP_ENTITY_ID: str = os.getenv(
     "ACTUAL_OUTLET_TEMP_ENTITY_ID", "sensor.hp_outlet_temp"
 )
+INLET_TEMP_ENTITY_ID: str = os.getenv(
+    "INLET_TEMP_ENTITY_ID", "sensor.hp_inlet_temp"
+)
+FLOW_RATE_ENTITY_ID: str = os.getenv(
+    "FLOW_RATE_ENTITY_ID", "sensor.hp_current_flow_rate"
+)
+POWER_CONSUMPTION_ENTITY_ID: str = os.getenv(
+    "POWER_CONSUMPTION_ENTITY_ID", "sensor.power_wp"
+)
+SPECIFIC_HEAT_CAPACITY: float = float(
+    os.getenv("SPECIFIC_HEAT_CAPACITY", "4.186")
+)
 # The entity the script will write the final calculated temperature to.
 TARGET_OUTLET_TEMP_ENTITY_ID: str = os.getenv(
     "TARGET_OUTLET_TEMP_ENTITY_ID", "sensor.ml_vorlauftemperatur"

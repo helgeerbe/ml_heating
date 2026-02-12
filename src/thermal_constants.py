@@ -40,8 +40,15 @@ class PhysicsConstants:
     MAX_TIME_CONSTANT = 24.0   # Maximum thermal time constant (24 hours)
     
     # Heat loss bounds
-    MIN_HEAT_LOSS_COEFF = 0.1  # Minimum heat loss coefficient  
+    MIN_HEAT_LOSS_COEFF = 0.1  # Minimum heat loss coefficient
     MAX_HEAT_LOSS_COEFF = 10.0  # Maximum heat loss coefficient
+
+    # Specific heat capacity of water (kJ/kg·K)
+    SPECIFIC_HEAT_WATER = 4.186
+    # Minimum valid flow rate (L/h)
+    MIN_FLOW_RATE = 0.0
+    # Maximum valid flow rate (L/h) - sanity check
+    MAX_FLOW_RATE = 5000.0
     
     # Effectiveness bounds
     MIN_EFFECTIVENESS = 0.01   # Minimum outlet effectiveness (1%)

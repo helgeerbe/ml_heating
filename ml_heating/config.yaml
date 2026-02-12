@@ -33,6 +33,14 @@ options:
   heating_control_entity: "climate.heizung_2"
   # The heat pump's actual outlet temperature sensor
   outlet_temp_entity: "sensor.hp_outlet_temp"
+  # The heat pump's inlet (return) temperature sensor
+  inlet_temp_entity: "sensor.hp_inlet_temp"
+  # The heat pump's flow rate sensor (L/h)
+  flow_rate_entity: "sensor.hp_current_flow_rate"
+  # The heat pump's power consumption sensor (Watts)
+  power_consumption_entity: "sensor.power_wp"
+  # Specific heat capacity of the fluid (kJ/kg·K)
+  specific_heat_capacity: 4.186
   # The entity this script will write its calculated target outlet temperature to
   target_outlet_temp_entity: "sensor.ml_vorlauftemperatur"
   # The target outlet temperature that was actually set (by model or heat curve)
