@@ -18,6 +18,9 @@ def test_adaptive_learning_with_small_errors():
     """Test adaptive learning with small, consistent errors."""
     print("\n\U0001f9ea Test: Adaptive Learning with Small Errors")
     model = ThermalEquilibriumModel()
+    
+    # Force initial confidence to a non-max value to ensure it can increase
+    model.learning_confidence = 3.0
     initial_confidence = model.learning_confidence
     
     for _ in range(10):

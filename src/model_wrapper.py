@@ -143,6 +143,9 @@ class EnhancedModelWrapper:
             current_indoor = to_scalar(current_indoor)
             outdoor_temp = to_scalar(outdoor_temp)
             outlet_temp = to_scalar(outlet_temp)
+            thermal_power = kwargs.get("thermal_power", None)
+            if thermal_power is not None:
+                thermal_power = to_scalar(thermal_power)
 
             # Additional safety checks
             if outdoor_temp == 0.0:
@@ -167,6 +170,7 @@ class EnhancedModelWrapper:
                     pv_power=pv_power,
                     fireplace_on=fireplace_on,
                     tv_on=tv_on,
+                    thermal_power=thermal_power,
                 )
             )
 
@@ -252,6 +256,7 @@ class EnhancedModelWrapper:
         thermal_features["pv_power"] = features.get("pv_now", 0.0)
         thermal_features["fireplace_on"] = float(features.get("fireplace_on", 0))
         thermal_features["tv_on"] = float(features.get("tv_on", 0))
+        thermal_features["thermal_power"] = float(features.get("thermal_power_kw", 0.0))
 
         # Enhanced thermal intelligence features
         thermal_features["indoor_temp_gradient"] = \

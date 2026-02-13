@@ -55,6 +55,7 @@ class TestThermalStateManager:
         params = {
             "heat_loss_coefficient": 0.1,
             "outlet_effectiveness": 0.2,
+            "thermal_time_constant": 25.5,
         }
         state_manager.set_calibrated_baseline(params, calibration_cycles=100)
 
@@ -62,6 +63,8 @@ class TestThermalStateManager:
         assert current_params["baseline_parameters"]["source"] == "calibrated"
         assert current_params["baseline_parameters"][
             "heat_loss_coefficient"] == 0.1
+        assert current_params["baseline_parameters"][
+            "thermal_time_constant"] == 25.5
         assert current_params["baseline_parameters"][
             "calibration_cycles"] == 100
 

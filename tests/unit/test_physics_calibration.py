@@ -2,10 +2,9 @@
 import pytest
 import pandas as pd
 import numpy as np
-from unittest.mock import patch, Mock, MagicMock
+from unittest.mock import patch, MagicMock
 
 from src import physics_calibration
-from src.thermal_equilibrium_model import ThermalEquilibriumModel
 
 
 @pytest.fixture(autouse=True)
@@ -21,6 +20,9 @@ def mock_config():
         mock_config.DEFROST_STATUS_ENTITY_ID = "sensor.defrosting"
         mock_config.DISINFECTION_STATUS_ENTITY_ID = "sensor.disinfection"
         mock_config.DHW_BOOST_HEATER_STATUS_ENTITY_ID = "sensor.boost_heater"
+        mock_config.INLET_TEMP_ENTITY_ID = "sensor.inlet_temp"
+        mock_config.FLOW_RATE_ENTITY_ID = "sensor.flow_rate"
+        mock_config.POWER_CONSUMPTION_ENTITY_ID = "sensor.power_consumption"
         mock_config.GRACE_PERIOD_MAX_MINUTES = 30
         mock_config.TRAINING_LOOKBACK_HOURS = 24
         yield mock_config
@@ -33,7 +35,9 @@ def test_check_blocking_states():
         'disinfection': [0, 0, 1],
         'boost_heater': [0, 0, 0]
     })
-    blocking, reasons = physics_calibration.check_blocking_states(df, 'dhw_heating', 'defrosting', 'disinfection', 'boost_heater')
+    blocking, reasons = physics_calibration.check_blocking_states(
+        df, 'dhw_heating', 'defrosting', 'disinfection', 'boost_heater'
+    )
     assert blocking
     assert 'dhw_heating' in reasons
     assert 'disinfection' in reasons
@@ -41,7 +45,10 @@ def test_check_blocking_states():
     df_no_blocking = pd.DataFrame({
         'dhw_heating': [0, 0, 0],
     })
-    blocking, reasons = physics_calibration.check_blocking_states(df_no_blocking, 'dhw_heating', 'defrosting', 'disinfection', 'boost_heater')
+    blocking, reasons = physics_calibration.check_blocking_states(
+        df_no_blocking, 'dhw_heating', 'defrosting', 'disinfection',
+        'boost_heater'
+    )
     assert not blocking
     assert not reasons
 
@@ -49,7 +56,9 @@ def test_check_blocking_states():
 @pytest.fixture
 def sample_df():
     base_time = pd.to_datetime('2023-01-01')
-    time_series = pd.to_datetime([base_time + pd.Timedelta(minutes=i*5) for i in range(100)])
+    time_series = pd.to_datetime(
+        [base_time + pd.Timedelta(minutes=i * 5) for i in range(100)]
+    )
     data = {
         '_time': time_series,
         'indoor_temp': 21.0,
@@ -62,6 +71,10 @@ def sample_df():
         'defrosting': 0,
         'disinfection': 0,
         'boost_heater': 0,
+        'inlet_temp': 40.0,
+        'flow_rate': 1000.0,
+        'power_consumption': 500.0,
+        'thermal_power_kw': 2.0,
     }
     df = pd.DataFrame(data)
     return df
@@ -96,6 +109,16 @@ def test_filter_stable_periods_with_blocking(sample_df):
         assert len(stable_periods) < 83
 
 
+def test_filter_stable_periods_low_flow(sample_df):
+    sample_df['flow_rate'] = 5.0  # Below 10.0 threshold
+    with patch('src.physics_calibration.log_filtering_stats'), \
+         patch('src.physics_calibration.json'), \
+         patch('builtins.open'):
+        stable_periods = physics_calibration.filter_stable_periods(sample_df)
+        # Should be filtered out because flow rate is too low
+        assert len(stable_periods) == 0
+
+
 @pytest.fixture
 def stable_periods_fixture():
     return [
@@ -111,43 +134,119 @@ def stable_periods_fixture():
 
 
 def test_calculate_mae_for_params(stable_periods_fixture):
-    param_names = ['thermal_time_constant', 'heat_loss_coefficient', 'outlet_effectiveness']
+    param_names = [
+        'thermal_time_constant',
+        'heat_loss_coefficient',
+        'outlet_effectiveness'
+    ]
     params = [20.0, 0.5, 0.8]
     current_params = {
-        'thermal_time_constant': 20.0, 'heat_loss_coefficient': 0.5, 'outlet_effectiveness': 0.8,
-        'pv_heat_weight': 0.001, 'fireplace_heat_weight': 2.0, 'tv_heat_weight': 0.2
+        'thermal_time_constant': 20.0,
+        'heat_loss_coefficient': 0.5,
+        'outlet_effectiveness': 0.8,
+        'pv_heat_weight': 0.001,
+        'fireplace_heat_weight': 2.0,
+        'tv_heat_weight': 0.2
     }
 
-    with patch('src.physics_calibration.ThermalEquilibriumModel') as mock_model_class:
-        mock_model_instance = mock_model_class.return_value
+    with patch('src.physics_calibration.ThermalEquilibriumModel') as mock_cls:
+        mock_model_instance = mock_cls.return_value
         mock_model_instance.predict_equilibrium_temperature.return_value = 21.5
 
         mae = physics_calibration.calculate_mae_for_params(
             params, param_names, stable_periods_fixture, current_params
         )
         assert mae == pytest.approx(0.5)
-        assert mock_model_instance.predict_equilibrium_temperature.call_count == 1
+        assert (
+            mock_model_instance.predict_equilibrium_temperature.call_count == 1
+        )
+
+
+def test_calculate_direct_heat_loss():
+    """Test direct heat loss calculation from thermal power."""
+    stable_periods = [
+        {
+            'indoor_temp': 21.0,
+            'outdoor_temp': 1.0,
+            'thermal_power_kw': 2.0,  # 2kW for 20K delta -> U=0.1
+            'pv_power': 0,
+            'fireplace_on': 0,
+            'tv_on': 0
+        },
+        {
+            'indoor_temp': 21.0,
+            'outdoor_temp': 1.0,
+            'thermal_power_kw': 4.0,  # 4kW for 20K delta -> U=0.2
+            'pv_power': 0,
+            'fireplace_on': 0,
+            'tv_on': 0
+        },
+        {
+            'indoor_temp': 21.0,
+            'outdoor_temp': 1.0,
+            'thermal_power_kw': None,  # Should be ignored
+            'pv_power': 0,
+            'fireplace_on': 0,
+            'tv_on': 0
+        },
+        {
+            'indoor_temp': 21.0,
+            'outdoor_temp': 1.0,
+            'thermal_power_kw': 2.0,
+            'pv_power': 500,  # Should be ignored (high PV)
+            'fireplace_on': 0,
+            'tv_on': 0
+        }
+    ]
+
+    u_val = physics_calibration.calculate_direct_heat_loss(stable_periods)
+    
+    # Expected: Average of 0.1 and 0.2 = 0.15
+    assert u_val == pytest.approx(0.15)
 
 
 def test_build_optimization_params():
     current_params = {
-        'thermal_time_constant': 10, 'heat_loss_coefficient': 0.1, 'outlet_effectiveness': 0.5,
-        'pv_heat_weight': 0.001, 'fireplace_heat_weight': 2.0, 'tv_heat_weight': 0.5
+        'thermal_time_constant': 10,
+        'heat_loss_coefficient': 0.1,
+        'outlet_effectiveness': 0.5,
+        'pv_heat_weight': 0.001,
+        'fireplace_heat_weight': 2.0,
+        'tv_heat_weight': 0.5
     }
     excluded_params = ['fireplace_heat_weight']
 
-    with patch('src.physics_calibration.ThermalParameterConfig') as mock_thermal_config:
-        mock_thermal_config.get_bounds.return_value = (0, 1)
+    with patch(
+        'src.physics_calibration.ThermalParameterConfig'
+    ) as mock_config:
+        mock_config.get_bounds.return_value = (0, 1)
 
-        names, values, bounds = physics_calibration.build_optimization_params(current_params, excluded_params)
+        # Test without heat loss center
+        names, values, bounds = physics_calibration.build_optimization_params(
+            current_params, excluded_params
+        )
 
         assert 'fireplace_heat_weight' not in names
         assert 'pv_heat_weight' in names
-        assert len(names) == 5
-        assert len(values) == 5
-        assert len(bounds) == 5
-        assert names[3] == 'pv_heat_weight'
-        assert values[3] == 0.001
+        # Expected params: heat_loss_coefficient, outlet_effectiveness, pv_heat_weight, tv_heat_weight
+        assert len(names) == 4
+        assert len(values) == 4
+        assert len(bounds) == 4
+        assert names[2] == 'pv_heat_weight'
+        assert values[2] == 0.001
+
+        # Test with heat loss center
+        names, values, bounds = physics_calibration.build_optimization_params(
+            current_params, excluded_params, heat_loss_center=0.2
+        )
+        
+        # Find heat loss index
+        hl_idx = names.index('heat_loss_coefficient')
+        hl_bounds = bounds[hl_idx]
+        
+        # Should be constrained to +/- 30% of 0.2 -> 0.14 to 0.26
+        assert hl_bounds[0] == pytest.approx(0.14)
+        assert hl_bounds[1] == pytest.approx(0.26)
 
 
 @pytest.fixture
@@ -157,13 +256,19 @@ def mock_scipy_minimize():
 
 
 @patch('src.physics_calibration.ThermalParameterConfig')
-def test_optimize_thermal_parameters(mock_thermal_config, stable_periods_fixture, mock_scipy_minimize):
-    mock_scipy_minimize.return_value = MagicMock(success=True, x=[1, 2, 3, 4, 5], fun=0.123)
+def test_optimize_thermal_parameters(
+    mock_thermal_config, stable_periods_fixture, mock_scipy_minimize
+):
+    mock_scipy_minimize.return_value = MagicMock(
+        success=True, x=[1, 2, 3, 4, 5], fun=0.123
+    )
     mock_thermal_config.get_default.return_value = 0.5
     mock_thermal_config.get_bounds.return_value = (0, 1)
 
     with patch('src.physics_calibration.debug_thermal_predictions'):
-        result = physics_calibration.optimize_thermal_parameters(stable_periods_fixture)
+        result = physics_calibration.optimize_thermal_parameters(
+            stable_periods_fixture
+        )
 
         mock_scipy_minimize.assert_called_once()
         assert result is not None
@@ -172,7 +277,9 @@ def test_optimize_thermal_parameters(mock_thermal_config, stable_periods_fixture
 
 
 def test_optimize_thermal_parameters_scipy_disabled(stable_periods_fixture):
-     with patch('src.physics_calibration.minimize', None):
-         result = physics_calibration.optimize_thermal_parameters(stable_periods_fixture)
-         assert result is None
+    with patch('src.physics_calibration.minimize', None):
+        result = physics_calibration.optimize_thermal_parameters(
+            stable_periods_fixture
+        )
+        assert result is None
 

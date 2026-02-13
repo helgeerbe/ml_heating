@@ -83,6 +83,17 @@ def test_write_metrics(influx_service):
     influx_service.write_thermal_learning_metrics(mock_model)
     influx_service.write_api.write.assert_called()
 
+    # Test write_thermodynamic_metrics (New)
+    thermo_metrics = {
+        "cop_realtime": 3.5,
+        "thermal_power_kw": 5.0,
+        "delta_t": 5.0,
+        "flow_rate": 1000.0,
+        "inlet_temp": 35.0
+    }
+    influx_service.write_thermodynamic_metrics(thermo_metrics)
+    influx_service.write_api.write.assert_called()
+
 
 def test_singleton_logic(mock_config):
     """Test the singleton creation and reset logic."""

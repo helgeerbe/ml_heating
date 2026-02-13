@@ -34,12 +34,14 @@ from .physics_calibration import (
     train_thermal_equilibrium_model,
     validate_thermal_model,
 )
+from .physics_features import calculate_thermodynamic_metrics
 from .state_manager import load_state, save_state
 from .heating_controller import (
     BlockingStateManager,
     SensorDataManager,
     HeatingSystemStateChecker,
 )
+from .sensor_buffer import SensorBuffer
 
 
 def main():
@@ -98,6 +100,39 @@ def main():
 
     influx_service = create_influx_service()
 
+    # --- Sensor Buffer Initialization ---
+    # Initialize the circular buffer for sensor smoothing
+    sensor_buffer = SensorBuffer(max_age_minutes=120)
+
+    # Hydrate buffer from InfluxDB (Startup only)
+    try:
+        logging.info("💧 Hydrating sensor buffer from InfluxDB...")
+        # Define sensors to hydrate
+        hydration_sensors = [
+            config.INDOOR_TEMP_ENTITY_ID,
+            config.ACTUAL_OUTLET_TEMP_ENTITY_ID,
+            config.TARGET_OUTLET_TEMP_ENTITY_ID,
+            config.OUTDOOR_TEMP_ENTITY_ID,
+            config.INLET_TEMP_ENTITY_ID,
+            config.FLOW_RATE_ENTITY_ID,
+        ]
+
+        # Fetch raw history
+        history_data = influx_service.fetch_recent_history(
+            hydration_sensors,
+            lookback_minutes=120
+        )
+
+        # Hydrate the buffer
+        sensor_buffer.hydrate(history_data)
+        logging.info("✅ Sensor buffer hydrated successfully")
+
+    except Exception as e:
+        logging.warning(
+            f"⚠️ Buffer hydration failed: {e}. "
+            "Starting with empty buffer (Cold Start Mode)."
+        )
+
     # --- Shadow Mode Status ---
     if config.SHADOW_MODE:
         logging.info(
@@ -105,8 +140,12 @@ def main():
             "affecting heating control"
         )
         logging.info("   - ML predictions calculated but not sent to HA")
-        logging.info("   - No HA sensor updates (confidence, MAE, RMSE, state)")
-        logging.info("   - Learning from heat curve's actual control decisions")
+        logging.info(
+            "   - No HA sensor updates (confidence, MAE, RMSE, state)"
+        )
+        logging.info(
+            "   - Learning from heat curve's actual control decisions"
+        )
         logging.info("   - Performance comparison logging active")
     else:
         logging.info("🎯 ACTIVE MODE: ML actively controls heating system")
@@ -134,11 +173,15 @@ def main():
             result = train_thermal_equilibrium_model()
             if result:
                 logging.info("✅ Thermal model calibrated successfully!")
-                logging.info("🔄 Restart ml_heating to use trained thermal model")
+                logging.info(
+                    "🔄 Restart ml_heating to use trained thermal model"
+                )
             else:
                 logging.error("❌ Thermal model calibration failed")
         except Exception as e:
-            logging.error("Thermal model calibration error: %s", e, exc_info=True)
+            logging.error(
+                "Thermal model calibration error: %s", e, exc_info=True
+            )
         return
 
     # --- Thermal Model Validation ---
@@ -150,7 +193,9 @@ def main():
             else:
                 logging.error("❌ Thermal model validation failed!")
         except Exception as e:
-            logging.error("Thermal model validation error: %s", e, exc_info=True)
+            logging.error(
+                "Thermal model validation error: %s", e, exc_info=True
+            )
         return
 
     if args.list_backups:
@@ -245,12 +290,125 @@ def main():
             # API calls.
             all_states = ha_client.get_all_states()
 
+            # --- Update Sensor Buffer ---
+            if all_states:
+                current_time = datetime.now(timezone.utc)
+                
+                # Helper to safely get float state
+                def get_float_state(entity_id):
+                    try:
+                        val = ha_client.get_state(entity_id, all_states)
+                        return float(val) if val is not None else None
+                    except (ValueError, TypeError):
+                        return None
+
+                # Push new readings to buffer
+                buffer_updates = {
+                    config.INDOOR_TEMP_ENTITY_ID: get_float_state(
+                        config.INDOOR_TEMP_ENTITY_ID
+                    ),
+                    config.ACTUAL_OUTLET_TEMP_ENTITY_ID: get_float_state(
+                        config.ACTUAL_OUTLET_TEMP_ENTITY_ID
+                    ),
+                    config.TARGET_OUTLET_TEMP_ENTITY_ID: get_float_state(
+                        config.TARGET_OUTLET_TEMP_ENTITY_ID
+                    ),
+                    config.OUTDOOR_TEMP_ENTITY_ID: get_float_state(
+                        config.OUTDOOR_TEMP_ENTITY_ID
+                    ),
+                    config.INLET_TEMP_ENTITY_ID: get_float_state(
+                        config.INLET_TEMP_ENTITY_ID
+                    ),
+                    config.FLOW_RATE_ENTITY_ID: get_float_state(
+                        config.FLOW_RATE_ENTITY_ID
+                    ),
+                }
+
+                for entity_id, value in buffer_updates.items():
+                    if value is not None:
+                        sensor_buffer.add_reading(
+                            entity_id, value, current_time
+                        )
+
+                # --- Real-time Thermodynamic Sensors ---
+                # Calculate and export COP and Thermal Power immediately so
+                # they are available even if the cycle is skipped (e.g.
+                # blocking/idle).
+                try:
+                    # Get power consumption which isn't in the buffer updates
+                    power_consumption = get_float_state(
+                        config.POWER_CONSUMPTION_ENTITY_ID
+                    )
+
+                    # Use values we just fetched for the buffer
+                    current_outlet = buffer_updates.get(
+                        config.ACTUAL_OUTLET_TEMP_ENTITY_ID
+                    )
+                    current_inlet = buffer_updates.get(
+                        config.INLET_TEMP_ENTITY_ID
+                    )
+                    current_flow = buffer_updates.get(
+                        config.FLOW_RATE_ENTITY_ID
+                    )
+
+                    # Only calculate if we have the minimum required data
+                    # (outlet temp)
+                    if current_outlet is not None:
+                        thermo_metrics = calculate_thermodynamic_metrics(
+                            outlet_temp=current_outlet,
+                            inlet_temp=current_inlet,
+                            flow_rate=current_flow,
+                            power_consumption=power_consumption
+                        )
+
+                        # Export to Home Assistant
+                        # 1. COP
+                        ha_client.set_state(
+                            "sensor.ml_heating_cop_realtime",
+                            thermo_metrics["cop_realtime"],
+                            {
+                                "friendly_name": "ML Heating COP (Realtime)",
+                                "unit_of_measurement": "COP",
+                                "icon": "mdi:heat-pump",
+                                "device_class": "power_factor",
+                                "state_class": "measurement"
+                            },
+                            round_digits=2
+                        )
+
+                        # 2. Thermal Power
+                        ha_client.set_state(
+                            "sensor.ml_heating_thermal_power",
+                            thermo_metrics["thermal_power_kw"],
+                            {
+                                "friendly_name": "ML Heating Thermal Power",
+                                "unit_of_measurement": "kW",
+                                "icon": "mdi:flash",
+                                "device_class": "power",
+                                "state_class": "measurement"
+                            },
+                            round_digits=3
+                        )
+
+                        logging.debug(
+                            "Thermodynamic sensors updated: COP=%.2f, "
+                            "Power=%.3fkW",
+                            thermo_metrics["cop_realtime"],
+                            thermo_metrics["thermal_power_kw"]
+                        )
+                except Exception as e:
+                    logging.warning(
+                        "Failed to update thermodynamic sensors: %s", e
+                    )
+
             # --- Determine Shadow Mode Early (needed for grace period) ---
             # Read input_boolean.ml_heating to determine control mode
             ml_heating_enabled = None
             if all_states:
                 ml_heating_enabled = ha_client.get_state(
-                    config.ML_HEATING_CONTROL_ENTITY_ID, all_states, is_binary=True
+                    config.ML_HEATING_CONTROL_ENTITY_ID,
+                    all_states,
+                    is_binary=True
                 )
 
             # Shadow mode is active when:
@@ -264,10 +422,14 @@ def main():
                     )
                 ml_heating_enabled = False
 
-            effective_shadow_mode = config.SHADOW_MODE or not ml_heating_enabled
+            effective_shadow_mode = (
+                config.SHADOW_MODE or not ml_heating_enabled
+            )
 
             if not all_states:
-                logging.warning("Could not fetch states from HA, skipping cycle.")
+                logging.warning(
+                    "Could not fetch states from HA, skipping cycle."
+                )
                 # Emit NETWORK_ERROR state to Home Assistant
                 try:
                     ha_client = create_ha_client()
@@ -277,7 +439,9 @@ def main():
                     attributes_state.update(
                         {
                             "state_description": "Network Error",
-                            "last_updated": datetime.now(timezone.utc).isoformat(),
+                            "last_updated": datetime.now(
+                                timezone.utc
+                            ).isoformat(),
                         }
                     )
                     ha_client.set_state(
@@ -301,8 +465,10 @@ def main():
             # list of active blocking reasons so we can distinguish
             # DHW-like (long) blockers from short ones like defrost.
             blocking_manager = BlockingStateManager()
-            is_blocking, blocking_reasons = blocking_manager.check_blocking_state(
-                ha_client, all_states
+            is_blocking, blocking_reasons = (
+                blocking_manager.check_blocking_state(
+                    ha_client, all_states
+                )
             )
 
             # --- Step 1: Online Learning from Previous Cycle ---
@@ -310,9 +476,9 @@ def main():
             # model to continuously adapt to the actual house behavior,
             # whether running in active mode (model controls heating) or
             # shadow mode (heat curve controls heating).
-            last_run_features = state.last_run_features
-            last_indoor_temp = state.last_indoor_temp
-            last_final_temp_stored = state.last_final_temp
+            last_run_features = state.get("last_run_features")
+            last_indoor_temp = state.get("last_indoor_temp")
+            last_final_temp_stored = state.get("last_final_temp")
 
             if (
                 last_run_features is not None
@@ -356,7 +522,9 @@ def main():
                             import json
 
                             last_run_features = json.loads(last_run_features)
-                            logging.info("✅ Recovered features from JSON string")
+                            logging.info(
+                                "✅ Recovered features from JSON string"
+                            )
                         except (json.JSONDecodeError, TypeError):
                             logging.error(
                                 "❌ Cannot recover features from string, "
@@ -372,12 +540,18 @@ def main():
                         learning_features = last_run_features.copy()
                     else:
                         learning_features = (
-                            last_run_features.copy() if last_run_features else {}
+                            last_run_features.copy()
+                            if last_run_features
+                            else {}
                         )
 
                     learning_features["outlet_temp"] = actual_applied_temp
-                    learning_features["outlet_temp_sq"] = actual_applied_temp**2
-                    learning_features["outlet_temp_cub"] = actual_applied_temp**3
+                    learning_features["outlet_temp_sq"] = (
+                        actual_applied_temp**2
+                    )
+                    learning_features["outlet_temp_cub"] = (
+                        actual_applied_temp**3
+                    )
 
                     # Online learning is now handled by
                     # ThermalEquilibriumModel in model_wrapper
@@ -391,11 +565,18 @@ def main():
                         # Prepare prediction context for learning
                         prediction_context = {
                             "outlet_temp": actual_applied_temp,
-                            "outdoor_temp": learning_features.get("outdoor_temp", 10.0),
+                            "outdoor_temp": learning_features.get(
+                                "outdoor_temp", 10.0
+                            ),
                             "pv_power": learning_features.get("pv_now", 0.0),
-                            "fireplace_on": learning_features.get("fireplace_on", 0.0),
+                            "fireplace_on": learning_features.get(
+                                "fireplace_on", 0.0
+                            ),
                             "tv_on": learning_features.get("tv_on", 0.0),
                             "current_indoor": last_indoor_temp,
+                            "thermal_power": learning_features.get(
+                                "thermal_power_kw", None
+                            ),
                         }
 
                         # FIXED SHADOW MODE LEARNING: Only learn from shadow
@@ -429,20 +610,27 @@ def main():
                             logging.debug(log_msg)
 
                             trajectory = (
-                                wrapper.thermal_model.predict_thermal_trajectory(
+                                wrapper.thermal_model
+                                .predict_thermal_trajectory(
                                     current_indoor=last_indoor_temp,
-                                    target_indoor=last_indoor_temp,  # Not used
+                                    target_indoor=last_indoor_temp,
                                     outlet_temp=actual_applied_temp,
                                     outdoor_temp=prediction_context.get(
                                         "outdoor_temp", 10.0
                                     ),
-                                    time_horizon_hours=config.CYCLE_INTERVAL_MINUTES
-                                    / 60.0,
-                                    pv_power=prediction_context.get("pv_power", 0.0),
+                                    time_horizon_hours=(
+                                        config.CYCLE_INTERVAL_MINUTES / 60.0
+                                    ),
+                                    pv_power=prediction_context.get(
+                                        "pv_power", 0.0
+                                    ),
                                     fireplace_on=prediction_context.get(
                                         "fireplace_on", 0.0
                                     ),
                                     tv_on=prediction_context.get("tv_on", 0.0),
+                                    thermal_power=prediction_context.get(
+                                        "thermal_power"
+                                    ),
                                 )
                             )
 
@@ -454,8 +642,9 @@ def main():
 
                             if predicted_indoor_temp is None:
                                 logging.warning(
-                                    f"Skipping online learning ({learning_mode}): "
-                                    f"prediction returned None"
+                                    "Skipping online learning (%s): "
+                                    "prediction returned None",
+                                    learning_mode
                                 )
                                 continue
 
@@ -470,7 +659,9 @@ def main():
 
                         # Enhanced prediction context with learning mode info
                         enhanced_prediction_context = prediction_context.copy()
-                        enhanced_prediction_context["learning_mode"] = learning_mode
+                        enhanced_prediction_context[
+                            "learning_mode"
+                        ] = learning_mode
                         enhanced_prediction_context[
                             "was_shadow_mode_cycle"
                         ] = was_shadow_mode_cycle
@@ -499,7 +690,9 @@ def main():
                             wrapper.cycle_count,
                         )
                     except Exception as e:
-                        logging.warning("Online learning failed: %s", e, exc_info=True)
+                        logging.warning(
+                            "Online learning failed: %s", e, exc_info=True
+                        )
 
                     # Shadow mode error tracking
                     # Track what error ML and heat curve made
@@ -534,7 +727,9 @@ def main():
                         "unavailable"
                     )
             else:
-                logging.debug("Skipping online learning: no data from previous cycle")
+                logging.debug(
+                    "Skipping online learning: no data from previous cycle"
+                )
 
             # --- Grace Period after Blocking ---
             # Use modular blocking state manager for cleaner code
@@ -552,7 +747,9 @@ def main():
                 continue
 
             if is_blocking:
-                logging.info("Blocking process active (DHW/Defrost), skipping.")
+                logging.info(
+                    "Blocking process active (DHW/Defrost), skipping."
+                )
                 try:
                     blocking_reasons = [
                         e
@@ -564,9 +761,13 @@ def main():
                     )
                     attributes_state.update(
                         {
-                            "state_description": "Blocking activity - Skipping",
+                            "state_description": (
+                                "Blocking activity - Skipping"
+                            ),
                             "blocking_reasons": blocking_reasons,
-                            "last_updated": datetime.now(timezone.utc).isoformat(),
+                            "last_updated": datetime.now(
+                                timezone.utc
+                            ).isoformat(),
                         }
                     )
                     ha_client.set_state(
@@ -576,13 +777,15 @@ def main():
                         round_digits=None,
                     )
                 except Exception:
-                    logging.debug("Failed to write BLOCKED state to HA.", exc_info=True)
+                    logging.debug(
+                        "Failed to write BLOCKED state to HA.", exc_info=True
+                    )
                 # Save the blocking state for the next cycle (preserve
                 # last_final_temp and record which entities caused the
                 # blocking so we can avoid learning from DHW-like cycles).
                 save_state(
                     last_is_blocking=True,
-                    last_final_temp=state.last_final_temp,
+                    last_final_temp=state.get("last_final_temp"),
                     last_blocking_reasons=blocking_reasons,
                     last_blocking_end_time=None,
                 )
@@ -596,7 +799,9 @@ def main():
             )
 
             if missing_sensors:
-                sensor_manager.handle_missing_sensors(ha_client, missing_sensors)
+                sensor_manager.handle_missing_sensors(
+                    ha_client, missing_sensors
+                )
                 time.sleep(PhysicsConstants.RETRY_DELAY_SECONDS)
                 continue
 
@@ -630,7 +835,7 @@ def main():
                 )
 
             features, outlet_history = build_physics_features(
-                ha_client, influx_service
+                ha_client, influx_service, sensor_buffer
             )
             # Handle both DataFrame and dict features properly
             if isinstance(features, pd.DataFrame):
@@ -649,10 +854,14 @@ def main():
             # Use the Enhanced Model Wrapper for simplified outlet
             # temperature prediction. This replaces the complex Heat Balance
             # Controller with a single prediction call.
-            error_target_vs_actual = target_indoor_temp - prediction_indoor_temp
+            error_target_vs_actual = (
+                target_indoor_temp - prediction_indoor_temp
+            )
 
-            suggested_temp, confidence, metadata = simplified_outlet_prediction(
-                features, prediction_indoor_temp, target_indoor_temp
+            suggested_temp, confidence, metadata = (
+                simplified_outlet_prediction(
+                    features, prediction_indoor_temp, target_indoor_temp
+                )
             )
             final_temp = suggested_temp
 
@@ -682,7 +891,8 @@ def main():
 
             #     # SHADOW MODE FIX: In shadow mode, the baseline for gradual
             #     # control should be the actual heat curve temperature from
-            #     # the last cycle, not the ML's (potentially wrong) prediction.
+            #     # the last cycle, not the ML's (potentially wrong)
+            #     # prediction.
             #     if effective_shadow_mode:
             #         baseline = actual_outlet_temp
             #         logging.info(
@@ -716,7 +926,9 @@ def main():
             # Final prediction is now handled by ThermalEquilibriumModel in
             # model_wrapper
             # Use confidence metadata for predicted indoor temp if available
-            predicted_indoor = metadata.get("predicted_indoor", prediction_indoor_temp)
+            predicted_indoor = metadata.get(
+                "predicted_indoor", prediction_indoor_temp
+            )
 
             # --- Step 4: Update Home Assistant and Log ---
             # The calculated `final_temp` is sent to Home Assistant to
@@ -744,7 +956,8 @@ def main():
                     # Already an integer
                     smart_rounded_temp = int(final_temp)
                     logging.debug(
-                        f"Smart rounding: {final_temp:.2f}°C is already integer"
+                        f"Smart rounding: {final_temp:.2f}°C is already "
+                        "integer"
                     )
                 else:
                     # Test both options using the thermal model to see which
@@ -777,7 +990,9 @@ def main():
 
                         # UNIFIED CONTEXT: Use same forecast-based
                         # conditions as binary search
-                        from .prediction_context import prediction_context_manager
+                        from .prediction_context import (
+                            prediction_context_manager
+                        )
 
                         # Set up unified prediction context (same as binary
                         # search uses)
@@ -785,20 +1000,25 @@ def main():
                         thermal_features = {
                             "pv_power": features_dict.get("pv_now", 0.0),
                             "fireplace_on": (
-                                float(fireplace_on) if fireplace_on is not None else 0.0
+                                float(fireplace_on)
+                                if fireplace_on is not None
+                                else 0.0
                             ),
                             "tv_on": features_dict.get("tv_on", 0.0),
                         }
 
                         prediction_context_manager.set_features(features_dict)
-                        unified_context = prediction_context_manager.create_context(
-                            outdoor_temp=outdoor_temp,
-                            pv_power=thermal_features["pv_power"],
-                            thermal_features=thermal_features,
+                        unified_context = (
+                            prediction_context_manager.create_context(
+                                outdoor_temp=outdoor_temp,
+                                pv_power=thermal_features["pv_power"],
+                                thermal_features=thermal_features,
+                            )
                         )
 
                         thermal_params = (
-                            prediction_context_manager.get_thermal_model_params()
+                            prediction_context_manager
+                            .get_thermal_model_params()
                         )
 
                         # Get predictions using UNIFIED forecast-based
@@ -821,7 +1041,10 @@ def main():
                         )
 
                         # Handle None returns from predict_indoor_temp
-                        if floor_predicted is None or ceiling_predicted is None:
+                        if (
+                            floor_predicted is None
+                            or ceiling_predicted is None
+                        ):
                             logging.warning(
                                 "Smart rounding: predict_indoor_temp "
                                 "returned None, using fallback"
@@ -833,7 +1056,9 @@ def main():
                             )
                         else:
                             # Calculate errors from target
-                            floor_error = abs(floor_predicted - target_indoor_temp)
+                            floor_error = abs(
+                                floor_predicted - target_indoor_temp
+                            )
                             ceiling_error = abs(
                                 ceiling_predicted - target_indoor_temp
                             )
@@ -882,13 +1107,34 @@ def main():
                 # Feature importances are handled by ThermalEquilibriumModel
                 # Learning metrics are exported by ThermalEquilibriumModel
 
+            # --- Log Thermodynamic Metrics (Feature/Sensor-Update) ---
+            # Log COP, Power, and Delta T to InfluxDB for efficiency tracking
+            try:
+                thermodynamic_metrics = {
+                    "cop_realtime": features_dict.get("cop_realtime", 0.0),
+                    "thermal_power_kw": features_dict.get(
+                        "thermal_power_kw", 0.0
+                    ),
+                    "delta_t": features_dict.get("delta_t", 0.0),
+                    "flow_rate": features_dict.get("flow_rate", 0.0),
+                    "inlet_temp": features_dict.get("inlet_temp", 0.0),
+                }
+                influx_service.write_thermodynamic_metrics(
+                    thermodynamic_metrics
+                )
+            except Exception as e:
+                logging.warning("Failed to log thermodynamic metrics: %s", e)
+
+
             # --- Update ML State sensor ---
             # Skip ML state sensor updates in shadow mode
             if not config.SHADOW_MODE:
                 try:
                     # Get thermal model trust metrics from
                     # ThermalEquilibriumModel
-                    thermal_trust_metrics = metadata.get("thermal_trust_metrics", {})
+                    thermal_trust_metrics = metadata.get(
+                        "thermal_trust_metrics", {}
+                    )
 
                     attributes_state = get_sensor_attributes(
                         "sensor.ml_heating_state"
@@ -905,7 +1151,9 @@ def main():
                             "last_prediction_time": (
                                 datetime.now(timezone.utc).isoformat()
                             ),
-                            "temperature_error": round(abs(error_target_vs_actual), 3),
+                            "temperature_error": round(
+                                abs(error_target_vs_actual), 3
+                            ),
                             # Note: ThermalEquilibriumModel trust metrics
                             # moved to sensor.ml_heating_learning to
                             # eliminate redundancy
@@ -918,13 +1166,19 @@ def main():
                         round_digits=None,
                     )
                 except Exception:
-                    logging.debug("Failed to write ML state to HA.", exc_info=True)
+                    logging.debug(
+                        "Failed to write ML state to HA.", exc_info=True
+                    )
             else:
-                logging.debug("🔍 SHADOW MODE: Skipping ML state sensor updates")
+                logging.debug(
+                    "🔍 SHADOW MODE: Skipping ML state sensor updates"
+                )
 
             # --- Shadow Mode Status Logging ---
             if config.SHADOW_MODE:
-                logging.debug("🔍 SHADOW MODE: Enabled via config (SHADOW_MODE=true)")
+                logging.debug(
+                    "🔍 SHADOW MODE: Enabled via config (SHADOW_MODE=true)"
+                )
             elif not ml_heating_enabled:
                 logging.debug(
                     "🔍 SHADOW MODE: ML control disabled via %s",
@@ -943,7 +1197,10 @@ def main():
                     config.ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID, all_states
                 )
 
-                if heat_curve_temp is not None and heat_curve_temp != final_temp:
+                if (
+                    heat_curve_temp is not None
+                    and heat_curve_temp != final_temp
+                ):
                     # Simple comparison without model prediction
                     logging.debug(
                         "SHADOW MODE: ML would set %.1f°C, HC set %.1f°C | "
@@ -956,7 +1213,9 @@ def main():
             # Shadow metrics now handled by ThermalEquilibriumModel
 
             # Use the actual rounded temperature that was applied to HA
-            applied_temp = smart_rounded_temp if not config.SHADOW_MODE else final_temp
+            applied_temp = (
+                smart_rounded_temp if not config.SHADOW_MODE else final_temp
+            )
 
             thermal_params = {}
             # Calculate what the applied temperature will actually predict
@@ -965,12 +1224,16 @@ def main():
                     # Get prediction for the applied smart-rounded temperature
                     applied_prediction = wrapper.predict_indoor_temp(
                         outlet_temp=applied_temp,
-                        outdoor_temp=thermal_params.get("outdoor_temp", outdoor_temp),
+                        outdoor_temp=thermal_params.get(
+                            "outdoor_temp", outdoor_temp
+                        ),
                         current_indoor=prediction_indoor_temp,
                         pv_power=thermal_params.get(
                             "pv_power", features_dict.get("pv_now", 0.0)
                         ),
-                        fireplace_on=thermal_params.get("fireplace_on", fireplace_on),
+                        fireplace_on=thermal_params.get(
+                            "fireplace_on", fireplace_on
+                        ),
                         tv_on=thermal_params.get(
                             "tv_on", features_dict.get("tv_on", 0.0)
                         ),
@@ -1031,7 +1294,9 @@ def main():
                 "last_fireplace_on": fireplace_on,
                 "last_final_temp": final_temp,
                 "last_is_blocking": is_blocking,
-                "last_blocking_reasons": blocking_reasons if is_blocking else [],
+                "last_blocking_reasons": (
+                    blocking_reasons if is_blocking else []
+                ),
             }
             save_state(**state_to_save)
             # Update in-memory state so the idle poll uses fresh data
@@ -1058,7 +1323,9 @@ def main():
                     round_digits=None,
                 )
             except Exception:
-                logging.debug("Failed to write MODEL_ERROR state to HA.", exc_info=True)
+                logging.debug(
+                    "Failed to write MODEL_ERROR state to HA.", exc_info=True
+                )
 
         # CYCLE END DEBUG LOGGING
         cycle_end_time = time.time()
@@ -1077,10 +1344,11 @@ def main():
         # starts/ends are detected quickly. This call will block until the
         # next cycle is due, or until a blocking event starts or ends.
         logging.debug(
-            f"💤 POLLING START: Waiting {PhysicsConstants.CYCLE_INTERVAL_MINUTES}min "
+            f"💤 POLLING START: Waiting "
+            f"{PhysicsConstants.CYCLE_INTERVAL_MINUTES}min "
             "until next cycle..."
         )
-        blocking_manager.poll_for_blocking(ha_client, state)
+        blocking_manager.poll_for_blocking(ha_client, state, sensor_buffer)
 
         poll_end_time = time.time()
         poll_duration = poll_end_time - cycle_end_time

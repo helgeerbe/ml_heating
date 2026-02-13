@@ -249,10 +249,12 @@ class ThermalEquilibriumModel:
         pv_power: float = 0,
         fireplace_on: float = 0,
         tv_on: float = 0,
+        thermal_power: float = None,
         _suppress_logging: bool = False,
     ) -> float:
         """
         Predict equilibrium temperature using standard heat balance physics.
+        Supports both temperature-based approximation and energy-based modeling.
         """
         heat_from_pv = pv_power * self.external_source_weights.get("pv", 0.0)
         heat_from_fireplace = fireplace_on * self.external_source_weights.get(
@@ -264,6 +266,29 @@ class ThermalEquilibriumModel:
             heat_from_pv + heat_from_fireplace + heat_from_tv
         )
 
+        # Energy-based physical modeling (Preferred if thermal_power is available)
+        if thermal_power is not None:
+            # Teq = Tout + (P_total / U_loss)
+            # P_total = P_thermal + P_external
+            total_power = thermal_power + external_thermal_power
+            
+            if self.heat_loss_coefficient > 0:
+                equilibrium_temp = outdoor_temp + (total_power / self.heat_loss_coefficient)
+            else:
+                equilibrium_temp = outdoor_temp
+
+            if not _suppress_logging:
+                logging.debug(
+                    "⚡ Energy physics: thermal_power=%.3f, ext_power=%.3f, "
+                    "U_loss=%.3f, equilibrium=%.2f°C",
+                    thermal_power,
+                    external_thermal_power,
+                    self.heat_loss_coefficient,
+                    equilibrium_temp,
+                )
+            return equilibrium_temp
+
+        # Fallback: Temperature-based approximation
         total_conductance = self.heat_loss_coefficient + self.outlet_effectiveness
         if total_conductance > 0:
             equilibrium_temp = (
@@ -350,6 +375,7 @@ class ThermalEquilibriumModel:
             pv_power=prediction_context.get("pv_power", 0),
             fireplace_on=prediction_context.get("fireplace_on", 0),
             tv_on=prediction_context.get("tv_on", 0),
+            thermal_power=prediction_context.get("thermal_power"),
         )
         predicted_temp_at_cycle_end = predicted_trajectory["trajectory"][0]
 
@@ -388,7 +414,7 @@ class ThermalEquilibriumModel:
             elif error_magnitude > 1.0:  # Bad prediction
                 self.learning_confidence *= self.confidence_decay_rate
 
-            self.learning_confidence = np.clip(self.learning_confidence, 0.1, 5.0)
+            self.learning_confidence = float(np.clip(self.learning_confidence, 0.1, 5.0))
             self._adapt_parameters_from_recent_errors()
 
         logging.debug(
@@ -629,6 +655,7 @@ class ThermalEquilibriumModel:
                 pv_power=context.get("pv_power", 0),
                 fireplace_on=context.get("fireplace_on", 0),
                 tv_on=context.get("tv_on", 0),
+                thermal_power=context.get("thermal_power"),
             )
             pred_plus = pred_plus_trajectory["trajectory"][0]
 
@@ -643,6 +670,7 @@ class ThermalEquilibriumModel:
                 pv_power=context.get("pv_power", 0),
                 fireplace_on=context.get("fireplace_on", 0),
                 tv_on=context.get("tv_on", 0),
+                thermal_power=context.get("thermal_power"),
             )
             pred_minus = pred_minus_trajectory["trajectory"][0]
 
@@ -785,6 +813,7 @@ class ThermalEquilibriumModel:
         time_step_minutes=60,
         weather_forecasts=None,
         pv_forecasts=None,
+        thermal_time_constant=None,
         **external_sources,
     ):
         """
@@ -799,6 +828,7 @@ class ThermalEquilibriumModel:
         pv_power = external_sources.get("pv_power", 0)
         fireplace_on = external_sources.get("fireplace_on", 0)
         tv_on = external_sources.get("tv_on", 0)
+        thermal_power = external_sources.get("thermal_power", None)
 
         time_step_hours = time_step_minutes / 60.0
         num_steps = int(time_horizon_hours * 60 / time_step_minutes)
@@ -831,10 +861,15 @@ class ThermalEquilibriumModel:
                 pv_power=future_pv,
                 fireplace_on=fireplace_on,
                 tv_on=tv_on,
+                thermal_power=thermal_power,
                 _suppress_logging=True,
             )
 
-            time_constant_hours = self.thermal_time_constant
+            time_constant_hours = (
+                thermal_time_constant
+                if thermal_time_constant is not None
+                else self.thermal_time_constant
+            )
             approach_factor = 1 - np.exp(-time_step_hours / time_constant_hours)
             temp_change = (equilibrium_temp - current_temp) * approach_factor
 

@@ -26,29 +26,80 @@ try:
     from . import config
     from .ha_client import HAClient
     from .influx_service import InfluxService
+    from .sensor_buffer import SensorBuffer
 except ImportError:
-    import config
-    from ha_client import HAClient
-    from influx_service import InfluxService
+    import config  # type: ignore
+    from ha_client import HAClient  # type: ignore
+    from influx_service import InfluxService  # type: ignore
+    from sensor_buffer import SensorBuffer  # type: ignore
+
+
+def calculate_thermodynamic_metrics(
+    outlet_temp: float,
+    inlet_temp: Optional[float],
+    flow_rate: Optional[float],
+    power_consumption: Optional[float],
+) -> dict:
+    """
+    Calculate thermodynamic metrics (COP, Power, Delta T).
+    """
+    # Process inputs
+    inlet_temp_f = float(inlet_temp) if inlet_temp is not None else outlet_temp
+    flow_rate_f = float(flow_rate) if flow_rate is not None else 0.0
+    power_consumption_f = (
+        float(power_consumption) if power_consumption is not None else 0.0
+    )
+
+    # Delta T
+    delta_t = outlet_temp - inlet_temp_f
+
+    # Thermal Power (kW)
+    # Q = m * c * dT
+    # Flow rate L/min -> kg/s (approx / 60)
+    # Specific heat capacity kJ/kg*K
+    thermal_power_kw = (
+        (flow_rate_f / 60.0) * config.SPECIFIC_HEAT_CAPACITY * delta_t
+    )
+
+    # COP
+    electrical_power_kw = power_consumption_f / 1000.0
+    if electrical_power_kw > 0.1:
+        cop_realtime = thermal_power_kw / electrical_power_kw
+    else:
+        cop_realtime = 0.0
+
+    return {
+        "inlet_temp": inlet_temp_f,
+        "flow_rate": flow_rate_f,
+        "power_consumption": power_consumption_f,
+        "delta_t": delta_t,
+        "thermal_power_kw": thermal_power_kw,
+        "cop_realtime": cop_realtime,
+    }
 
 
 def build_physics_features(
     ha_client: HAClient,
     influx_service: InfluxService,
+    sensor_buffer: Optional[SensorBuffer] = None,
 ) -> Tuple[Optional[pd.DataFrame], list[float]]:
     """
     Build enhanced features for RealisticPhysicsModel with thermal momentum.
     
-    Creates 34 physics features including original 19 + 15 new thermal features:
-    - Core temperatures: outlet, indoor_lag_30m, target, outdoor
-    - System states: dhw_heating, dhw_disinfection, dhw_boost_heater, defrosting
+    Creates 40 physics features including original 19 + 15 new thermal features
+    + 6 thermodynamic:
+    - Core temperatures: outlet, inlet, indoor_lag_30m, target, outdoor
+    - System states: dhw_heating, dhw_disinfection, dhw_boost_heater,
+      defrosting
     - External sources: pv_now, fireplace_on, tv_on
     - Forecasts: temp_forecast_1h-4h, pv_forecast_1h-4h
     - NEW: Thermal momentum, extended lag, delta analysis, cyclical time
+    - THERMODYNAMIC: Delta T, Thermal Power, COP
     
     Args:
         ha_client: Home Assistant client
         influx_service: InfluxDB service
+        sensor_buffer: Optional in-memory buffer for sensor smoothing
         
     Returns:
         DataFrame with single row containing all features, or None if missing
@@ -69,6 +120,46 @@ def build_physics_features(
         config.TARGET_INDOOR_TEMP_ENTITY_ID, all_states
     )
     
+    # Fetch thermodynamic sensors (New in Feature/Sensor-Update)
+    inlet_temp = ha_client.get_state(config.INLET_TEMP_ENTITY_ID, all_states)
+    flow_rate = ha_client.get_state(config.FLOW_RATE_ENTITY_ID, all_states)
+    power_consumption = ha_client.get_state(
+        config.POWER_CONSUMPTION_ENTITY_ID, all_states
+    )
+
+    # Apply sensor smoothing if buffer is available
+    if sensor_buffer:
+        # Indoor Temp (15 min smoothing)
+        avg_indoor = sensor_buffer.get_average(
+            config.INDOOR_TEMP_ENTITY_ID, 15
+        )
+        if avg_indoor is not None:
+            actual_indoor = avg_indoor
+
+        # Outdoor Temp (30 min smoothing)
+        avg_outdoor = sensor_buffer.get_average(
+            config.OUTDOOR_TEMP_ENTITY_ID, 30
+        )
+        if avg_outdoor is not None:
+            outdoor_temp = avg_outdoor
+
+        # Outlet Temp (5 min smoothing)
+        avg_outlet = sensor_buffer.get_average(
+            config.ACTUAL_OUTLET_TEMP_ENTITY_ID, 5
+        )
+        if avg_outlet is not None:
+            outlet_temp = avg_outlet
+
+        # Inlet Temp (5 min smoothing)
+        avg_inlet = sensor_buffer.get_average(config.INLET_TEMP_ENTITY_ID, 5)
+        if avg_inlet is not None:
+            inlet_temp = avg_inlet
+
+        # Flow Rate (5 min smoothing)
+        avg_flow = sensor_buffer.get_average(config.FLOW_RATE_ENTITY_ID, 5)
+        if avg_flow is not None:
+            flow_rate = avg_flow
+
     # Check for missing critical data
     if None in [actual_indoor, outdoor_temp, outlet_temp, target_indoor_temp]:
         logging.error("Missing critical sensor data. Cannot build features.")
@@ -81,9 +172,11 @@ def build_physics_features(
     indoor_history = influx_service.fetch_indoor_history(extended_steps)
     
     if len(indoor_history) < 6 or len(outlet_history) < 3:
-        logging.error("Insufficient history for enhanced features. "
-                     f"Need 6 indoor + 3 outlet, got {len(indoor_history)} "
-                     f"+ {len(outlet_history)}.")
+        logging.error(
+            "Insufficient history for enhanced features. "
+            f"Need 6 indoor + 3 outlet, got {len(indoor_history)} "
+            f"+ {len(outlet_history)}."
+        )
         return None, []
     
     # System states (binary) - default to False if unavailable
@@ -119,8 +212,9 @@ def build_physics_features(
             from datetime import timezone, timedelta
             
             pv_state = all_states.get(config.PV_FORECAST_ENTITY_ID)
-            pv_forecast_data = (pv_state.get("attributes") 
-                               if pv_state else None)
+            pv_forecast_data = (
+                pv_state.get("attributes") if pv_state else None
+            )
             
             # CORRECT: Look for 'watts' attribute, not 'forecast'
             if pv_forecast_data and "watts" in pv_forecast_data:
@@ -135,7 +229,9 @@ def build_physics_features(
                         ts = datetime.fromisoformat(ts_str)
                         forecast_dict[pd.Timestamp(ts)] = float(watts)
                     except Exception as e_parse:
-                        logging.debug(f"Could not parse timestamp {ts_str}: {e_parse}")
+                        logging.debug(
+                            f"Could not parse timestamp {ts_str}: {e_parse}"
+                        )
                         continue
                         
                 if forecast_dict:
@@ -151,7 +247,13 @@ def build_physics_features(
                         hour_entries = []
                         for ts, watts in s.items():
                             # Convert to UTC for comparison
-                            ts_utc = ts.tz_convert('UTC') if ts.tz else ts.tz_localize('UTC')
+                            # Ensure ts is treated as Timestamp
+                            ts_ts = pd.Timestamp(ts)  # type: ignore
+                            ts_utc = (
+                                ts_ts.tz_convert('UTC')
+                                if ts_ts.tz
+                                else ts_ts.tz_localize('UTC')
+                            )
                             if hour_start <= ts_utc < hour_end:
                                 hour_entries.append(watts)
                         
@@ -162,28 +264,62 @@ def build_physics_features(
                             hourly.append(0.0)
                     
                     pv_forecasts = hourly
-                    logging.debug(f"PV forecast parsed successfully: {pv_forecasts}W")
+                    logging.debug(
+                        f"PV forecast parsed successfully: {pv_forecasts}W"
+                    )
                 else:
                     logging.debug("No valid PV forecast timestamps parsed")
             else:
-                logging.debug(f"PV forecast entity missing 'watts' attribute: {list(pv_forecast_data.keys()) if pv_forecast_data else 'no attributes'}")
+                keys = (
+                    list(pv_forecast_data.keys())
+                    if pv_forecast_data
+                    else 'no attributes'
+                )
+                logging.debug(
+                    f"PV forecast entity missing 'watts' attribute: {keys}"
+                )
                 
         except Exception as e:
             logging.debug(f"Could not fetch PV forecast: {e}")
             pv_forecasts = [0.0, 0.0, 0.0, 0.0]
     
     # Convert to float for calculations first
-    actual_indoor_f = float(actual_indoor)
-    outdoor_temp_f = float(outdoor_temp)
-    outlet_temp_f = float(outlet_temp)
-    target_temp_f = float(target_indoor_temp)
-    
+    actual_indoor_f = (
+        float(actual_indoor) if actual_indoor is not None else 20.0
+    )
+    outdoor_temp_f = (
+        float(outdoor_temp) if outdoor_temp is not None else 0.0
+    )
+    outlet_temp_f = (
+        float(outlet_temp) if outlet_temp is not None else 30.0
+    )
+    target_temp_f = (
+        float(target_indoor_temp) if target_indoor_temp is not None else 20.0
+    )
+
+    # Process thermodynamic sensors
+    thermo_metrics = calculate_thermodynamic_metrics(
+        outlet_temp_f,
+        inlet_temp,
+        flow_rate,
+        power_consumption
+    )
+
+    inlet_temp_f = thermo_metrics["inlet_temp"]
+    flow_rate_f = thermo_metrics["flow_rate"]
+    power_consumption_f = thermo_metrics["power_consumption"]
+    delta_t = thermo_metrics["delta_t"]
+    thermal_power_kw = thermo_metrics["thermal_power_kw"]
+    cop_realtime = thermo_metrics["cop_realtime"]
+
     # Get calibrated temperature forecasts using delta correction
     try:
         # Check if delta calibration is enabled and available
-        if (hasattr(config, 'ENABLE_DELTA_FORECAST_CALIBRATION') and 
+        if (
+            hasattr(config, 'ENABLE_DELTA_FORECAST_CALIBRATION') and
             config.ENABLE_DELTA_FORECAST_CALIBRATION and
-            hasattr(ha_client, 'get_calibrated_hourly_forecast')):
+            hasattr(ha_client, 'get_calibrated_hourly_forecast')
+        ):
             temp_forecasts = ha_client.get_calibrated_hourly_forecast(
                 current_outdoor_temp=outdoor_temp_f,
                 enable_delta_calibration=True
@@ -267,15 +403,29 @@ def build_physics_features(
         
         # P2 Priority: Outlet effectiveness analysis (1 feature)
         'outlet_effectiveness_ratio': ((actual_indoor_f - target_temp_f) /
-                                       max(0.1, outlet_temp_f - 
+                                       max(0.1, outlet_temp_f -
                                            actual_indoor_f)),
+
+        # === THERMODYNAMIC FEATURES (Feature/Sensor-Update) ===
+        'inlet_temp': inlet_temp_f,
+        'flow_rate': flow_rate_f,
+        'power_consumption': power_consumption_f,
+        'delta_t': delta_t,
+        'thermal_power_kw': thermal_power_kw,
+        'cop_realtime': cop_realtime,
         
         # === WEEK 4 ENHANCED FORECAST FEATURES ===
-        
+
         # Enhanced forecast analysis (3 new features)
-        'temp_trend_forecast': ((temp_forecasts[3] - outdoor_temp_f) / 4.0),  # °C/hour trend
-        'heating_demand_forecast': max(0.0, (21.0 - temp_forecasts[3]) * 0.1),  # Simple heating demand
-        'combined_forecast_thermal_load': (max(0.0, (21.0 - temp_forecasts[3]) * 0.1) - (pv_forecasts[3] * 0.001)),  # Net thermal load
+        # °C/hour trend
+        'temp_trend_forecast': ((temp_forecasts[3] - outdoor_temp_f) / 4.0),
+        # Simple heating demand
+        'heating_demand_forecast': max(0.0, (21.0 - temp_forecasts[3]) * 0.1),
+        # Net thermal load
+        'combined_forecast_thermal_load': (
+            max(0.0, (21.0 - temp_forecasts[3]) * 0.1)
+            - (pv_forecasts[3] * 0.001)
+        ),
     }
     
     return pd.DataFrame([features]), outlet_history

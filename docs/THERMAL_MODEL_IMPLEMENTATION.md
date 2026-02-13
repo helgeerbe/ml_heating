@@ -241,6 +241,27 @@ T_eq = ────────────────────────�
 - Higher `eff` means the room temperature is more influenced by outlet temperature
 - Higher `loss` means the room temperature is more influenced by outdoor temperature
 
+### Energy-Based Physics (Advanced)
+
+When thermodynamic sensors (`flow_rate` and `return_temperature`) are available, the model upgrades from a temperature-based approximation to a precise energy balance calculation.
+
+**The Energy Balance Equation:**
+
+```
+T_eq = T_outdoor + (P_thermal + P_external) / U_loss
+```
+
+Where:
+- **P_thermal**: Real-time thermal power delivered by the heat pump (kW).
+  - Calculated as: `Flow_Rate × Specific_Heat_Capacity × (T_outlet - T_return)`
+- **U_loss**: Overall heat loss coefficient of the house (kW/K).
+  - Directly measurable when the system is stable.
+
+**Advantages:**
+1.  **Direct Measurement**: Instead of inferring heat input from outlet temperature, we measure the actual energy delivered.
+2.  **Flow Rate Awareness**: Automatically adapts to changes in pump speed or hydraulic resistance.
+3.  **Precise Calibration**: $U_{loss}$ can be calculated directly from data ($P / \Delta T$) without complex optimization.
+
 ### Numerical Example 1: Basic Heating
 
 **Given:**
@@ -1210,6 +1231,17 @@ This process:
 4. **Optimizes parameters** using scipy's L-BFGS-B algorithm
 5. **Validates results** on held-out data
 6. **Saves calibrated baseline** for the model to use
+
+### Direct Heat Loss Calibration
+
+If flow and return sensors are configured, the calibration process becomes deterministic:
+
+1.  **Identify Stable Periods**: Find times when indoor temperature is constant ($dT/dt \approx 0$).
+2.  **Calculate Loss**: In these moments, Heat In = Heat Out.
+    ```
+    U_loss = P_thermal / (T_indoor - T_outdoor)
+    ```
+3.  **Constraint**: This directly measured $U_{loss}$ is used to constrain the optimization of other parameters, significantly improving accuracy.
 
 ### What "Stable Periods" Means
 

@@ -230,6 +230,8 @@ class ThermalStateManager:
         baseline = self.state["baseline_parameters"]
 
         # Update thermal parameters
+        if "thermal_time_constant" in parameters:
+            baseline["thermal_time_constant"] = parameters["thermal_time_constant"]
         if "equilibrium_ratio" in parameters:
             baseline["equilibrium_ratio"] = parameters["equilibrium_ratio"]
         if "total_conductance" in parameters:
@@ -279,6 +281,8 @@ class ThermalStateManager:
         adjustments = self.state["learning_state"]["parameter_adjustments"]
 
         return {
+            "thermal_time_constant": (baseline["thermal_time_constant"] +
+                                      adjustments.get("thermal_time_constant_delta", 0.0)),
             "equilibrium_ratio": (baseline["equilibrium_ratio"] +
                                   adjustments["equilibrium_ratio_delta"]),
             "total_conductance": (baseline["total_conductance"] +

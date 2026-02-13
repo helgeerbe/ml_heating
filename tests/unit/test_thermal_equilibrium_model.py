@@ -72,9 +72,10 @@ class TestCorrectedThermalPhysics:
         outlet_temp = 45.0
         outdoor_temp = 5.0
         
+        # Test with temperature-based approximation
         equilibrium_temp = clean_model.predict_equilibrium_temperature(
-            outlet_temp=outlet_temp, 
-            outdoor_temp=outdoor_temp, 
+            outlet_temp=outlet_temp,
+            outdoor_temp=outdoor_temp,
             current_indoor=21.0,
             pv_power=pv_power
         )
@@ -91,6 +92,25 @@ class TestCorrectedThermalPhysics:
         assert np.isclose(total_heat_input, heat_loss, atol=1e-2), (
             f"Energy not conserved: input={total_heat_input:.3f}, "
             f"loss={heat_loss:.3f}")
+
+    def test_energy_based_prediction(self, clean_model):
+        """Test the new energy-based prediction logic."""
+        thermal_power = 2.0  # kW
+        outdoor_temp = 5.0
+        
+        # Teq = Tout + P_total / U_loss
+        expected_eq = outdoor_temp + (thermal_power / clean_model.heat_loss_coefficient)
+        
+        predicted = clean_model.predict_equilibrium_temperature(
+            outlet_temp=45.0,  # Should be ignored for energy calculation
+            outdoor_temp=outdoor_temp,
+            current_indoor=20.0,
+            thermal_power=thermal_power
+        )
+        
+        assert np.isclose(predicted, expected_eq, atol=1e-3), (
+            f"Energy-based prediction failed: expected {expected_eq}, got {predicted}"
+        )
 
     def test_second_law_thermodynamics(self, clean_model):
         """Indoor temp cannot be below outdoor when heating."""

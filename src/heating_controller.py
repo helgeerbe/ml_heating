@@ -8,7 +8,10 @@ to improve code organization and maintainability.
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .sensor_buffer import SensorBuffer
 
 from . import config
 from .ha_client import HAClient, get_sensor_attributes
@@ -373,14 +376,65 @@ class BlockingStateManager:
         self,
         ha_client: HAClient,
         state: SystemState,
+        sensor_buffer: Optional["SensorBuffer"] = None,
     ) -> None:
         """
         Poll for blocking events during the idle period.
+        Also actively samples sensor data into the buffer if provided.
         """
         end_time = time.time() + config.CYCLE_INTERVAL_MINUTES * 60
         while time.time() < end_time:
             try:
                 all_states_poll = ha_client.get_all_states()
+
+                # --- Active Sampling ---
+                if sensor_buffer and all_states_poll:
+                    current_time = datetime.now(timezone.utc)
+
+                    # Helper to safely get float state
+                    def get_float_state(entity_id):
+                        try:
+                            val = ha_client.get_state(
+                                entity_id, all_states_poll
+                            )
+                            return float(val) if val is not None else None
+                        except (ValueError, TypeError):
+                            return None
+
+                    # Push new readings to buffer
+                    buffer_updates = {
+                        config.INDOOR_TEMP_ENTITY_ID: get_float_state(
+                            config.INDOOR_TEMP_ENTITY_ID
+                        ),
+                        config.ACTUAL_OUTLET_TEMP_ENTITY_ID: get_float_state(
+                            config.ACTUAL_OUTLET_TEMP_ENTITY_ID
+                        ),
+                        config.TARGET_OUTLET_TEMP_ENTITY_ID: get_float_state(
+                            config.TARGET_OUTLET_TEMP_ENTITY_ID
+                        ),
+                        config.OUTDOOR_TEMP_ENTITY_ID: get_float_state(
+                            config.OUTDOOR_TEMP_ENTITY_ID
+                        ),
+                        config.INLET_TEMP_ENTITY_ID: get_float_state(
+                            config.INLET_TEMP_ENTITY_ID
+                        ),
+                        config.FLOW_RATE_ENTITY_ID: get_float_state(
+                            config.FLOW_RATE_ENTITY_ID
+                        ),
+                    }
+
+                    count = 0
+                    for entity_id, value in buffer_updates.items():
+                        if value is not None:
+                            sensor_buffer.add_reading(
+                                entity_id, value, current_time
+                            )
+                            count += 1
+
+                    logging.debug(
+                        "Active sampling: buffered %d readings", count
+                    )
+
             except Exception:
                 logging.warning(
                     "Failed to poll HA during idle; will retry.", exc_info=True

@@ -51,7 +51,7 @@ class ThermalParameterConfig:
     BOUNDS = {
         'outlet_temp_max': (60.0, 70.0),   # °C
         'outlet_temp_min': (14.0, 30.0),   # °C
-        'thermal_time_constant': (3.0, 8.0),     # Hours
+        'thermal_time_constant': (3.0, 100.0),     # Hours
         'equilibrium_ratio': (0.1, 0.9),         # dimensionless
         'total_conductance': (0.1, 0.8),         # 1/hour
         'pv_heat_weight': (0.0001, 0.005),       # W/°C
@@ -61,8 +61,8 @@ class ThermalParameterConfig:
         'learning_confidence': (1.0, 5.0),
         'min_learning_rate': (0.0001, 0.01),
         'max_learning_rate': (0.01, 0.2),
-        'heat_loss_coefficient': (0.01, 0.5),
-        'outlet_effectiveness': (0.5, 1.0),
+        'heat_loss_coefficient': (0.01, 2.0),
+        'outlet_effectiveness': (0.3, 1.0),
     }
 
     # Parameter descriptions for documentation and debugging
