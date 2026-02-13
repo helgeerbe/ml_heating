@@ -59,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Reliability**: Binary search convergence eliminates maximum temperature requests
 - **Energy Efficiency**: Heat pump operates optimally instead of maximum unnecessarily
 
-## [3.0.0] - 2025-12-03
+## [0.2.0-beta.3] - 2025-12-03
 
 ### Added - Week 3 Persistent Learning Optimization Complete 🚀
 - **Unified Model Wrapper Architecture**: Consolidated enhanced_model_wrapper.py into single model_wrapper.py with EnhancedModelWrapper class
@@ -96,7 +96,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Maintainability**: Single source of truth for all model wrapper operations
 - **Architecture**: Clean consolidation with zero functionality regression
 
-## [2.0.0] - 2025-12-03
+## [0.2.0-beta.2] - 2025-12-03
 
 ### Added - Week 2 Multi-Heat-Source Integration Complete 🎯
 - **Thermal Equilibrium Model with Adaptive Learning**: Real-time parameter adaptation with 96% accuracy
@@ -122,7 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adaptive fireplace learning safety bounds enforcement (1.0-5.0kW)
 - Multi-heat-source physics integration with robust error handling
 
-## [1.1.0] - 2025-12-02
+## [0.2.0-beta.1] - 2025-12-02
 
 ### Added - Week 1 Enhanced Features Foundation 🔧
 - **Enhanced Physics Features**: 15 new thermal momentum features (thermal gradients, extended lag analysis, cyclical time encoding)

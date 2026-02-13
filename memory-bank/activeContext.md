@@ -1,8 +1,24 @@
 # Active Context - Current Work & Decision State
 
-### 🧪 **PHASE 2: ADVANCED TESTING IMPLEMENTATION - February 11, 2026**
+### 🧪 **PHASE 2: ADVANCED TESTING IMPLEMENTATION - February 13, 2026**
 
 **CRITICAL MILESTONE**: Phase 2 is now complete with the addition of property-based testing and sociable unit tests. The test suite has been hardened and expanded to cover edge cases and component interactions more rigorously.
+
+#### ✅ **VERSION SYNCHRONIZATION & CLEANUP COMPLETE**
+
+**KEY ACHIEVEMENTS**:
+
+**1. Version Synchronization**:
+- **Unified Versioning**: Corrected `CHANGELOG.md` to align with `config.yaml` (v0.2.0).
+- **History Correction**: Renamed erroneous `3.0.0` entries to `0.2.0-beta.x` sequence to reflect actual development history.
+
+**2. Test Suite Verification**:
+- **Warning Investigation**: Investigated reported `PytestReturnNotNoneWarning`s.
+- **Result**: Confirmed test suite is clean (236 passed, 0 warnings of this type).
+- **Status**: Test suite is healthy and ready for release.
+
+**3. Documentation Cleanup**:
+- **Plan Archival**: Moved implemented plans (`active_sampling_strategy.md`, `sensor_integration_plan.md`, `sensor_smoothing_strategy.md`) to `plans/archive/implemented/`.
 
 #### ✅ **PROPERTY-BASED & SOCIABLE TESTING COMPLETE**
 
@@ -27,11 +43,14 @@
     - System state checking (heating active/inactive).
 
 **3. Test Suite Status**:
-- **Total Tests**: 214 tests passing.
+- **Total Tests**: 236 tests passing.
 - **Reliability**: The suite is now robust, fast, and provides high confidence in system stability.
 - **Stability**: Resolved `InfluxDBClient` teardown issues by implementing robust cleanup in `InfluxService` and adding a global pytest fixture to reset the singleton after every test.
 
 **FILES MODIFIED**:
+- **CHANGELOG.md**: Version history corrected.
+- **memory-bank/progress.md**: Updated status.
+- **plans/**: Archived implemented plans.
 - **tests/unit/test_thermal_equilibrium_model_properties.py**: Created.
 - **tests/unit/test_heating_controller_sociable.py**: Created.
 - **src/influx_service.py**: Added robust cleanup logic.
@@ -152,8 +171,8 @@
 # In src/heating_controller.py
 
 def _execute_grace_period(self, ha_client: HAClient, state: Dict, age: float):
-    """Execute the grace period temperature restoration logic"""
-    logging.info("--- Grace Period Started ---")
+    \"\"\"Execute the grace period temperature restoration logic\"\"\"
+    logging.info(\"--- Grace Period Started ---\")
     
     # ...
 
@@ -164,7 +183,7 @@ def _execute_grace_period(self, ha_client: HAClient, state: Dict, age: float):
 
     if not all([current_indoor, target_indoor, outdoor_temp]):
         # Fallback to old logic if sensors are unavailable
-        grace_target = state.get("last_final_temp")
+        grace_target = state.get(\"last_final_temp\")
     else:
         # NEW: Use the model to calculate the required outlet temperature
         wrapper = get_enhanced_model_wrapper()

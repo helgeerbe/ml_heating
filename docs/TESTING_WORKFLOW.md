@@ -2,7 +2,7 @@
 
 ## 📋 Overview
 
-This document outlines the testing workflow for the ML heating system, which is built on a strict **Test-Driven Development (TDD)** methodology. All new features and bug fixes must begin with writing tests. The project maintains a 100% test success rate, with all 207 tests currently passing.
+This document outlines the testing workflow for the ML heating system, which is built on a strict **Test-Driven Development (TDD)** methodology. All new features and bug fixes must begin with writing tests. The project maintains a 100% test success rate, with all 236 tests currently passing.
 
 ## 🏗️ Test Architecture
 
@@ -37,7 +37,7 @@ This TDD approach ensures that the codebase remains robust, maintainable, and fu
 
 ### **Execute the Full Test Suite**
 ```bash
-# Run all 207+ tests
+# Run all 236+ tests
 pytest tests/
 ```
 
