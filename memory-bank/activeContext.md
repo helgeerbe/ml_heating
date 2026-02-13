@@ -4,6 +4,20 @@
 
 **CRITICAL MILESTONE**: Phase 2 is now complete with the addition of property-based testing and sociable unit tests. The test suite has been hardened and expanded to cover edge cases and component interactions more rigorously.
 
+#### ✅ **CONTROL STABILITY FIX IMPLEMENTED**
+
+**KEY ACHIEVEMENTS**:
+
+**1. Deadbeat Control Elimination**:
+- **Issue**: System was oscillating (Cycle 54-56), requesting 58.6°C to close a 0.2°C gap due to short-term optimization.
+- **Fix**: Decoupled control interval (30m) from optimization horizon (4h).
+- **Result**: System now optimizes for smooth 4-hour trajectory while still reacting every 30 minutes.
+
+#### ✅ **CONTROL STABILITY FIX IMPLEMENTED**
+- **Issue:** "Deadbeat Control" oscillation observed (Cycle 54-56) where system requested 58.6°C to close a 0.2°C gap.
+- **Fix:** Decoupled control interval (30m) from optimization horizon (4h).
+- **Result:** System now optimizes for smooth 4-hour trajectory while still reacting every 30 minutes.
+
 #### ✅ **VERSION SYNCHRONIZATION & CLEANUP COMPLETE**
 
 **KEY ACHIEVEMENTS**:

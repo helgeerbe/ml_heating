@@ -524,15 +524,24 @@ class EnhancedModelWrapper:
 
             # Predict indoor temperature with this outlet temperature using cycle-aligned conditions
             try:
-                cycle_hours = config.CYCLE_INTERVAL_MINUTES / 60.0
+                # STABILITY FIX: Use a longer prediction horizon (4h) for control optimization
+                # to prevent oscillation. Optimizing for 30min (cycle time) leads to
+                # "deadbeat control" behavior and excessive outlet temperatures.
+                optimization_horizon = 4.0
+
+                # Calculate average conditions over the optimization horizon
+                # outdoor_forecast contains [1h, 2h, 3h, 4h]
+                avg_outdoor_horizon = sum(outdoor_forecast) / len(outdoor_forecast)
+                avg_pv_horizon = sum(pv_forecast) / len(pv_forecast)
+
                 trajectory_result = self.thermal_model.predict_thermal_trajectory(
                     current_indoor=current_indoor,
                     target_indoor=target_indoor,
                     outlet_temp=outlet_mid,
-                    outdoor_temp=avg_outdoor,
-                    time_horizon_hours=cycle_hours,
+                    outdoor_temp=avg_outdoor_horizon,
+                    time_horizon_hours=optimization_horizon,
                     time_step_minutes=config.CYCLE_INTERVAL_MINUTES,
-                    pv_power=avg_pv,
+                    pv_power=avg_pv_horizon,
                     fireplace_on=fireplace_on,
                     tv_on=tv_on,
                 )
@@ -548,7 +557,8 @@ class EnhancedModelWrapper:
                     )
                     return 35.0
 
-                predicted_indoor = trajectory_result["trajectory"][0]
+                # Use the temperature at the END of the horizon for optimization
+                predicted_indoor = trajectory_result["trajectory"][-1]
 
             except Exception as e:
                 logging.error(
