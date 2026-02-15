@@ -88,15 +88,36 @@ The system learns these characteristics automatically:
 
 ## Usage Examples
 
-### Basic Integration
+### Integrated Workflow
+
+The `AdaptiveFireplaceLearning` system is now fully integrated into the `EnhancedModelWrapper`. You do not need to manually initialize it.
+
+```python
+# In src/model_wrapper.py
+class EnhancedModelWrapper:
+    def __init__(self):
+        # ...
+        self.adaptive_fireplace = AdaptiveFireplaceLearning()
+
+    def predict_indoor_temp(self, ...):
+        # ...
+        # 1. Detect fireplace state
+        fireplace_active = self.adaptive_fireplace.detect_fireplace_activity(...)
+        
+        # 2. Get learned heat contribution
+        fireplace_heat = self.adaptive_fireplace.get_current_heat_contribution(...)
+        
+        # 3. Include in physics calculation
+        # ...
+```
+
+### Manual Usage (for debugging/notebooks)
 
 ```python
 from src.adaptive_fireplace_learning import AdaptiveFireplaceLearning
-from src.multi_heat_source_physics import MultiHeatSourcePhysics
 
-# Initialize systems
+# Initialize
 adaptive_fireplace = AdaptiveFireplaceLearning()
-multi_source_physics = MultiHeatSourcePhysics()
 
 # Get current sensor readings
 living_room_temp = get_sensor('sensor.thermometer_wohnzimmer_kompensiert')

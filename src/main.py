@@ -577,6 +577,10 @@ def main():
                             "thermal_power": learning_features.get(
                                 "thermal_power_kw", None
                             ),
+                            # Pass auxiliary heat if available in features
+                            "auxiliary_heat": learning_features.get(
+                                "total_auxiliary_heat_kw", 0.0
+                            ),
                         }
 
                         # FIXED SHADOW MODE LEARNING: Only learn from shadow

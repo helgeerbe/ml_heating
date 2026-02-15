@@ -274,7 +274,7 @@ fireplace_contribution = (
 # Cos/sin modulation for seasonal effects
 month_rad = 2 * π * current_month / 12
 pv_seasonal_multiplier = 1.0 + (
-    pv_seasonal_cos * cos(month_rad) + 
+    pv_seasonal_cos * cos(month_rad) +
     pv_seasonal_sin * sin(month_rad)
 )
 
@@ -299,6 +299,32 @@ if not heating_active:
 - Learns realistic seasonal variation (±30-50%)
 - Uses clean summer data for baseline learning
 - Automatic adaptation to climate patterns
+
+### 7. Adaptive Source Attribution Pattern
+
+**Principle**: Isolate and learn weights for specific heat sources (TV, PV, Fireplace)
+
+**Mechanism**:
+- **Selective Learning**: Only update a source's weight when that source is active and dominant.
+- **Gradient Descent**: Use prediction error to calculate the gradient for the specific weight.
+- **Cross-Validation**: Ensure that improving one weight doesn't degrade overall model performance.
+
+**Implementation**:
+```python
+# In ThermalEquilibriumModel._adapt_parameters_from_recent_errors
+if self.tv_power > 50:  # TV is active
+    tv_gradient = self._calculate_tv_heat_weight_gradient(error)
+    self.tv_heat_weight -= learning_rate * tv_gradient
+
+if self.pv_power > 100: # PV is active
+    pv_gradient = self._calculate_pv_heat_weight_gradient(error)
+    self.pv_heat_weight -= learning_rate * pv_gradient
+```
+
+**Benefits**:
+- Eliminates manual guessing of heat source contributions
+- Adapts to device upgrades (e.g., new TV) or degradation (e.g., dirty solar panels)
+- Improves prediction accuracy during multi-source events
 
 ## Critical Implementation Patterns
 

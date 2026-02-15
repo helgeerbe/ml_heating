@@ -1788,6 +1788,14 @@ Calculation:
 
 ### Which Parameters Get Updated?
 
+The model currently learns:
+1. **Thermal Time Constant (τ)**: How fast the house reacts
+2. **Heat Loss Coefficient**: How fast heat escapes
+3. **Outlet Effectiveness**: How efficient the radiators/floor heating are
+4. **TV Heat Weight**: The thermal impact of the TV (learned when TV is ON)
+5. **PV Heat Weight**: The passive solar gain factor (learned when Sun is UP)
+6. **Fireplace Heat Contribution**: The kW output of the fireplace (learned via `AdaptiveFireplaceLearning`)
+
 The model only updates parameters when there's **sufficient evidence**:
 
 | Condition | Learning Behavior |

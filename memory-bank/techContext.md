@@ -15,6 +15,7 @@
 - **Key Components**: 
   - Custom `MAE` and `RMSE` classes for performance tracking
   - Physics-based models with incremental learning patterns
+  - **Adaptive Learning Modules**: Specialized classes for source attribution (Fireplace, TV, PV)
 - **Why Custom**: Eliminates compilation issues and reduces container build complexity
 
 **Home Assistant REST API**

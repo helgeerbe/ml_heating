@@ -22,6 +22,7 @@ except ImportError:
     from thermal_constants import PhysicsConstants  # type: ignore
     import config  # type: ignore
 
+
 class ThermalEquilibriumModel:
     """
     A physics-based thermal model that predicts indoor temperature equilibrium
@@ -72,13 +73,13 @@ class ThermalEquilibriumModel:
                 self.external_source_weights = {
                     "pv": baseline_params.get(
                         "pv_heat_weight", config.PV_HEAT_WEIGHT
-                    ),
+                    ) + adjustments.get("pv_heat_weight_delta", 0.0),
                     "fireplace": baseline_params.get(
                         "fireplace_heat_weight", config.FIREPLACE_HEAT_WEIGHT,
-                    ),
+                    ) + adjustments.get("fireplace_heat_weight_delta", 0.0),
                     "tv": baseline_params.get(
                         "tv_heat_weight", config.TV_HEAT_WEIGHT
-                    ),
+                    ) + adjustments.get("tv_heat_weight_delta", 0.0),
                 }
 
                 logging.info(
@@ -98,7 +99,8 @@ class ThermalEquilibriumModel:
                     self.outlet_effectiveness,
                 )
                 logging.info(
-                    "   pv_heat_weight: %.4f", self.external_source_weights["pv"]
+                    "   pv_heat_weight: %.4f",
+                    self.external_source_weights["pv"]
                 )
 
                 # Validate parameters using schema validator
@@ -170,8 +172,12 @@ class ThermalEquilibriumModel:
 
     def _load_config_defaults(self):
         """MIGRATED: Load thermal parameters from unified parameter system."""
-        self.thermal_time_constant = thermal_params.get("thermal_time_constant")
-        self.heat_loss_coefficient = thermal_params.get("heat_loss_coefficient")
+        self.thermal_time_constant = thermal_params.get(
+            "thermal_time_constant"
+        )
+        self.heat_loss_coefficient = thermal_params.get(
+            "heat_loss_coefficient"
+        )
         self.outlet_effectiveness = thermal_params.get("outlet_effectiveness")
 
         self.external_source_weights = {
@@ -182,6 +188,36 @@ class ThermalEquilibriumModel:
 
         # Initialize remaining attributes
         self._initialize_learning_attributes()
+
+    @property
+    def pv_heat_weight(self) -> float:
+        """Get PV heat weight."""
+        return self.external_source_weights.get("pv", 0.0)
+
+    @pv_heat_weight.setter
+    def pv_heat_weight(self, value: float):
+        """Set PV heat weight."""
+        self.external_source_weights["pv"] = value
+
+    @property
+    def tv_heat_weight(self) -> float:
+        """Get TV heat weight."""
+        return self.external_source_weights.get("tv", 0.0)
+
+    @tv_heat_weight.setter
+    def tv_heat_weight(self, value: float):
+        """Set TV heat weight."""
+        self.external_source_weights["tv"] = value
+
+    @property
+    def fireplace_heat_weight(self) -> float:
+        """Get Fireplace heat weight."""
+        return self.external_source_weights.get("fireplace", 0.0)
+
+    @fireplace_heat_weight.setter
+    def fireplace_heat_weight(self, value: float):
+        """Set Fireplace heat weight."""
+        self.external_source_weights["fireplace"] = value
 
     def _initialize_learning_attributes(self):
         """Initialize adaptive learning and other attributes."""
@@ -233,6 +269,12 @@ class ThermalEquilibriumModel:
         self.outlet_effectiveness_bounds = ThermalParameterConfig.get_bounds(
             "outlet_effectiveness"
         )
+        self.pv_heat_weight_bounds = ThermalParameterConfig.get_bounds(
+            "pv_heat_weight"
+        )
+        self.tv_heat_weight_bounds = ThermalParameterConfig.get_bounds(
+            "tv_heat_weight"
+        )
 
         self.parameter_stability_threshold = (
             PhysicsConstants.THERMAL_STABILITY_THRESHOLD
@@ -250,30 +292,42 @@ class ThermalEquilibriumModel:
         fireplace_on: float = 0,
         tv_on: float = 0,
         thermal_power: float = None,
+        auxiliary_heat: float = 0.0,
         _suppress_logging: bool = False,
+        fireplace_power_kw: float = None,
     ) -> float:
         """
         Predict equilibrium temperature using standard heat balance physics.
-        Supports both temperature-based approximation and energy-based modeling.
+        Supports both temperature-based approximation and energy-based
+        modeling.
         """
         heat_from_pv = pv_power * self.external_source_weights.get("pv", 0.0)
-        heat_from_fireplace = fireplace_on * self.external_source_weights.get(
-            "fireplace", 0.0
-        )
+
+        if fireplace_power_kw is not None:
+            heat_from_fireplace = fireplace_power_kw
+        else:
+            heat_from_fireplace = (
+                fireplace_on
+                * self.external_source_weights.get("fireplace", 0.0)
+            )
+
         heat_from_tv = tv_on * self.external_source_weights.get("tv", 0.0)
 
         external_thermal_power = (
-            heat_from_pv + heat_from_fireplace + heat_from_tv
+            heat_from_pv + heat_from_fireplace + heat_from_tv + auxiliary_heat
         )
 
-        # Energy-based physical modeling (Preferred if thermal_power is available)
+        # Energy-based physical modeling (Preferred if thermal_power is
+        # available)
         if thermal_power is not None:
             # Teq = Tout + (P_total / U_loss)
             # P_total = P_thermal + P_external
             total_power = thermal_power + external_thermal_power
-            
+
             if self.heat_loss_coefficient > 0:
-                equilibrium_temp = outdoor_temp + (total_power / self.heat_loss_coefficient)
+                equilibrium_temp = outdoor_temp + (
+                    total_power / self.heat_loss_coefficient
+                )
             else:
                 equilibrium_temp = outdoor_temp
 
@@ -289,7 +343,9 @@ class ThermalEquilibriumModel:
             return equilibrium_temp
 
         # Fallback: Temperature-based approximation
-        total_conductance = self.heat_loss_coefficient + self.outlet_effectiveness
+        total_conductance = (
+            self.heat_loss_coefficient + self.outlet_effectiveness
+        )
         if total_conductance > 0:
             equilibrium_temp = (
                 self.outlet_effectiveness * outlet_temp
@@ -346,7 +402,9 @@ class ThermalEquilibriumModel:
             return
 
         if self._detect_parameter_corruption():
-            logging.warning("🛑 Parameter corruption detected - learning DISABLED")
+            logging.warning(
+                "🛑 Parameter corruption detected - learning DISABLED"
+            )
             return
 
         outlet_temp = prediction_context.get("outlet_temp")
@@ -414,7 +472,9 @@ class ThermalEquilibriumModel:
             elif error_magnitude > 1.0:  # Bad prediction
                 self.learning_confidence *= self.confidence_decay_rate
 
-            self.learning_confidence = float(np.clip(self.learning_confidence, 0.1, 5.0))
+            self.learning_confidence = float(
+                np.clip(self.learning_confidence, 0.1, 5.0)
+            )
             self._adapt_parameters_from_recent_errors()
 
         logging.debug(
@@ -485,12 +545,20 @@ class ThermalEquilibriumModel:
         outlet_effectiveness_gradient = (
             self._calculate_outlet_effectiveness_gradient(recent_predictions)
         )
+        pv_heat_weight_gradient = (
+            self._calculate_pv_heat_weight_gradient(recent_predictions)
+        )
+        tv_heat_weight_gradient = (
+            self._calculate_tv_heat_weight_gradient(recent_predictions)
+        )
 
         current_learning_rate = self._calculate_adaptive_learning_rate()
 
         old_thermal_time_constant = self.thermal_time_constant
         old_heat_loss_coefficient = self.heat_loss_coefficient
         old_outlet_effectiveness = self.outlet_effectiveness
+        old_pv_heat_weight = self.pv_heat_weight
+        old_tv_heat_weight = self.tv_heat_weight
 
         thermal_update = current_learning_rate * thermal_gradient
         heat_loss_coefficient_update = (
@@ -498,6 +566,12 @@ class ThermalEquilibriumModel:
         )
         outlet_effectiveness_update = (
             current_learning_rate * outlet_effectiveness_gradient
+        )
+        pv_heat_weight_update = (
+            current_learning_rate * pv_heat_weight_gradient
+        )
+        tv_heat_weight_update = (
+            current_learning_rate * tv_heat_weight_gradient
         )
 
         max_heat_loss_coefficient_change = (
@@ -525,6 +599,15 @@ class ThermalEquilibriumModel:
             max_thermal_time_constant_change,
         )
 
+        # Clip PV/TV updates (limit max change per step)
+        max_weight_change = 0.05
+        pv_heat_weight_update = np.clip(
+            pv_heat_weight_update, -max_weight_change, max_weight_change
+        )
+        tv_heat_weight_update = np.clip(
+            tv_heat_weight_update, -max_weight_change, max_weight_change
+        )
+
         self.thermal_time_constant = float(
             np.clip(
                 self.thermal_time_constant - thermal_update,
@@ -549,6 +632,22 @@ class ThermalEquilibriumModel:
             )
         )
 
+        self.pv_heat_weight = float(
+            np.clip(
+                self.pv_heat_weight - pv_heat_weight_update,
+                self.pv_heat_weight_bounds[0],
+                self.pv_heat_weight_bounds[1],
+            )
+        )
+
+        self.tv_heat_weight = float(
+            np.clip(
+                self.tv_heat_weight - tv_heat_weight_update,
+                self.tv_heat_weight_bounds[0],
+                self.tv_heat_weight_bounds[1],
+            )
+        )
+
         thermal_change = abs(
             self.thermal_time_constant - old_thermal_time_constant
         )
@@ -558,6 +657,8 @@ class ThermalEquilibriumModel:
         outlet_effectiveness_change = abs(
             self.outlet_effectiveness - old_outlet_effectiveness
         )
+        pv_heat_weight_change = abs(self.pv_heat_weight - old_pv_heat_weight)
+        tv_heat_weight_change = abs(self.tv_heat_weight - old_tv_heat_weight)
 
         self.parameter_history.append(
             {
@@ -565,6 +666,8 @@ class ThermalEquilibriumModel:
                 "thermal_time_constant": self.thermal_time_constant,
                 "heat_loss_coefficient": self.heat_loss_coefficient,
                 "outlet_effectiveness": self.outlet_effectiveness,
+                "pv_heat_weight": self.pv_heat_weight,
+                "tv_heat_weight": self.tv_heat_weight,
                 "learning_rate": current_learning_rate,
                 "learning_confidence": self.learning_confidence,
                 "avg_recent_error": np.mean(
@@ -574,11 +677,15 @@ class ThermalEquilibriumModel:
                     "thermal": thermal_gradient,
                     "heat_loss_coefficient": heat_loss_coefficient_gradient,
                     "outlet_effectiveness": outlet_effectiveness_gradient,
+                    "pv_heat_weight": pv_heat_weight_gradient,
+                    "tv_heat_weight": tv_heat_weight_gradient,
                 },
                 "changes": {
                     "thermal": thermal_change,
                     "heat_loss_coefficient": heat_loss_coefficient_change,
                     "outlet_effectiveness": outlet_effectiveness_change,
+                    "pv_heat_weight": pv_heat_weight_change,
+                    "tv_heat_weight": tv_heat_weight_change,
                 },
             }
         )
@@ -590,12 +697,16 @@ class ThermalEquilibriumModel:
             thermal_change > 0.001
             or heat_loss_coefficient_change > 0.0001
             or outlet_effectiveness_change > 0.0001
+            or pv_heat_weight_change > 0.0001
+            or tv_heat_weight_change > 0.0001
         ):
             logging.info(
                 "Adaptive learning update: "
                 "thermal: %.2f→%.2f (Δ%+.3f), "
                 "heat_loss_coeff: %.4f→%.4f (Δ%+.5f), "
-                "outlet_eff: %.3f→%.3f (Δ%+.3f)",
+                "outlet_eff: %.3f→%.3f (Δ%+.3f), "
+                "pv_weight: %.3f→%.3f (Δ%+.3f), "
+                "tv_weight: %.3f→%.3f (Δ%+.3f)",
                 old_thermal_time_constant,
                 self.thermal_time_constant,
                 thermal_change,
@@ -605,20 +716,31 @@ class ThermalEquilibriumModel:
                 old_outlet_effectiveness,
                 self.outlet_effectiveness,
                 outlet_effectiveness_change,
+                old_pv_heat_weight,
+                self.pv_heat_weight,
+                pv_heat_weight_change,
+                old_tv_heat_weight,
+                self.tv_heat_weight,
+                tv_heat_weight_change,
             )
 
             self._save_learning_to_thermal_state(
                 self.thermal_time_constant - old_thermal_time_constant,
                 self.heat_loss_coefficient - old_heat_loss_coefficient,
                 self.outlet_effectiveness - old_outlet_effectiveness,
+                self.pv_heat_weight - old_pv_heat_weight,
+                self.tv_heat_weight - old_tv_heat_weight,
             )
         else:
             logging.debug(
                 "Micro learning update: thermal_Δ=%+.5f, "
-                "heat_loss_coeff_Δ=%+.7f, outlet_eff_Δ=%+.5f",
+                "heat_loss_coeff_Δ=%+.7f, outlet_eff_Δ=%+.5f, "
+                "pv_Δ=%+.5f, tv_Δ=%+.5f",
                 thermal_change,
                 heat_loss_coefficient_change,
                 outlet_effectiveness_change,
+                pv_heat_weight_change,
+                tv_heat_weight_change,
             )
 
     def _calculate_parameter_gradient(
@@ -720,6 +842,30 @@ class ThermalEquilibriumModel:
             recent_predictions,
         )
 
+    def _calculate_pv_heat_weight_gradient(
+        self, recent_predictions: List[Dict]
+    ) -> float:
+        """
+        Calculate PV heat weight gradient.
+        """
+        return self._calculate_parameter_gradient(
+            "pv_heat_weight",
+            PhysicsConstants.PV_HEAT_WEIGHT_EPSILON,
+            recent_predictions,
+        )
+
+    def _calculate_tv_heat_weight_gradient(
+        self, recent_predictions: List[Dict]
+    ) -> float:
+        """
+        Calculate TV heat weight gradient.
+        """
+        return self._calculate_parameter_gradient(
+            "tv_heat_weight",
+            PhysicsConstants.TV_HEAT_WEIGHT_EPSILON,
+            recent_predictions,
+        )
+
     def _calculate_adaptive_learning_rate(self) -> float:
         """
         Calculate adaptive learning rate based on model performance.
@@ -787,8 +933,9 @@ class ThermalEquilibriumModel:
                 avg_error = np.mean(recent_errors)
                 if config.SHADOW_MODE:
                     # In shadow mode, we want to learn faster, even from large
-                    # errors, now that the physics are corrected. The confidence
-                    # mechanism will naturally temper the learning rate.
+                    # errors, now that the physics are corrected. The
+                    # confidence mechanism will naturally temper the learning
+                    # rate.
                     if avg_error > 2.0:
                         base_rate /= 1.5  # Less aggressive reduction
                 else:
@@ -829,30 +976,60 @@ class ThermalEquilibriumModel:
         fireplace_on = external_sources.get("fireplace_on", 0)
         tv_on = external_sources.get("tv_on", 0)
         thermal_power = external_sources.get("thermal_power", None)
+        auxiliary_heat = external_sources.get("auxiliary_heat", 0.0)
+        fireplace_power_kw = external_sources.get("fireplace_power_kw", None)
 
         time_step_hours = time_step_minutes / 60.0
         num_steps = int(time_horizon_hours * 60 / time_step_minutes)
 
-        if weather_forecasts and time_step_minutes == 60:
-            outdoor_forecasts = weather_forecasts
+        # Handle outdoor temperature forecast (array or scalar)
+        if isinstance(outdoor_temp, (list, np.ndarray)):
+            # Interpolate array input to simulation steps
+            source_len = len(outdoor_temp)
+            if source_len == num_steps:
+                outdoor_forecasts = list(outdoor_temp)
+            else:
+                # Interpolate to match simulation steps
+                indices = np.linspace(0, source_len - 1, num_steps)
+                outdoor_forecasts = np.interp(
+                    indices, np.arange(source_len), outdoor_temp
+                ).tolist()
+        elif weather_forecasts:
+            # Legacy support for separate argument
+            source_len = len(weather_forecasts)
+            # Assume weather_forecasts are hourly if not specified, map to
+            # steps. If we assume weather_forecasts matches the horizon hours:
+            source_times = np.linspace(0, time_horizon_hours, source_len)
+            target_times = np.linspace(0, time_horizon_hours, num_steps)
+            outdoor_forecasts = np.interp(
+                target_times, source_times, weather_forecasts
+            ).tolist()
         else:
             outdoor_forecasts = [outdoor_temp] * num_steps
-        if pv_forecasts and time_step_minutes == 60:
-            pv_power_forecasts = pv_forecasts
+
+        # Handle PV power forecast (array or scalar)
+        if isinstance(pv_power, (list, np.ndarray)):
+            source_len = len(pv_power)
+            if source_len == num_steps:
+                pv_power_forecasts = list(pv_power)
+            else:
+                indices = np.linspace(0, source_len - 1, num_steps)
+                pv_power_forecasts = np.interp(
+                    indices, np.arange(source_len), pv_power
+                ).tolist()
+        elif pv_forecasts:
+            source_len = len(pv_forecasts)
+            source_times = np.linspace(0, time_horizon_hours, source_len)
+            target_times = np.linspace(0, time_horizon_hours, num_steps)
+            pv_power_forecasts = np.interp(
+                target_times, source_times, pv_forecasts
+            ).tolist()
         else:
             pv_power_forecasts = [pv_power] * num_steps
 
         for step in range(num_steps):
-            future_outdoor = (
-                outdoor_forecasts[step]
-                if step < len(outdoor_forecasts)
-                else outdoor_temp
-            )
-            future_pv = (
-                pv_power_forecasts[step]
-                if step < len(pv_power_forecasts)
-                else pv_power
-            )
+            future_outdoor = outdoor_forecasts[step]
+            future_pv = pv_power_forecasts[step]
 
             equilibrium_temp = self.predict_equilibrium_temperature(
                 outlet_temp=outlet_temp,
@@ -862,7 +1039,9 @@ class ThermalEquilibriumModel:
                 fireplace_on=fireplace_on,
                 tv_on=tv_on,
                 thermal_power=thermal_power,
+                auxiliary_heat=auxiliary_heat,
                 _suppress_logging=True,
+                fireplace_power_kw=fireplace_power_kw,
             )
 
             time_constant_hours = (
@@ -870,7 +1049,9 @@ class ThermalEquilibriumModel:
                 if thermal_time_constant is not None
                 else self.thermal_time_constant
             )
-            approach_factor = 1 - np.exp(-time_step_hours / time_constant_hours)
+            approach_factor = 1 - np.exp(
+                -time_step_hours / time_constant_hours
+            )
             temp_change = (equilibrium_temp - current_temp) * approach_factor
 
             if step > 0:
@@ -922,7 +1103,9 @@ class ThermalEquilibriumModel:
             "overshoot_predicted": overshoot_predicted,
             "max_predicted": max(trajectory) if trajectory else current_indoor,
             "min_predicted": min(trajectory) if trajectory else current_indoor,
-            "equilibrium_temp": trajectory[-1] if trajectory else current_indoor,
+            "equilibrium_temp": (
+                trajectory[-1] if trajectory else current_indoor
+            ),
             "final_error": (
                 abs(trajectory[-1] - target_indoor)
                 if trajectory
@@ -940,7 +1123,8 @@ class ThermalEquilibriumModel:
         **external_sources,
     ):
         """
-        Calculate optimal outlet temperature to reach target indoor temperature.
+        Calculate optimal outlet temperature to reach target indoor
+        temperature.
         """
         pv_power = external_sources.get(
             "pv_power", external_sources.get("pv_now", 0)
@@ -1035,7 +1219,9 @@ class ThermalEquilibriumModel:
         if self.outlet_effectiveness <= 0:
             return 35.0
 
-        total_conductance = self.heat_loss_coefficient + self.outlet_effectiveness
+        total_conductance = (
+            self.heat_loss_coefficient + self.outlet_effectiveness
+        )
         equilibrium_outlet = (
             target_temp * total_conductance
             - self.heat_loss_coefficient * outdoor_temp
@@ -1051,12 +1237,38 @@ class ThermalEquilibriumModel:
         """Keep original threshold calculation method unchanged"""
         pass
 
+    def get_feature_importance(self) -> Dict[str, float]:
+        """
+        Get relative importance of different heat sources/parameters.
+        Acts as a compatibility layer for the legacy feature importance metric.
+        """
+        # Normalize weights to sum to 1.0 for relative importance
+        weights = {
+            "pv_power": self.external_source_weights.get("pv", 0.0),
+            "fireplace": self.external_source_weights.get("fireplace", 0.0),
+            "tv_power": self.external_source_weights.get("tv", 0.0),
+            # Proxy for outdoor influence
+            "outdoor_temp": self.heat_loss_coefficient,
+            # Proxy for target influence
+            "target_temp": self.outlet_effectiveness,
+        }
+        
+        total = sum(abs(v) for v in weights.values())
+        if total > 0:
+            return {k: abs(v) / total for k, v in weights.items()}
+        return weights
+
     def get_adaptive_learning_metrics(self) -> Dict:
         """
         ENHANCED: Get metrics with additional debugging info.
         """
-        if len(self.prediction_history) < 5:
-            return {"insufficient_data": True}
+        # Allow export even with minimal history for debugging
+        if len(self.prediction_history) < 1:
+            return {
+                "insufficient_data": True,
+                "history_len": len(self.prediction_history),
+                "required_len": 1
+            }
 
         recent_errors = [
             abs(p["error"]) for p in self.prediction_history[-20:]
@@ -1122,6 +1334,8 @@ class ThermalEquilibriumModel:
         new_thermal_adjustment,
         new_heat_loss_coefficient_adjustment,
         new_outlet_effectiveness_adjustment,
+        new_pv_heat_weight_adjustment=0.0,
+        new_tv_heat_weight_adjustment=0.0,
     ):
         """
         Save learned parameter adjustments to unified thermal state.
@@ -1145,6 +1359,12 @@ class ThermalEquilibriumModel:
             current_outlet_effectiveness_delta = current_deltas.get(
                 "outlet_effectiveness_delta", 0.0
             )
+            current_pv_heat_weight_delta = current_deltas.get(
+                "pv_heat_weight_delta", 0.0
+            )
+            current_tv_heat_weight_delta = current_deltas.get(
+                "tv_heat_weight_delta", 0.0
+            )
 
             updated_thermal_delta = (
                 current_thermal_delta + new_thermal_adjustment
@@ -1157,11 +1377,19 @@ class ThermalEquilibriumModel:
                 current_outlet_effectiveness_delta
                 + new_outlet_effectiveness_adjustment
             )
+            updated_pv_heat_weight_delta = (
+                current_pv_heat_weight_delta + new_pv_heat_weight_adjustment
+            )
+            updated_tv_heat_weight_delta = (
+                current_tv_heat_weight_delta + new_tv_heat_weight_adjustment
+            )
 
             if (
                 abs(new_thermal_adjustment) > 0.001
                 or abs(new_heat_loss_coefficient_adjustment) > 0.0001
                 or abs(new_outlet_effectiveness_adjustment) > 0.0001
+                or abs(new_pv_heat_weight_adjustment) > 0.0001
+                or abs(new_tv_heat_weight_adjustment) > 0.0001
             ):
                 state_manager.update_learning_state(
                     learning_confidence=self.learning_confidence,
@@ -1173,6 +1401,8 @@ class ThermalEquilibriumModel:
                         "outlet_effectiveness_delta": (
                             updated_outlet_effectiveness_delta
                         ),
+                        "pv_heat_weight_delta": updated_pv_heat_weight_delta,
+                        "tv_heat_weight_delta": updated_tv_heat_weight_delta,
                     },
                 )
                 logging.debug(
@@ -1180,7 +1410,9 @@ class ThermalEquilibriumModel:
                         "💾 Accumulated learning deltas: "
                         "thermal_Δ=%+.3f (+%+.3f), "
                         "heat_loss_coeff_Δ=%+.5f (+%+.5f), "
-                        "outlet_eff_Δ=%+.3f (+%+.3f)"
+                        "outlet_eff_Δ=%+.3f (+%+.3f), "
+                        "pv_weight_Δ=%+.3f (+%+.3f), "
+                        "tv_weight_Δ=%+.3f (+%+.3f)"
                     ),
                     updated_thermal_delta,
                     new_thermal_adjustment,
@@ -1188,6 +1420,10 @@ class ThermalEquilibriumModel:
                     new_heat_loss_coefficient_adjustment,
                     updated_outlet_effectiveness_delta,
                     new_outlet_effectiveness_adjustment,
+                    updated_pv_heat_weight_delta,
+                    new_pv_heat_weight_adjustment,
+                    updated_tv_heat_weight_delta,
+                    new_tv_heat_weight_adjustment,
                 )
             else:
                 state_manager.update_learning_state(

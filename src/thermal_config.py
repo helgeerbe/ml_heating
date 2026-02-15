@@ -41,7 +41,7 @@ class ThermalParameterConfig:
         'learning_confidence': 3.0,
         'min_learning_rate': 0.001,
         'max_learning_rate': 0.1,
-        'heat_loss_coefficient': 0.3,      # 1/hour
+        'heat_loss_coefficient': 0.4,      # 1/hour (Corrected baseline)
         'outlet_effectiveness': 0.5,      # dimensionless
     }
 

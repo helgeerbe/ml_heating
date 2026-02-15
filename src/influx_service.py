@@ -18,7 +18,7 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 try:
     from . import config  # Package-relative import
 except ImportError:
-    import config  # Direct import fallback for notebooks
+    import config  # type: ignore # Direct import fallback for notebooks
 
 
 class InfluxService:
@@ -533,10 +533,12 @@ class InfluxService:
             logging.debug("No importances to write to InfluxDB.")
             return
 
+        # STRICT SEPARATION: Feature data MUST go to features bucket
+        # Do NOT fallback to config.INFLUX_BUCKET (historic data)
         write_bucket = (
             bucket
             or getattr(config, "INFLUX_FEATURES_BUCKET", None)
-            or config.INFLUX_BUCKET
+            or "ml_heating_features"
         )
         write_org = org or getattr(config, "INFLUX_ORG", None)
 
@@ -597,7 +599,13 @@ class InfluxService:
             logging.debug("No prediction metrics to write to InfluxDB.")
             return
 
-        write_bucket = bucket or config.INFLUX_BUCKET
+        # STRICT SEPARATION: Prediction metrics go to features bucket
+        # as they are generated data, not historic sensor data
+        write_bucket = (
+            bucket
+            or getattr(config, "INFLUX_FEATURES_BUCKET", None)
+            or "ml_heating_features"
+        )
         write_org = org or getattr(config, "INFLUX_ORG", None)
 
         try:
@@ -724,10 +732,21 @@ class InfluxService:
             learning_metrics = thermal_model.get_adaptive_learning_metrics()
 
             if learning_metrics.get('insufficient_data'):
-                logging.debug("Insufficient thermal learning data for export.")
+                logging.debug(
+                    "Insufficient thermal learning data for export "
+                    "(History: %s/%s)",
+                    learning_metrics.get('history_len', '?'),
+                    learning_metrics.get('required_len', '5')
+                )
                 return
 
-            write_bucket = bucket or config.INFLUX_BUCKET
+            # STRICT SEPARATION: Thermal learning metrics go to features bucket
+            # as they are generated data, not historic sensor data
+            write_bucket = (
+                bucket
+                or getattr(config, "INFLUX_FEATURES_BUCKET", None)
+                or "ml_heating_features"
+            )
             write_org = org or getattr(config, "INFLUX_ORG", None)
             point_time = timestamp if timestamp else datetime.now(timezone.utc)
 
@@ -857,7 +876,13 @@ class InfluxService:
             logging.debug("No learning phase data to write to InfluxDB.")
             return
 
-        write_bucket = bucket or config.INFLUX_BUCKET
+        # STRICT SEPARATION: Learning phase metrics go to features bucket
+        # as they are generated data, not historic sensor data
+        write_bucket = (
+            bucket
+            or getattr(config, "INFLUX_FEATURES_BUCKET", None)
+            or "ml_heating_features"
+        )
         write_org = org or getattr(config, "INFLUX_ORG", None)
 
         try:
@@ -960,7 +985,13 @@ class InfluxService:
             )
             return
 
-        write_bucket = bucket or config.INFLUX_BUCKET
+        # STRICT SEPARATION: Trajectory metrics go to features bucket
+        # as they are generated data, not historic sensor data
+        write_bucket = (
+            bucket
+            or getattr(config, "INFLUX_FEATURES_BUCKET", None)
+            or "ml_heating_features"
+        )
         write_org = org or getattr(config, "INFLUX_ORG", None)
 
         try:
@@ -1075,7 +1106,13 @@ class InfluxService:
             )
             return
 
-        write_bucket = bucket or config.INFLUX_BUCKET
+        # STRICT SEPARATION: Shadow benchmarks go to features bucket
+        # as they are generated data, not historic sensor data
+        write_bucket = (
+            bucket
+            or getattr(config, "INFLUX_FEATURES_BUCKET", None)
+            or "ml_heating_features"
+        )
         write_org = org or getattr(config, "INFLUX_ORG", None)
 
         try:
@@ -1172,7 +1209,13 @@ class InfluxService:
         if not metrics:
             return
 
-        write_bucket = bucket or config.INFLUX_BUCKET
+        # STRICT SEPARATION: Thermodynamic metrics go to features bucket
+        # as they are generated data, not historic sensor data
+        write_bucket = (
+            bucket
+            or getattr(config, "INFLUX_FEATURES_BUCKET", None)
+            or "ml_heating_features"
+        )
         write_org = org or getattr(config, "INFLUX_ORG", None)
 
         try:

@@ -220,3 +220,36 @@ class TestEnhancedModelWrapper:
         assert isinstance(predicted_indoor, float)
         # Should be between current and outlet
         assert 20.0 < predicted_indoor < 40.0
+
+    def test_fireplace_learning_integration(self, wrapper_instance, mocker):
+        """Test that fireplace learning is integrated into the feedback loop."""
+        # Mock the fireplace learner
+        mock_learner = mocker.Mock()
+        wrapper_instance.adaptive_fireplace = mock_learner
+        
+        # Set cycle count to allow learning
+        wrapper_instance.cycle_count = 5
+        
+        # Simulate feedback with fireplace ON
+        context = {
+            'outlet_temp': 40.0,
+            'outdoor_temp': 5.0,
+            'current_indoor': 20.0,
+            'fireplace_on': 1,
+            'tv_on': 0,
+            'pv_power': 0
+        }
+        
+        wrapper_instance.learn_from_prediction_feedback(
+            predicted_temp=21.0,
+            actual_temp=22.0,
+            prediction_context=context
+        )
+        
+        # Verify observe_fireplace_state was called
+        mock_learner.observe_fireplace_state.assert_called_once()
+        
+        # Verify arguments passed to observe_fireplace_state
+        # It should receive current_indoor (20.0) as living_room_temp
+        _, kwargs = mock_learner.observe_fireplace_state.call_args
+        assert kwargs['living_room_temp'] == 20.0

@@ -170,7 +170,7 @@ options:
   # Building thermal response time in hours (how fast building temperature changes)
   thermal_time_constant: 4.0
   # Heat loss rate per degree difference between indoor and outdoor temperature
-  heat_loss_coefficient: 0.2
+  heat_loss_coefficient: 0.4
   # Heat pump outlet efficiency (how effectively outlet heats indoor air)
   outlet_effectiveness: 0.8
   # Outdoor temperature influence factor (how much outdoor temp affects indoor equilibrium)

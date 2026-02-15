@@ -26,6 +26,7 @@ from src.influx_service import create_influx_service
 from src.prediction_metrics import PredictionMetrics
 from src import config
 from src.ha_client import create_ha_client
+from src.adaptive_fireplace_learning import AdaptiveFireplaceLearning
 
 
 # Singleton pattern to prevent multiple model instantiation
@@ -55,6 +56,9 @@ class EnhancedModelWrapper:
         self.prediction_metrics = PredictionMetrics(
             state_manager=self.state_manager
         )
+
+        # Initialize adaptive fireplace learning
+        self.adaptive_fireplace = AdaptiveFireplaceLearning()
 
         # Get current cycle count from unified state
         metrics = self.state_manager.get_learning_metrics()
@@ -96,8 +100,9 @@ class EnhancedModelWrapper:
                     self.cycle_aligned_forecast:
                 logging.debug(
                     "🧠 Smart rounding is using cycle-aligned forecast: "
-                    f"PV={self.cycle_aligned_forecast.get('pv_power', 0.0):.0f}W"
-                    f" (caller sent PV={kwargs.get('pv_power', 0.0):.0f}W)"
+                    f"PV={self.cycle_aligned_forecast.get('pv_power', 0.0):.0f}"
+                    f"W (caller sent "
+                    f"PV={kwargs.get('pv_power', 0.0):.0f}W)"
                 )
                 pv_power = self.cycle_aligned_forecast.get(
                     "pv_power", kwargs.get("pv_power", 0.0)
@@ -159,6 +164,36 @@ class EnhancedModelWrapper:
 
             # Use thermal model to predict temperature at the end of the cycle
             cycle_hours = config.CYCLE_INTERVAL_MINUTES / 60.0
+
+            # Calculate fireplace power using adaptive learning
+            fireplace_power_kw = None
+            if fireplace_on:
+                # Get other rooms temp from kwargs or estimate
+                other_rooms_temp = kwargs.get(
+                    "other_rooms_temp", current_indoor - 2.0
+                )
+
+                # Calculate heat contribution
+                fireplace_analysis = (
+                    self.adaptive_fireplace
+                    ._calculate_learned_heat_contribution(
+                        temp_differential=current_indoor - other_rooms_temp,
+                        outdoor_temp=outdoor_temp,
+                        fireplace_active=True,
+                    )
+                )
+                fireplace_power_kw = fireplace_analysis.get(
+                    "heat_contribution_kw", 0.0
+                )
+                confidence = fireplace_analysis.get(
+                    "learning_confidence", 0.0
+                )
+                logging.debug(
+                    f"🔥 Using adaptive fireplace power: "
+                    f"{fireplace_power_kw:.2f}kW "
+                    f"(confidence: {confidence:.2f})"
+                )
+
             trajectory_result = (
                 self.thermal_model.predict_thermal_trajectory(
                     current_indoor=current_indoor,
@@ -171,6 +206,7 @@ class EnhancedModelWrapper:
                     fireplace_on=fireplace_on,
                     tv_on=tv_on,
                     thermal_power=thermal_power,
+                    fireplace_power_kw=fireplace_power_kw,
                 )
             )
 
@@ -224,16 +260,21 @@ class EnhancedModelWrapper:
             # Get prediction metadata
             confidence = self.thermal_model.learning_confidence
             prediction_metadata = {
-                "thermal_time_constant": self.thermal_model.thermal_time_constant,
-                "heat_loss_coefficient": self.thermal_model.heat_loss_coefficient,
-                "outlet_effectiveness": self.thermal_model.outlet_effectiveness,
+                "thermal_time_constant":
+                    self.thermal_model.thermal_time_constant,
+                "heat_loss_coefficient":
+                    self.thermal_model.heat_loss_coefficient,
+                "outlet_effectiveness":
+                    self.thermal_model.outlet_effectiveness,
                 "learning_confidence": confidence,
                 "prediction_method": "thermal_equilibrium_single_prediction",
                 "cycle_count": self.cycle_count,
             }
 
             if optimal_outlet_temp is None:
-                logging.warning("Failed to calculate optimal outlet temperature")
+                logging.warning(
+                    "Failed to calculate optimal outlet temperature"
+                )
                 optimal_outlet_temp = 35.0  # Safe fallback
 
             return optimal_outlet_temp, prediction_metadata
@@ -254,9 +295,13 @@ class EnhancedModelWrapper:
 
         # Multi-heat source features
         thermal_features["pv_power"] = features.get("pv_now", 0.0)
-        thermal_features["fireplace_on"] = float(features.get("fireplace_on", 0))
+        thermal_features["fireplace_on"] = float(
+            features.get("fireplace_on", 0)
+        )
         thermal_features["tv_on"] = float(features.get("tv_on", 0))
-        thermal_features["thermal_power"] = float(features.get("thermal_power_kw", 0.0))
+        thermal_features["thermal_power"] = float(
+            features.get("thermal_power_kw", 0.0)
+        )
 
         # Enhanced thermal intelligence features
         thermal_features["indoor_temp_gradient"] = \
@@ -310,13 +355,21 @@ class EnhancedModelWrapper:
 
         if features:
             # Extract available forecast data
-            forecast_1h_outdoor = features.get("temp_forecast_1h", outdoor_temp)
+            forecast_1h_outdoor = features.get(
+                "temp_forecast_1h", outdoor_temp
+            )
             forecast_1h_pv = features.get("pv_forecast_1h", pv_power)
-            forecast_2h_outdoor = features.get("temp_forecast_2h", outdoor_temp)
+            forecast_2h_outdoor = features.get(
+                "temp_forecast_2h", outdoor_temp
+            )
             forecast_2h_pv = features.get("pv_forecast_2h", pv_power)
-            forecast_3h_outdoor = features.get("temp_forecast_3h", outdoor_temp)
+            forecast_3h_outdoor = features.get(
+                "temp_forecast_3h", outdoor_temp
+            )
             forecast_3h_pv = features.get("pv_forecast_3h", pv_power)
-            forecast_4h_outdoor = features.get("temp_forecast_4h", outdoor_temp)
+            forecast_4h_outdoor = features.get(
+                "temp_forecast_4h", outdoor_temp
+            )
             forecast_4h_pv = features.get("pv_forecast_4h", pv_power)
 
             # Calculate cycle-aligned forecast using appropriate
@@ -329,7 +382,8 @@ class EnhancedModelWrapper:
                 )
                 cycle_pv = pv_power * (1 - weight) + forecast_1h_pv * weight
                 method = f"interpolated ({cycle_minutes}min)"
-            elif cycle_hours <= 1.0:  # 30-60min cycles: use 1h forecast directly
+            elif cycle_hours <= 1.0:
+                # 30-60min cycles: use 1h forecast directly
                 cycle_outdoor = forecast_1h_outdoor
                 cycle_pv = forecast_1h_pv
                 method = "1h forecast"
@@ -401,6 +455,35 @@ class EnhancedModelWrapper:
         fireplace_on = thermal_features.get("fireplace_on", 0.0)
         tv_on = thermal_features.get("tv_on", 0.0)
 
+        # Calculate fireplace power using adaptive learning
+        fireplace_power_kw = None
+        if fireplace_on:
+            # Get other rooms temp from features or estimate
+            other_rooms_temp = thermal_features.get(
+                "avg_other_rooms_temp", current_indoor - 2.0
+            )
+
+            # Calculate heat contribution
+            fireplace_analysis = (
+                self.adaptive_fireplace
+                ._calculate_learned_heat_contribution(
+                    temp_differential=current_indoor - other_rooms_temp,
+                    outdoor_temp=outdoor_temp,
+                    fireplace_active=True,
+                )
+            )
+            fireplace_power_kw = fireplace_analysis.get(
+                "heat_contribution_kw", 0.0
+            )
+            confidence = fireplace_analysis.get(
+                "learning_confidence", 0.0
+            )
+            logging.debug(
+                f"🔥 Using adaptive fireplace power: "
+                f"{fireplace_power_kw:.2f}kW "
+                f"(confidence: {confidence:.2f})"
+            )
+
         # Iterative search to find outlet temp that produces target indoor
         # temp. This uses the learned thermal physics parameters from
         # calibration.
@@ -445,6 +528,7 @@ class EnhancedModelWrapper:
                     fireplace_on=fireplace_on,
                     tv_on=tv_on,
                     _suppress_logging=True,
+                    fireplace_power_kw=fireplace_power_kw,
                 )
 
             # Check what maximum outlet temp produces
@@ -457,10 +541,12 @@ class EnhancedModelWrapper:
                     fireplace_on=fireplace_on,
                     tv_on=tv_on,
                     _suppress_logging=True,
+                    fireplace_power_kw=fireplace_power_kw,
                 )
 
             if min_prediction is not None and max_prediction is not None:
-                # UNIFIED PRE-CHECK: Check reachability regardless of heating/cooling scenario
+                # UNIFIED PRE-CHECK: Check reachability regardless of
+                # heating/cooling scenario
                 temp_diff = target_indoor - current_indoor
                 temp_diff_abs = abs(temp_diff)
                 is_cooling_needed = temp_diff < -0.1  # Need to cool house
@@ -471,8 +557,9 @@ class EnhancedModelWrapper:
                     # Target below minimum capability
                     scenario = "cooling" if is_cooling_needed else "heating"
                     logging.warning(
-                        f"🎯 {scenario.title()} pre-check: Target {target_indoor:.1f}°C "
-                        f"unreachable (min outlet {outlet_min:.1f}°C → "
+                        f"🎯 {scenario.title()} pre-check: Target "
+                        f"{target_indoor:.1f}°C unreachable "
+                        f"(min outlet {outlet_min:.1f}°C → "
                         f"{min_prediction:.2f}°C), using minimum outlet"
                     )
                     return outlet_min
@@ -481,31 +568,36 @@ class EnhancedModelWrapper:
                     # Target above maximum capability
                     scenario = "cooling" if is_cooling_needed else "heating"
                     logging.warning(
-                        f"🎯 {scenario.title()} pre-check: Target {target_indoor:.1f}°C "
-                        f"unreachable (max outlet {outlet_max:.1f}°C → "
+                        f"🎯 {scenario.title()} pre-check: Target "
+                        f"{target_indoor:.1f}°C unreachable "
+                        f"(max outlet {outlet_max:.1f}°C → "
                         f"{max_prediction:.2f}°C), using maximum outlet"
                     )
                     return outlet_max
 
-                # Target is achievable - proceed to binary search for ALL scenarios
+                # Target is achievable - proceed to binary search for ALL
+                # scenarios
                 scenario = (
                     "cooling"
                     if is_cooling_needed
                     else ("heating" if is_heating_needed else "maintenance")
                 )
                 logging.debug(
-                    f"🎯 {scenario.title()} ({temp_diff_abs:.1f}°C deviation): Target "
-                    f"{target_indoor:.1f}°C achievable (range: "
-                    f"{min_prediction:.1f}-{max_prediction:.1f}°C), proceeding to binary "
-                    "search"
+                    f"🎯 {scenario.title()} ({temp_diff_abs:.1f}°C "
+                    f"deviation): Target {target_indoor:.1f}°C achievable "
+                    f"(range: {min_prediction:.1f}-{max_prediction:.1f}°C), "
+                    "proceeding to binary search"
                 )
         except Exception as e:
-            logging.warning(f"Pre-check failed: {e}, proceeding with binary search")
+            logging.warning(
+                f"Pre-check failed: {e}, proceeding with binary search"
+            )
 
         # Binary search for optimal outlet temperature
         logging.debug(
             f"🎯 Binary search start: target={target_indoor:.1f}°C, "
-            f"current={current_indoor:.1f}°C, range={outlet_min:.1f}-{outlet_max:.1f}°C"
+            f"current={current_indoor:.1f}°C, "
+            f"range={outlet_min:.1f}-{outlet_max:.1f}°C"
         )
 
         for iteration in range(20):  # Max 20 iterations for efficiency
@@ -514,36 +606,39 @@ class EnhancedModelWrapper:
             if range_size < 0.05:  # °C - range too small to matter
                 final_outlet = (outlet_min + outlet_max) / 2.0
                 logging.info(
-                    f"🔄 Binary search early exit after {iteration+1} iterations: "
-                    f"range collapsed to {range_size:.3f}°C, "
+                    f"🔄 Binary search early exit after {iteration+1} "
+                    f"iterations: range collapsed to {range_size:.3f}°C, "
                     f"using {final_outlet:.1f}°C"
                 )
                 return final_outlet
 
             outlet_mid = (outlet_min + outlet_max) / 2.0
 
-            # Predict indoor temperature with this outlet temperature using cycle-aligned conditions
+            # Predict indoor temperature with this outlet temperature using
+            # cycle-aligned conditions
             try:
-                # STABILITY FIX: Use a longer prediction horizon (4h) for control optimization
-                # to prevent oscillation. Optimizing for 30min (cycle time) leads to
-                # "deadbeat control" behavior and excessive outlet temperatures.
+                # STABILITY FIX: Use a longer prediction horizon (4h) for
+                # control optimization to prevent oscillation. Optimizing for
+                # 30min (cycle time) leads to "deadbeat control" behavior and
+                # excessive outlet temperatures.
                 optimization_horizon = 4.0
 
-                # Calculate average conditions over the optimization horizon
-                # outdoor_forecast contains [1h, 2h, 3h, 4h]
-                avg_outdoor_horizon = sum(outdoor_forecast) / len(outdoor_forecast)
-                avg_pv_horizon = sum(pv_forecast) / len(pv_forecast)
+                # Pass full forecast arrays to thermal model for accurate
+                # trajectory. outdoor_forecast contains [1h, 2h, 3h, 4h]
 
-                trajectory_result = self.thermal_model.predict_thermal_trajectory(
-                    current_indoor=current_indoor,
-                    target_indoor=target_indoor,
-                    outlet_temp=outlet_mid,
-                    outdoor_temp=avg_outdoor_horizon,
-                    time_horizon_hours=optimization_horizon,
-                    time_step_minutes=config.CYCLE_INTERVAL_MINUTES,
-                    pv_power=avg_pv_horizon,
-                    fireplace_on=fireplace_on,
-                    tv_on=tv_on,
+                trajectory_result = (
+                    self.thermal_model.predict_thermal_trajectory(
+                        current_indoor=current_indoor,
+                        target_indoor=target_indoor,
+                        outlet_temp=outlet_mid,
+                        outdoor_temp=outdoor_forecast,  # Pass array directly
+                        time_horizon_hours=optimization_horizon,
+                        time_step_minutes=config.CYCLE_INTERVAL_MINUTES,
+                        pv_power=pv_forecast,  # Pass array directly
+                        fireplace_on=fireplace_on,
+                        tv_on=tv_on,
+                        fireplace_power_kw=fireplace_power_kw,
+                    )
                 )
 
                 if (
@@ -552,17 +647,20 @@ class EnhancedModelWrapper:
                     or not trajectory_result["trajectory"]
                 ):
                     logging.warning(
-                        f"   Iteration {iteration+1}: predict_thermal_trajectory returned invalid result "
+                        f"   Iteration {iteration+1}: "
+                        f"predict_thermal_trajectory returned invalid result "
                         f"for outlet={outlet_mid:.1f}°C - using fallback"
                     )
                     return 35.0
 
-                # Use the temperature at the END of the horizon for optimization
+                # Use the temperature at the END of the horizon for
+                # optimization
                 predicted_indoor = trajectory_result["trajectory"][-1]
 
             except Exception as e:
                 logging.error(
-                    f"   Iteration {iteration+1}: predict_thermal_trajectory failed: {e}"
+                    f"   Iteration {iteration+1}: "
+                    f"predict_thermal_trajectory failed: {e}"
                 )
                 return 35.0  # Safe fallback
 
@@ -579,9 +677,10 @@ class EnhancedModelWrapper:
             # Check if we're close enough
             if abs(error) < tolerance:
                 logging.info(
-                    f"✅ Binary search converged after {iteration+1} iterations: "
-                    f"{outlet_mid:.1f}°C → {predicted_indoor:.2f}°C "
-                    f"(target: {target_indoor:.1f}°C, error: {error:.3f}°C)"
+                    f"✅ Binary search converged after {iteration+1} "
+                    f"iterations: {outlet_mid:.1f}°C → "
+                    f"{predicted_indoor:.2f}°C (target: "
+                    f"{target_indoor:.1f}°C, error: {error:.3f}°C)"
                 )
 
                 # Show final equilibrium physics for the converged result
@@ -592,10 +691,12 @@ class EnhancedModelWrapper:
                     pv_power=avg_pv,
                     fireplace_on=fireplace_on,
                     tv_on=tv_on,
-                    _suppress_logging=False,  # Show equilibrium physics logging
+                    _suppress_logging=False,  # Show equilibrium physics
+                    fireplace_power_kw=fireplace_power_kw,
                 )
 
-                # MULTI-HORIZON FORECAST LOGGING: Show predictions with different forecast horizons
+                # MULTI-HORIZON FORECAST LOGGING: Show predictions with
+                # different forecast horizons
                 self._log_multi_horizon_predictions(
                     current_indoor=current_indoor,
                     target_indoor=target_indoor,
@@ -630,28 +731,35 @@ class EnhancedModelWrapper:
                     # Need higher outlet temperature
                     outlet_min = outlet_mid
                     logging.debug(
-                        f"     → Heating: Predicted too low, raising minimum to {outlet_min:.1f}°C"
+                        f"     → Heating: Predicted too low, raising minimum "
+                        f"to {outlet_min:.1f}°C"
                     )
                 else:
                     # Need lower outlet temperature
                     outlet_max = outlet_mid
                     logging.debug(
-                        f"     → Heating: Predicted too high, lowering maximum to {outlet_max:.1f}°C"
+                        f"     → Heating: Predicted too high, lowering "
+                        f"maximum to {outlet_max:.1f}°C"
                     )
             elif is_cooling_scenario:
-                # COOLING: For cooling, we want to get as close as possible to target
-                # Standard binary search logic works, just need to be close to target
+                # COOLING: For cooling, we want to get as close as possible to
+                # target. Standard binary search logic works, just need to be
+                # close to target
                 if predicted_indoor < target_indoor:
-                    # Predicted is below target - need slightly higher outlet to reach target
+                    # Predicted is below target - need slightly higher outlet
+                    # to reach target
                     outlet_min = outlet_mid
                     logging.debug(
-                        f"     → Cooling: Predicted below target, raising minimum to {outlet_min:.1f}°C"
+                        f"     → Cooling: Predicted below target, raising "
+                        f"minimum to {outlet_min:.1f}°C"
                     )
                 else:
-                    # Predicted is above target - need lower outlet to reach target
+                    # Predicted is above target - need lower outlet to reach
+                    # target
                     outlet_max = outlet_mid
                     logging.debug(
-                        f"     → Cooling: Predicted above target, lowering maximum to {outlet_max:.1f}°C"
+                        f"     → Cooling: Predicted above target, lowering "
+                        f"maximum to {outlet_max:.1f}°C"
                     )
             else:
                 # MAINTENANCE: At target (normal logic)
@@ -659,32 +767,37 @@ class EnhancedModelWrapper:
                     # Need higher outlet temperature
                     outlet_min = outlet_mid
                     logging.debug(
-                        f"     → Maintenance: Predicted too low, raising minimum to {outlet_min:.1f}°C"
+                        f"     → Maintenance: Predicted too low, raising "
+                        f"minimum to {outlet_min:.1f}°C"
                     )
                 else:
                     # Need lower outlet temperature
                     outlet_max = outlet_mid
                     logging.debug(
-                        f"     → Maintenance: Predicted too high, lowering maximum to {outlet_max:.1f}°C"
+                        f"     → Maintenance: Predicted too high, lowering "
+                        f"maximum to {outlet_max:.1f}°C"
                     )
 
         # Return best guess if didn't converge
         final_outlet = (outlet_min + outlet_max) / 2.0
         try:
-            final_predicted = self.thermal_model.predict_equilibrium_temperature(
-                outlet_temp=final_outlet,
-                outdoor_temp=avg_outdoor,  # Use forecast average for consistency
-                current_indoor=current_indoor,
-                pv_power=avg_pv,  # Use forecast average for consistency
-                fireplace_on=fireplace_on,
-                tv_on=tv_on,
-                _suppress_logging=True,
+            final_predicted = (
+                self.thermal_model.predict_equilibrium_temperature(
+                    outlet_temp=final_outlet,
+                    outdoor_temp=avg_outdoor,  # Use forecast average
+                    current_indoor=current_indoor,
+                    pv_power=avg_pv,  # Use forecast average for consistency
+                    fireplace_on=fireplace_on,
+                    tv_on=tv_on,
+                    _suppress_logging=True,
+                    fireplace_power_kw=fireplace_power_kw,
+                )
             )
 
             # Handle None return for final prediction
             if final_predicted is None:
                 logging.warning(
-                    f"⚠️ Final prediction returned None, using fallback 35.0°C"
+                    "⚠️ Final prediction returned None, using fallback 35.0°C"
                 )
                 return 35.0
 
@@ -724,8 +837,9 @@ class EnhancedModelWrapper:
         """
         Log predicted outlet temperatures using different forecast horizons.
 
-        This helps diagnose which forecast horizon is causing high outlet temp predictions
-        during evening/overnight scenarios when outdoor temperature drops.
+        This helps diagnose which forecast horizon is causing high outlet temp
+        predictions during evening/overnight scenarios when outdoor temperature
+        drops.
         """
         try:
             # Extract thermal features
@@ -745,33 +859,38 @@ class EnhancedModelWrapper:
             if cycle_minutes > max_reasonable_cycle:
                 cycle_hours = max_reasonable_cycle / 60.0
 
-            # Calculate cycle-aligned forecast conditions (same logic as _get_forecast_conditions)
-            forecast_1h_outdoor = features.get("temp_forecast_1h", outdoor_temp)
+            # Calculate cycle-aligned forecast conditions (same logic as
+            # _get_forecast_conditions)
+            forecast_1h_outdoor = features.get(
+                "temp_forecast_1h", outdoor_temp
+            )
             forecast_1h_pv = features.get("pv_forecast_1h", pv_power)
 
-            if cycle_hours <= 0.5:  # 0-30min cycles: interpolate between current and 1h
+            if cycle_hours <= 0.5:
+                # 0-30min cycles: interpolate between current and 1h
                 weight = cycle_hours / 1.0
                 cycle_outdoor = (
                     outdoor_temp * (1 - weight) + forecast_1h_outdoor * weight
                 )
                 cycle_pv = pv_power * (1 - weight) + forecast_1h_pv * weight
                 cycle_method = f"cycle({cycle_minutes}min)"
-            elif cycle_hours <= 1.0:  # 30-60min cycles: use 1h forecast directly
+            elif cycle_hours <= 1.0:
+                # 30-60min cycles: use 1h forecast directly
                 cycle_outdoor = forecast_1h_outdoor
                 cycle_pv = forecast_1h_pv
-                cycle_method = f"cycle(1h)"
+                cycle_method = "cycle(1h)"
             elif cycle_hours <= 2.0:  # 60-120min cycles: use 2h forecast
                 cycle_outdoor = features.get("temp_forecast_2h", outdoor_temp)
                 cycle_pv = features.get("pv_forecast_2h", pv_power)
-                cycle_method = f"cycle(2h)"
+                cycle_method = "cycle(2h)"
             elif cycle_hours <= 3.0:  # 120-180min cycles: use 3h forecast
                 cycle_outdoor = features.get("temp_forecast_3h", outdoor_temp)
                 cycle_pv = features.get("pv_forecast_3h", pv_power)
-                cycle_method = f"cycle(3h)"
+                cycle_method = "cycle(3h)"
             else:  # >180min cycles: cap at 4h forecast
                 cycle_outdoor = features.get("temp_forecast_4h", outdoor_temp)
                 cycle_pv = features.get("pv_forecast_4h", pv_power)
-                cycle_method = f"cycle(4h-cap)"
+                cycle_method = "cycle(4h-cap)"
 
             # Extract individual forecast horizons including cycle-aligned
             forecasts = {
@@ -816,10 +935,13 @@ class EnhancedModelWrapper:
             for horizon, conditions in forecasts.items():
                 try:
                     # Use same precision as main binary search for consistency
-                    outlet_min, outlet_max = config.CLAMP_MIN_ABS, config.CLAMP_MAX_ABS
+                    outlet_min, outlet_max = (
+                        config.CLAMP_MIN_ABS,
+                        config.CLAMP_MAX_ABS,
+                    )
                     tolerance = 0.1  # Same precision as main binary search
 
-                    for iteration in range(20):  # Same iterations as main binary search
+                    for iteration in range(20):  # Same iterations as main
                         outlet_mid = (outlet_min + outlet_max) / 2.0
                         predicted_indoor = (
                             self.thermal_model.predict_equilibrium_temperature(
@@ -871,17 +993,28 @@ class EnhancedModelWrapper:
                             }
 
                 except Exception as e:
-                    logging.debug(f"Multi-horizon prediction failed for {horizon}: {e}")
+                    logging.debug(
+                        f"Multi-horizon prediction failed for {horizon}: {e}"
+                    )
                     continue
 
             # Log the multi-horizon predictions in a clear format
             if predictions:
                 logging.debug(
-                    f"🔍 Multi-horizon predictions for target {target_indoor:.1f}°C:"
+                    f"🔍 Multi-horizon predictions for target "
+                    f"{target_indoor:.1f}°C:"
                 )
 
                 # Order the predictions logically (including cycle-aligned)
-                order = ["current", cycle_method, "1h", "2h", "3h", "4h", "avg"]
+                order = [
+                    "current",
+                    cycle_method,
+                    "1h",
+                    "2h",
+                    "3h",
+                    "4h",
+                    "avg",
+                ]
                 for horizon in order:
                     if horizon in predictions:
                         pred = predictions[horizon]
@@ -897,8 +1030,9 @@ class EnhancedModelWrapper:
                             marker = ""
 
                         logging.debug(
-                            f"   {horizon:>12}: {outlet:.1f}°C → {predicted:.1f}°C "
-                            f"(error: {error:+.2f}°C, outdoor: {conditions['outdoor']:.1f}°C, "
+                            f"   {horizon:>12}: {outlet:.1f}°C → "
+                            f"{predicted:.1f}°C (error: {error:+.2f}°C, "
+                            f"outdoor: {conditions['outdoor']:.1f}°C, "
                             f"PV: {conditions['pv']:.0f}W) {marker}"
                         )
 
@@ -912,7 +1046,8 @@ class EnhancedModelWrapper:
                         direction = "higher" if outlet_diff > 0 else "lower"
                         logging.warning(
                             f"⚠️ Forecast vs current difference: "
-                            f"forecast avg outlet {outlet_diff:+.1f}°C {direction} "
+                            f"forecast avg outlet {outlet_diff:+.1f}°C "
+                            f"{direction} "
                             f"than current conditions"
                         )
             else:
@@ -933,10 +1068,12 @@ class EnhancedModelWrapper:
         features: Optional[Dict] = None,
     ) -> float:
         """
-        Verify that the calculated outlet temperature will actually reach the target
-        using trajectory prediction, and apply physics-based adaptive correction if needed.
+        Verify that the calculated outlet temperature will actually reach the
+        target using trajectory prediction, and apply physics-based adaptive
+        correction if needed.
 
-        PHYSICS-BASED CORRECTION: Uses learned thermal parameters to adaptively scale
+        PHYSICS-BASED CORRECTION: Uses learned thermal parameters to adaptively
+        scale
         corrections based on house characteristics and time pressure.
         """
         try:
@@ -949,46 +1086,51 @@ class EnhancedModelWrapper:
                 )
             )
 
-            # Get trajectory prediction with forecast integration
-            if hasattr(self.thermal_model, "predict_thermal_trajectory_with_forecasts"):
-                # Enhanced method with forecast arrays
-                trajectory = (
-                    self.thermal_model.predict_thermal_trajectory_with_forecasts(
-                        current_indoor=current_indoor,
-                        target_indoor=target_indoor,
-                        outlet_temp=outlet_temp,
-                        outdoor_forecast=outdoor_forecast,
-                        pv_forecast=pv_forecast,
-                        time_horizon_hours=config.TRAJECTORY_STEPS,
-                        fireplace_on=thermal_features.get("fireplace_on", 0.0),
-                        tv_on=thermal_features.get("tv_on", 0.0),
+            # Calculate fireplace power using adaptive learning
+            fireplace_on = thermal_features.get("fireplace_on", 0.0)
+            fireplace_power_kw = None
+            if fireplace_on:
+                other_rooms_temp = thermal_features.get(
+                    "avg_other_rooms_temp", current_indoor - 2.0
+                )
+                fireplace_analysis = (
+                    self.adaptive_fireplace
+                    ._calculate_learned_heat_contribution(
+                        temp_differential=current_indoor - other_rooms_temp,
+                        outdoor_temp=outdoor_temp,
+                        fireplace_active=True,
                     )
                 )
-            else:
-                # FIXED: Use cycle-aligned conditions instead of 4-hour averages
-                # This ensures trajectory matches the cycle-aligned forecast shown in logs
-                # RESOLUTION FIX: Use cycle interval for time steps to capture behavior within the cycle
-                trajectory = self.thermal_model.predict_thermal_trajectory(
-                    current_indoor=current_indoor,
-                    target_indoor=target_indoor,
-                    outlet_temp=outlet_temp,
-                    outdoor_temp=avg_outdoor,  # Use cycle-aligned outdoor temp
-                    time_horizon_hours=config.TRAJECTORY_STEPS,
-                    time_step_minutes=config.CYCLE_INTERVAL_MINUTES,  # Match simulation step to control cycle
-                    pv_power=avg_pv,  # Use cycle-aligned PV power
-                    fireplace_on=thermal_features.get("fireplace_on", 0.0),
-                    tv_on=thermal_features.get("tv_on", 0.0),
+                fireplace_power_kw = fireplace_analysis.get(
+                    "heat_contribution_kw", 0.0
                 )
 
-                logging.debug(
-                    f"🔍 Trajectory prediction using cycle-aligned conditions: "
-                    f"outdoor={avg_outdoor:.1f}°C, PV={avg_pv:.0f}W"
-                )
+            # Get trajectory prediction with forecast integration
+            # Use the enhanced predict_thermal_trajectory which now supports
+            # arrays
+            trajectory = self.thermal_model.predict_thermal_trajectory(
+                current_indoor=current_indoor,
+                target_indoor=target_indoor,
+                outlet_temp=outlet_temp,
+                outdoor_temp=outdoor_forecast,  # Pass array directly
+                time_horizon_hours=config.TRAJECTORY_STEPS,
+                time_step_minutes=config.CYCLE_INTERVAL_MINUTES,
+                pv_power=pv_forecast,  # Pass array directly
+                fireplace_on=fireplace_on,
+                tv_on=thermal_features.get("tv_on", 0.0),
+                fireplace_power_kw=fireplace_power_kw,
+            )
 
-            # TRAJECTORY-BASED DECISION: Check if target reachable within cycle time
+            logging.debug(
+                f"🔍 Trajectory prediction using forecast arrays: "
+                f"outdoor={outdoor_forecast}, PV={pv_forecast}"
+            )
+
+            # TRAJECTORY-BASED DECISION: Check if target reachable within cycle
+            # time. Allow a small tolerance (e.g. 15 mins) for reaching target
+            # This prevents correcting just because we are a few minutes late,
+            # supporting "fast push"
             cycle_hours = config.CYCLE_INTERVAL_MINUTES / 60.0
-            # Allow a small tolerance (e.g. 15 mins) for reaching target
-            # This prevents correcting just because we are a few minutes late, supporting "fast push"
             tolerance_hours = 15.0 / 60.0
 
             # DEBUG: Log trajectory details for diagnosis
@@ -1000,16 +1142,24 @@ class EnhancedModelWrapper:
 
             # Get time of first step for accurate logging
             trajectory_times = trajectory.get("times", [])
-            first_step_time = trajectory_times[0] if trajectory_times else config.CYCLE_INTERVAL_MINUTES / 60.0
-
-            logging.debug(
-                f"🔍 Trajectory DEBUG: outlet={outlet_temp:.1f}°C → {first_step_time:.1f}h_prediction={first_step_temp:.2f}°C "
-                f"(vs target {target_indoor:.1f}°C, error: {first_step_temp - target_indoor:+.3f}°C), "
-                f"reaches_target_at={reaches_target_at}h, cycle_time={cycle_hours:.1f}h"
+            first_step_time = (
+                trajectory_times[0]
+                if trajectory_times
+                else config.CYCLE_INTERVAL_MINUTES / 60.0
             )
 
-            # NEW LOGIC: Check for temperature boundary violations regardless of target achievement
-            # This ensures comfort boundaries are respected even when target is theoretically reachable
+            logging.debug(
+                f"🔍 Trajectory DEBUG: outlet={outlet_temp:.1f}°C → "
+                f"{first_step_time:.1f}h_prediction={first_step_temp:.2f}°C "
+                f"(vs target {target_indoor:.1f}°C, "
+                f"error: {first_step_temp - target_indoor:+.3f}°C), "
+                f"reaches_target_at={reaches_target_at}h, "
+                f"cycle_time={cycle_hours:.1f}h"
+            )
+
+            # NEW LOGIC: Check for temperature boundary violations regardless
+            # of target achievement. This ensures comfort boundaries are
+            # respected even when target is theoretically reachable
             trajectory_temps = trajectory.get("trajectory", [])
             trajectory_times = trajectory.get("times", [])
 
@@ -1018,32 +1168,42 @@ class EnhancedModelWrapper:
                 max_temp = max(trajectory_temps)
 
                 # Check if immediate cycle is safe (no overshoot)
-                # If we are safe for the current cycle, we can be more lenient with future predictions
-                # as we will have a chance to correct in the next cycle.
+                # If we are safe for the current cycle, we can be more lenient
+                # with future predictions as we will have a chance to correct
+                # in the next cycle.
                 immediate_overshoot = False
-                if trajectory_times and trajectory_times[0] <= cycle_hours + 0.01:
+                if (
+                    trajectory_times
+                    and trajectory_times[0] <= cycle_hours + 0.01
+                ):
                     if trajectory_temps[0] > target_indoor + 0.1:
                         immediate_overshoot = True
                 else:
-                    # Fallback if times not available or first step is far future
+                    # Fallback if times not available or first step is far
+                    # future
                     if trajectory_temps[0] > target_indoor + 0.1:
                         immediate_overshoot = True
 
                 if not immediate_overshoot:
-                    # Immediate cycle is safe - allow relaxed boundaries for future
-                    # Allow up to 0.5°C overshoot in future steps (vs 0.1°C strict)
-                    # This enables "fast push" strategies where we heat aggressively now
-                    # knowing we can back off in the next cycle.
+                    # Immediate cycle is safe - allow relaxed boundaries for
+                    # future. Allow up to 0.5°C overshoot in future steps (vs
+                    # 0.1°C strict). This enables "fast push" strategies where
+                    # we heat aggressively now knowing we can back off in the
+                    # next cycle.
                     temp_boundary_violation = (
-                        min_temp <= target_indoor - 0.1  # Keep strict undershoot protection
+                        min_temp <= target_indoor - 0.1  # Strict undershoot
                         or max_temp >= target_indoor + 0.5  # Relaxed overshoot
                     )
-                    
-                    # Log if we are ignoring a future overshoot that would have been caught by strict rules
-                    if (max_temp >= target_indoor + 0.1) and (max_temp < target_indoor + 0.5):
+
+                    # Log if we are ignoring a future overshoot that would have
+                    # been caught by strict rules
+                    if (max_temp >= target_indoor + 0.1) and (
+                        max_temp < target_indoor + 0.5
+                    ):
                         logging.debug(
-                            f"Ignoring minor future overshoot (max={max_temp:.2f}°C) "
-                            f"because immediate cycle is safe ({trajectory_temps[0]:.2f}°C)"
+                            f"Ignoring minor future overshoot "
+                            f"(max={max_temp:.2f}°C) because immediate cycle "
+                            f"is safe ({trajectory_temps[0]:.2f}°C)"
                         )
                 else:
                     # Immediate overshoot detected - enforce strict boundaries
@@ -1054,18 +1214,24 @@ class EnhancedModelWrapper:
             else:
                 temp_boundary_violation = False
 
-            # Enhanced logic: If target reached quickly, be more lenient with boundary violations
-            # Use tolerance to allow reaching target slightly after cycle end
-            if reaches_target_at is not None and reaches_target_at <= (cycle_hours + tolerance_hours):
+            # Enhanced logic: If target reached quickly, be more lenient with
+            # boundary violations. Use tolerance to allow reaching target
+            # slightly after cycle end
+            if reaches_target_at is not None and reaches_target_at <= (
+                cycle_hours + tolerance_hours
+            ):
                 if not temp_boundary_violation:
                     logging.info(
-                        f"✅ Target will be reached in {reaches_target_at:.1f}h "
-                        f"(within {cycle_hours:.1f}h cycle + tolerance) and no boundary violations - no correction needed"
+                        f"✅ Target will be reached in "
+                        f"{reaches_target_at:.1f}h (within {cycle_hours:.1f}h "
+                        f"cycle + tolerance) and no boundary violations - no "
+                        "correction needed"
                     )
                     return outlet_temp
                 else:
                     # Target reachable quickly but has boundary violations
-                    # For fast target achievement (< 0.5h), allow larger tolerance (±0.3°C instead of ±0.1°C)
+                    # For fast target achievement (< 0.5h), allow larger
+                    # tolerance (±0.3°C instead of ±0.1°C)
                     if reaches_target_at <= 0.5:  # Very fast achievement
                         relaxed_boundary_violation = (
                             min_temp <= target_indoor - 0.3  # More lenient
@@ -1080,13 +1246,16 @@ class EnhancedModelWrapper:
                             )
                             return outlet_temp
 
-            # Apply correction if target not reachable or significant boundary violations
+            # Apply correction if target not reachable or significant boundary
+            # violations
             if trajectory_temps and min(trajectory_temps) > target_indoor:
                 logging.info(
                     "⚠️ Overshoot detected: entire trajectory is above target "
                     f"{target_indoor:.1f}°C. Applying correction."
                 )
-            elif reaches_target_at is None or reaches_target_at > (cycle_hours + tolerance_hours):
+            elif reaches_target_at is None or reaches_target_at > (
+                cycle_hours + tolerance_hours
+            ):
                 logging.info(
                     f"⚠️ Target will NOT be reached within {cycle_hours:.1f}h "
                     "cycle (+tolerance) - applying physics-based correction"
@@ -1120,7 +1289,8 @@ class EnhancedModelWrapper:
         cycle_hours: float,
     ) -> float:
         """
-        Calculate physics-based adaptive correction with deviation-scaled response.
+        Calculate physics-based adaptive correction with deviation-scaled
+        response.
 
         ENHANCED PRIORITY 2 IMPLEMENTATION:
         - Graduated response zones based on temperature deviation magnitude
@@ -1166,63 +1336,78 @@ class EnhancedModelWrapper:
                 else:
                     temp_error = 0.0
 
-            # USER FEEDBACK: Implement exponential correction based on deviation from target.
-            # This ensures a strong pull towards the target when the temperature is far
-            # away, and a gentler approach as it gets closer.
+            # USER FEEDBACK: Implement exponential correction based on
+            # deviation from target. This ensures a strong pull towards the
+            # target when the temperature is far away, and a gentler approach
+            # as it gets closer.
 
-            # k controls the aggression of the exponential curve. A higher value means
-            # a more aggressive response to temperature deviations.
+            # k controls the aggression of the exponential curve. A higher
+            # value means a more aggressive response to temperature deviations.
             k = 1.5
             aggression_factor = np.exp(k * initial_deviation)
 
             # Physics-based scaling using house thermal characteristics.
             if self.thermal_model.outlet_effectiveness > 0.01:
-                base_scale = (1.0 / self.thermal_model.outlet_effectiveness) * 0.2
+                base_scale = (
+                    1.0 / self.thermal_model.outlet_effectiveness
+                ) * 0.2
             else:
                 base_scale = 15.0  # Fallback
 
             physics_scale = base_scale
 
             # Time pressure calculation (how urgently we need to correct).
-            time_pressure = self._calculate_time_pressure(trajectory, cycle_hours)
+            time_pressure = self._calculate_time_pressure(
+                trajectory, cycle_hours
+            )
             urgency_multiplier = 1.0 + 2.0 * (time_pressure ** 2)
 
-            # Calculate the final correction, applying aggression only when undershooting.
+            # Calculate the final correction, applying aggression only when
+            # undershooting.
             if temp_error > 0:
                 # Apply exponential aggression when we are below target.
                 correction = (
-                    temp_error * physics_scale * urgency_multiplier * aggression_factor
+                    temp_error
+                    * physics_scale
+                    * urgency_multiplier
+                    * aggression_factor
                 )
                 logging.info(
                     "   Exponential Correction for undershoot: "
                     f"aggression_factor={aggression_factor:.2f}x"
                 )
             else:
-                # When overshooting, apply a gentle, non-exponential correction to prevent
-                # the system from pulling back too hard.
+                # When overshooting, apply a gentle, non-exponential correction
+                # to prevent the system from pulling back too hard.
                 overshoot_dampening = 0.4
                 correction = (
-                    temp_error * physics_scale * urgency_multiplier * overshoot_dampening
+                    temp_error
+                    * physics_scale
+                    * urgency_multiplier
+                    * overshoot_dampening
                 )
                 logging.info(
                     "   Gentle Correction for overshoot: dampened by "
                     f"{overshoot_dampening:.0%}"
                 )
 
-            # Clamp the correction to a reasonable maximum to prevent extreme values.
+            # Clamp the correction to a reasonable maximum to prevent extreme
+            # values.
             max_correction = 20.0
             correction = max(-max_correction, min(max_correction, correction))
 
             # Final outlet temperature.
             corrected_outlet = outlet_temp + correction
             corrected_outlet = max(
-                config.CLAMP_MIN_ABS, min(config.CLAMP_MAX_ABS, corrected_outlet)
+                config.CLAMP_MIN_ABS,
+                min(config.CLAMP_MAX_ABS, corrected_outlet),
             )
 
             logging.info(
                 f"🎯 Corrected outlet: {corrected_outlet:.1f}°C "
                 f"({outlet_temp:.1f}°C + {correction:+.1f}°C) "
-                f"(deviation: {initial_deviation:.1f}°C, temp_error: {temp_error:+.2f}°C)"
+                f"(deviation: {initial_deviation:.1f}°C, "
+                f"temp_error: {temp_error:+.2f}°C)"
             )
 
             return corrected_outlet
@@ -1231,9 +1416,12 @@ class EnhancedModelWrapper:
             logging.error(f"Physics-based correction failed: {e}")
             return outlet_temp
 
-    def _calculate_time_pressure(self, trajectory: Dict, cycle_hours: float) -> float:
+    def _calculate_time_pressure(
+        self, trajectory: Dict, cycle_hours: float
+    ) -> float:
         """
-        Calculate how urgently we need to correct (0.0 = no pressure, 1.0 = maximum urgency).
+        Calculate how urgently we need to correct (0.0 = no pressure, 1.0 =
+        maximum urgency).
         """
         reaches_target_at = trajectory.get("reaches_target_at")
 
@@ -1241,7 +1429,7 @@ class EnhancedModelWrapper:
             return 1.0  # Maximum urgency - may never reach target
         elif reaches_target_at <= cycle_hours:
             return (
-                0.0  # No pressure - target reachable in time (should not happen here)
+                0.0  # No pressure - target reachable in time
             )
         elif reaches_target_at <= cycle_hours * 2:
             return 0.3  # Low pressure - close to reachable
@@ -1250,7 +1438,8 @@ class EnhancedModelWrapper:
         else:
             return 1.0  # High pressure - far from target
 
-    # This method is no longer needed - thermal state is loaded in ThermalEquilibriumModel
+    # This method is no longer needed - thermal state is loaded in
+    # ThermalEquilibriumModel
 
     def learn_from_prediction_feedback(
         self,
@@ -1260,22 +1449,33 @@ class EnhancedModelWrapper:
         timestamp: Optional[str] = None,
         is_blocking_active: bool = False,
     ):
-        """Learn from prediction feedback using the thermal model's adaptive learning."""
+        """
+        Learn from prediction feedback using the thermal model's adaptive
+        learning.
+        """
         if not self.learning_enabled:
             return
 
         if is_blocking_active:
-            logging.info("Skipping online learning due to active blocking event.")
+            logging.info(
+                "Skipping online learning due to active blocking event."
+            )
             return
 
         try:
-            # FIRST-CYCLE GUARD: Skip learning on the first cycle after a restart
-            # to prevent incorrect adjustments from the time gap between cycles.
+            # FIRST-CYCLE GUARD: Skip learning on the first cycle after a
+            # restart to prevent incorrect adjustments from the time gap
+            # between cycles.
             if self.cycle_count <= 1:
-                logging.info("Skipping online learning on the first cycle to ensure stability.")
+                logging.info(
+                    "Skipping online learning on the first cycle to ensure "
+                    "stability."
+                )
                 # Still update cycle count and save state, but don't learn.
                 self.cycle_count += 1
-                self.state_manager.update_learning_state(cycle_count=self.cycle_count)
+                self.state_manager.update_learning_state(
+                    cycle_count=self.cycle_count
+                )
                 return
 
             # Update thermal model with prediction feedback
@@ -1286,6 +1486,21 @@ class EnhancedModelWrapper:
                 timestamp=timestamp or datetime.now().isoformat(),
                 is_blocking_active=is_blocking_active,
             )
+
+            # Update adaptive fireplace learning if fireplace was active
+            if prediction_context.get("fireplace_on", 0):
+                current_indoor = prediction_context.get("current_indoor", 20.0)
+                other_rooms_temp = prediction_context.get(
+                    "avg_other_rooms_temp", current_indoor - 2.0
+                )
+                outdoor_temp = prediction_context.get("outdoor_temp", 0.0)
+
+                self.adaptive_fireplace.observe_fireplace_state(
+                    living_room_temp=current_indoor,
+                    other_rooms_temp=other_rooms_temp,
+                    outdoor_temp=outdoor_temp,
+                    fireplace_active=True,
+                )
 
             # Add prediction to MAE/RMSE tracking
             self.prediction_metrics.add_prediction(
@@ -1309,21 +1524,28 @@ class EnhancedModelWrapper:
             self.cycle_count += 1
 
             # Update cycle count in unified state
-            self.state_manager.update_learning_state(cycle_count=self.cycle_count)
+            self.state_manager.update_learning_state(
+                cycle_count=self.cycle_count
+            )
 
-            # Export metrics to InfluxDB every 5 cycles (approximately every 25 minutes)
-            if self.cycle_count % 5 == 0:
-                self._export_metrics_to_influxdb()
+            # Export metrics to InfluxDB every cycle (temporarily increased
+            # frequency for debugging)
+            # Was: if self.cycle_count % 5 == 0:
+            self._export_metrics_to_influxdb()
 
-            # Export metrics to Home Assistant every cycle for real-time monitoring
+            # Export metrics to Home Assistant every cycle for real-time
+            # monitoring
             self.export_metrics_to_ha()
 
             # Log learning cycle completion
             if prediction_error is not None:
                 logging.info(
-                    f"✅ Learning cycle {self.cycle_count}: error={abs(prediction_error):.3f}°C, "
-                    f"confidence={self.thermal_model.learning_confidence:.3f}, "
-                    f"total_predictions={len(self.prediction_metrics.predictions)}"
+                    f"✅ Learning cycle {self.cycle_count}: "
+                    f"error={abs(prediction_error):.3f}°C, "
+                    f"confidence="
+                    f"{self.thermal_model.learning_confidence:.3f}, "
+                    f"total_predictions="
+                    f"{len(self.prediction_metrics.predictions)}"
                 )
 
         except Exception as e:
@@ -1337,7 +1559,8 @@ class EnhancedModelWrapper:
             # Get comprehensive metrics
             ha_metrics = self.get_comprehensive_metrics_for_ha()
 
-            # Export MAE/RMSE metrics (confidence now provided via ml_heating_learning sensor)
+            # Export MAE/RMSE metrics (confidence now provided via
+            # ml_heating_learning sensor)
             ha_client.log_model_metrics(
                 mae=ha_metrics.get("mae_all_time", 0.0),
                 rmse=ha_metrics.get("rmse_all_time", 0.0),
@@ -1352,14 +1575,21 @@ class EnhancedModelWrapper:
                 if importances:
                     ha_client.log_feature_importance(importances)
 
-            logging.info("✅ Exported metrics to Home Assistant sensors successfully")
+            logging.info(
+                "✅ Exported metrics to Home Assistant sensors successfully"
+            )
 
         except Exception as e:
             # Better error logging for debugging sensor export issues
-            logging.error(f"❌ FAILED to export metrics to HA: {e}", exc_info=True)
             logging.error(
-                f"   Attempted to export: {list(ha_metrics.keys()) if 'ha_metrics' in locals() else 'metrics not created'}"
+                f"❌ FAILED to export metrics to HA: {e}", exc_info=True
             )
+            keys = (
+                list(ha_metrics.keys())
+                if 'ha_metrics' in locals()
+                else 'metrics not created'
+            )
+            logging.error(f"   Attempted to export: {keys}")
             logging.error(f"   HA Client created: {'ha_client' in locals()}")
             # Re-raise the exception for visibility during debugging
             raise
@@ -1397,7 +1627,8 @@ class EnhancedModelWrapper:
                                 "outlet_effectiveness",
                                 self.thermal_model.outlet_effectiveness,
                             ),
-                            "learning_confidence": self.thermal_model.learning_confidence,
+                            "learning_confidence":
+                                self.thermal_model.learning_confidence,
                             "cycle_count": self.cycle_count,
                         }
                     )
@@ -1427,11 +1658,15 @@ class EnhancedModelWrapper:
             prediction_metrics = self.prediction_metrics.get_metrics()
 
             # Get recent performance
-            recent_performance = self.prediction_metrics.get_recent_performance(10)
+            recent_performance = (
+                self.prediction_metrics.get_recent_performance(10)
+            )
 
             # Get 24h window simplified accuracy breakdown
             accuracy_24h = self.prediction_metrics.get_24h_accuracy_breakdown()
-            good_control_24h = self.prediction_metrics.get_24h_good_control_percentage()
+            good_control_24h = (
+                self.prediction_metrics.get_24h_good_control_percentage()
+            )
 
             # Combine into comprehensive HA-friendly format
             ha_metrics = {
@@ -1445,17 +1680,27 @@ class EnhancedModelWrapper:
                 "outlet_effectiveness": thermal_metrics.get(
                     "outlet_effectiveness", 0.04
                 ),
-                "learning_confidence": thermal_metrics.get("learning_confidence", 3.0),
+                "learning_confidence": thermal_metrics.get(
+                    "learning_confidence", 3.0
+                ),
                 # Learning progress
                 "cycle_count": self.cycle_count,
-                "parameter_updates": thermal_metrics.get("parameter_updates", 0),
-                "update_percentage": thermal_metrics.get("update_percentage", 0),
+                "parameter_updates": thermal_metrics.get(
+                    "parameter_updates", 0
+                ),
+                "update_percentage": thermal_metrics.get(
+                    "update_percentage", 0
+                ),
                 # Prediction accuracy (MAE/RMSE) - all-time
                 "mae_1h": prediction_metrics.get("1h", {}).get("mae", 0.0),
                 "mae_6h": prediction_metrics.get("6h", {}).get("mae", 0.0),
                 "mae_24h": prediction_metrics.get("24h", {}).get("mae", 0.0),
-                "mae_all_time": prediction_metrics.get("all", {}).get("mae", 0.0),
-                "rmse_all_time": prediction_metrics.get("all", {}).get("rmse", 0.0),
+                "mae_all_time": prediction_metrics.get("all", {}).get(
+                    "mae", 0.0
+                ),
+                "rmse_all_time": prediction_metrics.get("all", {}).get(
+                    "rmse", 0.0
+                ),
                 # Recent performance
                 "recent_mae_10": recent_performance.get("mae", 0.0),
                 "recent_max_error": recent_performance.get("max_error", 0.0),
@@ -1463,14 +1708,15 @@ class EnhancedModelWrapper:
                 "perfect_accuracy_pct": accuracy_24h.get("perfect", {}).get(
                     "percentage", 0.0
                 ),
-                "tolerable_accuracy_pct": accuracy_24h.get("tolerable", {}).get(
-                    "percentage", 0.0
-                ),
+                "tolerable_accuracy_pct": accuracy_24h.get(
+                    "tolerable", {}
+                ).get("percentage", 0.0),
                 "poor_accuracy_pct": accuracy_24h.get("poor", {}).get(
                     "percentage", 0.0
                 ),
                 "good_control_pct": good_control_24h,
-                # Legacy accuracy breakdown (all-time) - kept for backward compatibility
+                # Legacy accuracy breakdown (all-time) - kept for backward
+                # compatibility
                 "excellent_accuracy_pct": prediction_metrics.get(
                     "accuracy_breakdown", {}
                 )
@@ -1489,7 +1735,9 @@ class EnhancedModelWrapper:
                 ),
                 # Trend analysis (ensure JSON serializable)
                 "is_improving": bool(
-                    prediction_metrics.get("trends", {}).get("is_improving", False)
+                    prediction_metrics.get("trends", {}).get(
+                        "is_improving", False
+                    )
                 ),
                 "improvement_percentage": float(
                     prediction_metrics.get("trends", {}).get(
@@ -1505,7 +1753,8 @@ class EnhancedModelWrapper:
                         if thermal_metrics.get("learning_confidence", 0) >= 3.0
                         else (
                             "fair"
-                            if thermal_metrics.get("learning_confidence", 0) >= 2.0
+                            if thermal_metrics.get("learning_confidence", 0)
+                            >= 2.0
                             else "poor"
                         )
                     )
@@ -1540,12 +1789,23 @@ class EnhancedModelWrapper:
 
             # Export thermal learning metrics
             if hasattr(self.thermal_model, "get_adaptive_learning_metrics"):
-                influx_service.write_thermal_learning_metrics(self.thermal_model)
-                logging.debug("✅ Exported thermal learning metrics to InfluxDB")
+                influx_service.write_thermal_learning_metrics(
+                    self.thermal_model
+                )
+                logging.debug(
+                    "✅ Exported thermal learning metrics to InfluxDB"
+                )
+
+            # Export feature importance
+            if hasattr(self.thermal_model, "get_feature_importance"):
+                importances = self.thermal_model.get_feature_importance()
+                if importances:
+                    influx_service.write_feature_importances(importances)
+                    logging.debug("✅ Exported feature importance to InfluxDB")
 
             # Export learning phase metrics (if available)
             learning_phase_data = {
-                "current_learning_phase": "high_confidence",  # Simplified for now
+                "current_learning_phase": "high_confidence",  # Simplified
                 "stability_score": min(
                     1.0, self.thermal_model.learning_confidence / 5.0
                 ),
@@ -1568,15 +1828,20 @@ class EnhancedModelWrapper:
                 "prediction_horizon": "4h",
                 "trajectory_accuracy": {
                     "mae_1h": prediction_metrics.get("1h", {}).get("mae", 0.0),
-                    "mae_2h": prediction_metrics.get("6h", {}).get("mae", 0.0) * 1.2,
-                    "mae_4h": prediction_metrics.get("24h", {}).get("mae", 0.0) * 1.5,
+                    "mae_2h": prediction_metrics.get("6h", {}).get("mae", 0.0)
+                    * 1.2,
+                    "mae_4h": prediction_metrics.get("24h", {}).get("mae", 0.0)
+                    * 1.5,
                 },
                 "overshoot_prevention": {
                     "overshoot_predicted": False,
                     "prevented_24h": 0,
                     "undershoot_prevented_24h": 0,
                 },
-                "convergence": {"avg_time_minutes": 45.0, "accuracy_percentage": 87.5},
+                "convergence": {
+                    "avg_time_minutes": 45.0,
+                    "accuracy_percentage": 87.5,
+                },
                 "forecast_integration": {
                     "weather_available": False,
                     "pv_available": True,
@@ -1584,10 +1849,13 @@ class EnhancedModelWrapper:
                 },
             }
             influx_service.write_trajectory_prediction_metrics(trajectory_data)
-            logging.debug("✅ Exported trajectory prediction metrics to InfluxDB")
+            logging.debug(
+                "✅ Exported trajectory prediction metrics to InfluxDB"
+            )
 
             logging.info(
-                f"📊 Exported all adaptive learning metrics to InfluxDB (cycle {self.cycle_count})"
+                f"📊 Exported all adaptive learning metrics to InfluxDB "
+                f"(cycle {self.cycle_count})"
             )
 
         except Exception as e:
@@ -1597,14 +1865,18 @@ class EnhancedModelWrapper:
         """Save current thermal learning state to persistent storage."""
         try:
             # State saving is handled by the unified thermal state manager
-            # No additional saving needed here as the state_manager handles persistence
-            logging.debug("Learning state automatically saved via state_manager")
+            # No additional saving needed here as the state_manager handles
+            # persistence
+            logging.debug(
+                "Learning state automatically saved via state_manager"
+            )
 
         except Exception as e:
             logging.error(f"Failed to save learning state: {e}")
 
 
-# Legacy functions removed - ThermalEquilibriumModel handles persistence internally
+# Legacy functions removed - ThermalEquilibriumModel handles persistence
+# internally
 
 
 def get_enhanced_model_wrapper() -> EnhancedModelWrapper:
@@ -1657,7 +1929,9 @@ def simplified_outlet_prediction(
         features_dict["target_temp"] = target_temp
 
         # Get simplified prediction
-        outlet_temp, metadata = wrapper.calculate_optimal_outlet_temp(features_dict)
+        outlet_temp, metadata = wrapper.calculate_optimal_outlet_temp(
+            features_dict
+        )
         confidence = metadata.get("learning_confidence", 3.0)
 
         # Calculate thermal trust metrics for HA sensor display
@@ -1666,11 +1940,12 @@ def simplified_outlet_prediction(
         )
         metadata["thermal_trust_metrics"] = thermal_trust_metrics
 
-        # Log the calculated outlet temperature - smart rounding will be applied later in main.py
+        # Log the calculated outlet temperature - smart rounding will be
+        # applied later in main.py
         logging.info(
-            f"🎯 Prediction: Current {current_temp:.2f}°C → Target {target_temp:.1f}°C | "
-            f"Calculated outlet: {outlet_temp:.1f}°C (before smart rounding) "
-            f"(confidence: {confidence:.3f})"
+            f"🎯 Prediction: Current {current_temp:.2f}°C → Target "
+            f"{target_temp:.1f}°C | Calculated outlet: {outlet_temp:.1f}°C "
+            f"(before smart rounding) (confidence: {confidence:.3f})"
         )
 
         return outlet_temp, confidence, metadata
@@ -1698,27 +1973,41 @@ def _calculate_thermal_trust_metrics(
         thermal_model = wrapper.thermal_model
 
         # Calculate thermal stability (how stable are the thermal parameters)
-        time_constant_stability = min(1.0, thermal_model.thermal_time_constant / 48.0)
-        heat_loss_stability = min(1.0, thermal_model.heat_loss_coefficient * 20.0)
-        outlet_effectiveness_stability = min(1.0, thermal_model.outlet_effectiveness * 25.0)
+        time_constant_stability = min(
+            1.0, thermal_model.thermal_time_constant / 48.0
+        )
+        heat_loss_stability = min(
+            1.0, thermal_model.heat_loss_coefficient * 20.0
+        )
+        outlet_effectiveness_stability = min(
+            1.0, thermal_model.outlet_effectiveness * 25.0
+        )
         thermal_stability = (
-            time_constant_stability + heat_loss_stability + outlet_effectiveness_stability
+            time_constant_stability
+            + heat_loss_stability
+            + outlet_effectiveness_stability
         ) / 3.0
 
         # Calculate prediction consistency (how reasonable is this prediction)
         temp_diff = abs(target_temp - current_temp)
         outlet_indoor_diff = abs(outlet_temp - current_temp)
 
-        # Reasonable outlet temps should be 5-40°C above indoor temp for heating
+        # Reasonable outlet temps should be 5-40°C above indoor temp for
+        # heating
         if temp_diff > 0.1:  # Need heating
-            reasonable_range = outlet_indoor_diff >= 5.0 and outlet_indoor_diff <= 40.0
+            reasonable_range = (
+                outlet_indoor_diff >= 5.0 and outlet_indoor_diff <= 40.0
+            )
         else:  # At target
-            reasonable_range = outlet_indoor_diff >= 0.0 and outlet_indoor_diff <= 20.0
+            reasonable_range = (
+                outlet_indoor_diff >= 0.0 and outlet_indoor_diff <= 20.0
+            )
 
         prediction_consistency = 1.0 if reasonable_range else 0.5
 
-        # Calculate physics alignment (how well does prediction align with physics)
-        # Higher outlet temps should be needed for larger temperature differences
+        # Calculate physics alignment (how well does prediction align with
+        # physics). Higher outlet temps should be needed for larger temperature
+        # differences
         if temp_diff > 0.1:
             expected_outlet_range = current_temp + (
                 temp_diff * 8.0

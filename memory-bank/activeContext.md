@@ -1,6 +1,19 @@
 # Active Context - Current Work & Decision State
 
-### 🧪 **PHASE 2: ADVANCED TESTING IMPLEMENTATION - February 13, 2026**
+### 🧠 **ADAPTIVE LEARNING & SOURCE ATTRIBUTION IMPLEMENTED - February 15, 2026**
+
+**CRITICAL MILESTONE**: The system now features advanced adaptive learning capabilities for external heat sources. It can dynamically learn the heat contribution of the fireplace, TV, and PV panels by observing prediction errors when these sources are active. This moves the system from static weight assumptions to dynamic, home-specific learning.
+
+#### ✅ **FIREPLACE & SOURCE LEARNING INTEGRATION COMPLETE**
+- **Context**: Integrated `AdaptiveFireplaceLearning` into `EnhancedModelWrapper` and implemented TV/PV weight learning in `ThermalEquilibriumModel`.
+- **Changes**:
+  - `src/model_wrapper.py`: Integrated `AdaptiveFireplaceLearning` for real-time fireplace detection and heat contribution learning.
+  - `src/thermal_equilibrium_model.py`: Implemented gradient-based learning for `tv_heat_weight` and `pv_heat_weight`.
+  - `tests/unit/test_model_wrapper.py`: Added `test_fireplace_learning_integration`.
+  - `tests/integration/test_adaptive_learning.py`: Added `test_source_attribution_learning`.
+- **Impact**: The model now dynamically learns the heat contribution of the fireplace, TV, and PV panels, improving prediction accuracy during multi-source heating events.
+
+### � **PHASE 2: ADVANCED TESTING IMPLEMENTATION - February 13, 2026**
 
 **CRITICAL MILESTONE**: Phase 2 is now complete with the addition of property-based testing and sociable unit tests. The test suite has been hardened and expanded to cover edge cases and component interactions more rigorously.
 

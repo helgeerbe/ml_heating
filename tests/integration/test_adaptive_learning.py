@@ -170,6 +170,72 @@ def test_enhanced_ha_metrics():
         assert False, f"Enhanced HA metrics failed: {e}"
 
 
+def test_source_attribution_learning():
+    """Test 6: Verify source attribution for TV and PV."""
+    print("\n🧪 Test 6: Source Attribution Learning")
+
+    try:
+        model = ThermalEquilibriumModel()
+        
+        # --- Test TV Learning ---
+        initial_tv_weight = model.external_source_weights['tv']
+        print(f"   Initial TV weight: {initial_tv_weight:.4f}")
+        
+        # Simulate consistent overheating when TV is ON
+        # We provide feedback where actual temp > predicted temp
+        # And we ensure TV is ON in the context
+        for _ in range(5):
+            model.update_prediction_feedback(
+                predicted_temp=20.0,
+                actual_temp=20.5,  # Overheating
+                prediction_context={
+                    'outlet_temp': 30.0,
+                    'outdoor_temp': 10.0,
+                    'current_indoor': 20.0,
+                    'tv_on': 1,
+                    'pv_power': 0.0,  # Isolate TV
+                    'fireplace_on': 0
+                }
+            )
+            
+        final_tv_weight = model.external_source_weights['tv']
+        print(f"   Final TV weight: {final_tv_weight:.4f}")
+        
+        assert final_tv_weight > initial_tv_weight, \
+            "TV weight should increase when overheating with TV on"
+        print("   ✅ TV weight adaptation confirmed")
+
+        # --- Test PV Learning ---
+        initial_pv_weight = model.external_source_weights['pv']
+        print(f"   Initial PV weight: {initial_pv_weight:.6f}")
+        
+        # Simulate consistent overheating when PV is HIGH
+        for _ in range(5):
+            model.update_prediction_feedback(
+                predicted_temp=20.0,
+                actual_temp=20.5,  # Overheating
+                prediction_context={
+                    'outlet_temp': 30.0,
+                    'outdoor_temp': 10.0,
+                    'current_indoor': 20.0,
+                    'tv_on': 0,
+                    'pv_power': 2000.0,  # High PV
+                    'fireplace_on': 0
+                }
+            )
+            
+        final_pv_weight = model.external_source_weights['pv']
+        print(f"   Final PV weight: {final_pv_weight:.6f}")
+        
+        assert final_pv_weight > initial_pv_weight, \
+            "PV weight should increase when overheating with high PV"
+        print("   ✅ PV weight adaptation confirmed")
+
+    except Exception as e:
+        print(f"   ❌ Source attribution failed: {e}")
+        assert False, f"Source attribution failed: {e}"
+
+
 def test_integration_workflow():
     """Test 5: Full integration workflow."""
     print("\n🧪 Test 5: Full Integration Workflow")

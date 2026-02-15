@@ -61,6 +61,10 @@ class PhysicsConstants:
     HEAT_LOSS_COEFFICIENT_EPSILON = 0.005
     # Step size for outlet effectiveness gradients
     OUTLET_EFFECTIVENESS_EPSILON = 0.05
+    # Step size for PV heat weight gradients
+    PV_HEAT_WEIGHT_EPSILON = 0.0005
+    # Step size for TV heat weight gradients
+    TV_HEAT_WEIGHT_EPSILON = 0.05
 
     # Learning rate bounds and factors (Phase 3.2 addition)
     # Learning confidence decay per cycle
