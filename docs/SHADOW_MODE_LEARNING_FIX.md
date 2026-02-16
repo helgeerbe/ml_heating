@@ -47,7 +47,7 @@ if was_shadow_mode_cycle:
     
     # Check if we're near equilibrium (small deviation from target)
     deviation_from_target = abs(current_indoor - target_temp)
-    near_equilibrium = deviation_from_target < 0.5  # Within 0.5°C = near equilibrium
+    near_equilibrium = deviation_from_target < 0.2  # Within 0.2°C = near equilibrium
     
     if near_equilibrium:
         # Use equilibrium prediction for steady-state scenarios
@@ -187,8 +187,8 @@ ML Decision → ML Prediction → Compare with Reality → Learn Prediction Accu
 ### Problem: Equilibrium vs. Non-Equilibrium Scenarios
 
 **Previous Limitation**: Shadow mode only used equilibrium prediction, which assumes the system has reached steady-state. This was inaccurate during:
-- Large temperature deviations from target (>0.5°C)
-- Rapid heating/cooling scenarios  
+- Large temperature deviations from target (>0.2°C)
+- Rapid heating/cooling scenarios
 - Transient thermal conditions
 
 ### Solution: Adaptive Prediction Method Selection
@@ -197,7 +197,7 @@ ML Decision → ML Prediction → Compare with Reality → Learn Prediction Accu
 ```python
 # Detect thermal equilibrium state
 deviation_from_target = abs(current_indoor - target_temp)
-near_equilibrium = deviation_from_target < 0.5  # Within 0.5°C
+near_equilibrium = deviation_from_target < 0.2  # Within 0.2°C
 
 if near_equilibrium:
     # Steady-state: Use equilibrium prediction
@@ -232,7 +232,7 @@ else:
   - Comprehensive test validation
 - **v3.0**: Adaptive prediction method enhancement (January 3, 2026)
   - Equilibrium detection for steady-state vs transient scenarios
-  - Trajectory prediction for non-equilibrium conditions (deviation > 0.5°C)
-  - Equilibrium prediction for steady-state conditions (deviation ≤ 0.5°C)
+  - Trajectory prediction for non-equilibrium conditions (deviation > 0.2°C)
+  - Equilibrium prediction for steady-state conditions (deviation ≤ 0.2°C)
   - Enhanced logging with prediction method identification
   - Improved learning accuracy during heating/cooling transitions

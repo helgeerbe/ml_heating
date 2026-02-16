@@ -139,10 +139,10 @@ from(bucket: "home_assistant/autogen")
 
 ### Key Performance Indicators (KPIs)
 
-1. **Prediction Accuracy**: MAE < 0.3°C for excellent performance
+1. **Prediction Accuracy**: MAE < 0.2°C for excellent performance
 2. **Learning Confidence**: > 4.0 for optimal thermal parameter trust
 3. **Learning Efficiency**: > 85% for effective parameter updates
-4. **Trajectory Accuracy**: < 0.5°C MAE for 4-hour predictions
+4. **Trajectory Accuracy**: < 0.2°C MAE for 4-hour predictions
 
 ## Testing
 

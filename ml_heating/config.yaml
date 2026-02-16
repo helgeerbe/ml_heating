@@ -208,7 +208,7 @@ options:
   # Minimum allowed learning rate (prevents learning from stopping)
   min_learning_rate: 0.001
   # Maximum allowed learning rate (prevents unstable learning)
-  max_learning_rate: 0.01
+  max_learning_rate: 0.1
   # Initial confidence level for learning algorithms
   learning_confidence: 3.0
   # Number of recent prediction errors to analyze for parameter updates

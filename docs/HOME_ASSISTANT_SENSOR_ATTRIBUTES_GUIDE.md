@@ -74,8 +74,8 @@ This sensor provides a detailed breakdown of the model's prediction accuracy ove
 
 -   **Attributes**:
     -   `perfect_accuracy_pct` (float): Percentage of predictions in the last 24 hours within ±0.1°C.
-    -   `tolerable_accuracy_pct` (float): Percentage of predictions in the last 24 hours within ±0.5°C.
-    -   `poor_accuracy_pct` (float): Percentage of predictions in the last 24 hours with an error greater than 0.5°C.
+    -   `tolerable_accuracy_pct` (float): Percentage of predictions in the last 24 hours within ±0.2°C.
+    -   `poor_accuracy_pct` (float): Percentage of predictions in the last 24 hours with an error greater than 0.2°C.
     -   `prediction_count_24h` (int): Number of predictions in the last 24 hours.
     -   `excellent_all_time_pct` (float): All-time percentage of predictions within ±0.1°C.
     -   `good_all_time_pct` (float): All-time percentage of predictions within ±0.2°C.

@@ -415,7 +415,7 @@ The add-on creates several sensors for monitoring:
 
 ### Common Operation Issues
 
-**High error rates (MAE > 0.5°C):**
+**High error rates (MAE > 0.2°C):**
 - Verify sensors are stable and accurate
 - Check for missing historical data in InfluxDB
 - Ensure cycle interval allows proper measurement

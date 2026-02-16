@@ -151,7 +151,7 @@ PREDICTION_METRICS_ENABLED=true
 - Run system for 48-72 hours with new parameters
 - Check MAE/RMSE metrics in dashboard
 - Allow adaptive learning to fine-tune values
-- Target prediction accuracy <0.5°C
+- Target prediction accuracy <0.2°C
 
 ### Step 4: Manual Fine-Tuning (if needed)
 - If predictions consistently high: increase `HEAT_LOSS_COEFFICIENT`
@@ -170,7 +170,7 @@ With corrected physics:
 ## Validation Tests
 
 After implementing changes, verify:
-- [ ] Predictions within ±0.5°C during stable periods
+- [ ] Predictions within ±0.2°C during stable periods
 - [ ] No heating predicted when outlet < indoor + 5°C
 - [ ] Reasonable equilibrium temperatures (indoor + 1-5°C)
 - [ ] MAE/RMSE showing improvement over 24-48 hours
