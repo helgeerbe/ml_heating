@@ -1,9 +1,22 @@
 """
-Quick fix helper for notebook 01 to handle the model pipeline structure correctly.
+Model inspection and helper utilities for analysis.
+Ported from notebooks/notebook_fix_helper.py.
 """
 
-def safe_get_regressor(model):
-    """Safely get the regressor from the model pipeline"""
+from typing import Any, Dict, Optional
+
+
+def safe_get_regressor(model: Any) -> Optional[Any]:
+    """
+    Safely get the regressor from the model pipeline.
+
+    Args:
+        model: The model object (PhysicsCompliantWrapper, Pipeline,
+               or Regressor)
+
+    Returns:
+        The underlying regressor object or None if not found.
+    """
     try:
         # Handle PhysicsCompliantWrapper structure
         if hasattr(model, 'base_model'):
@@ -46,9 +59,18 @@ def safe_get_regressor(model):
         print(f"Error accessing regressor: {e}")
         return None
 
-def get_model_info(model):
-    """Get comprehensive model information for notebook analysis"""
-    info = {}
+
+def get_model_info(model: Any) -> Dict[str, Any]:
+    """
+    Get comprehensive model information for analysis.
+    
+    Args:
+        model: The model object to inspect
+        
+    Returns:
+        Dictionary containing model metadata and structure info.
+    """
+    info: Dict[str, Any] = {}
     
     try:
         info['model_type'] = type(model).__name__
@@ -72,7 +94,7 @@ def get_model_info(model):
             if hasattr(regressor, '__len__'):
                 try:
                     info['ensemble_size'] = len(regressor)
-                except:
+                except Exception:
                     pass
                     
             if hasattr(regressor, 'n_models'):
@@ -85,8 +107,3 @@ def get_model_info(model):
         info['error'] = str(e)
     
     return info
-
-# Quick usage for notebook
-print("Notebook fix helper loaded. Use:")
-print("- regressor = safe_get_regressor(model)")  
-print("- info = get_model_info(model)")

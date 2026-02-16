@@ -282,7 +282,7 @@ class InfluxService:
         entities: list[str],
         start_time: datetime,
         end_time: datetime,
-        freq: str = "30min"
+        freq: str = "30m"
     ) -> pd.DataFrame:
         """
         Fetch historical data for multiple entities over a time range.
@@ -300,10 +300,6 @@ class InfluxService:
         Returns:
             DataFrame with time index and entity columns
         """
-        # Calculate lookback hours from time range
-        time_delta = end_time - start_time
-        lookback_hours = int(time_delta.total_seconds() / 3600)
-
         # Map generic entity names to actual config entity IDs
         entity_mapping = {
             'indoor_temperature': config.INDOOR_TEMP_ENTITY_ID,
@@ -312,7 +308,8 @@ class InfluxService:
             'pv_power': config.PV_POWER_ENTITY_ID,
             'dhw_heating': config.DHW_STATUS_ENTITY_ID,
             'heat_pump_heating': config.ACTUAL_OUTLET_TEMP_ENTITY_ID,
-            'ml_target_temperature': 'sensor.ml_target_temperature',
+            'ml_target_temperature': config.TARGET_OUTLET_TEMP_ENTITY_ID,
+            'ml_control_mode': 'sensor.ml_control_mode',
         }
 
         # Map entities to real entity IDs, fallback to original if not mapped
@@ -343,12 +340,26 @@ class InfluxService:
 
             try:
                 # Use single entity query (we know this works)
+                # Ensure timestamps are ISO formatted for Flux
+                start_str = start_time.isoformat()
+                if not start_str.endswith("Z") and "+00:00" in start_str:
+                    start_str = start_str.replace("+00:00", "Z")
+
+                end_str = end_time.isoformat()
+                if not end_str.endswith("Z") and "+00:00" in end_str:
+                    end_str = end_str.replace("+00:00", "Z")
+
+                # Ensure freq is Flux-compatible (e.g. 30min -> 30m)
+                flux_freq = freq.replace("min", "m")
+
+                # Use time() function to ensure strings are parsed as timestamps
                 flux_query = f"""
                 from(bucket: "{config.INFLUX_BUCKET}")
-                |> range(start: -{lookback_hours}h)
+                |> range(start: time(v: "{start_str}"), stop: time(v: "{end_str}"))
                 |> filter(fn: (r) => r["_field"] == "value")
                 |> filter(fn: (r) => r["entity_id"] == "{entity_short}")
-                |> aggregateWindow(every: {freq}, fn: mean, createEmpty: false)
+                |> group(columns: ["entity_id"])
+                |> aggregateWindow(every: {flux_freq}, fn: mean, createEmpty: false)
                 |> pivot(
                     rowKey: ["_time"],
                     columnKey: ["entity_id"],
@@ -397,10 +408,15 @@ class InfluxService:
                             columns={entity_short: new_name}, inplace=True
                         )
 
+                        # Keep only time and value columns to avoid merge conflicts
+                        cols_to_keep = ["_time", new_name]
+                        df_single = df_single[cols_to_keep]
+
                     entity_dataframes.append(df_single)
 
             except Exception as e:
                 logging.warning(f"Failed to query entity {entity_short}: {e}")
+                logging.error(f"Flux Query: {flux_query}")
                 continue
 
         # Combine all entity dataframes

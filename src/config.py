@@ -34,13 +34,29 @@ def _is_addon_environment():
     return os.getenv("SUPERVISOR_TOKEN") is not None
 
 
+# Detect if running in a notebook/analysis environment
+def _is_notebook_environment():
+    """Detect if running in a Jupyter notebook or analysis script."""
+    # Check for common notebook indicators or explicit env var
+    return (
+        os.getenv("ML_HEATING_ENV") == "notebook"
+        or "ipykernel" in str(os.environ.get("modules", ""))
+    )
+
+
 # For Home Assistant addon, uses internal supervisor API;
 # for standalone, uses .env
 if _is_addon_environment():
     HASS_URL: str = os.getenv("HASS_URL", "http://supervisor/core")
     HASS_TOKEN: str = os.getenv("SUPERVISOR_TOKEN", "").strip()
 else:
-    HASS_URL = os.getenv("HASS_URL", "http://localhost:8123")
+    # Default to localhost, but allow override for notebooks
+    default_url = "http://localhost:8123"
+    if _is_notebook_environment():
+        # In notebooks, we might want to fail gracefully or warn if not set
+        pass
+
+    HASS_URL = os.getenv("HASS_URL", default_url)
     HASS_TOKEN = os.getenv("HASS_TOKEN", "").strip()
 
 
