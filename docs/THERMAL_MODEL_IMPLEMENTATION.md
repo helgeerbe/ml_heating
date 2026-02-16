@@ -643,8 +643,8 @@ corrected_outlet = outlet_temp * correction_factor
 
 Example problem:
 - Outlet temp: 30°C
-- Temperature error: 0.5°C (trajectory drifting)
-- Correction factor: 1.0 + (0.5 * 12.0) = 7.0
+- Temperature error: 0.2°C (trajectory drifting)
+- Correction factor: 1.0 + (0.2 * 12.0) = 3.4
 - Result: 30°C * 7.0 = 210°C! (WAY too high)
 ```
 
@@ -659,7 +659,7 @@ The ml_heating system uses **gentle additive corrections** inspired by proven he
 
 ```
 ✅ GENTLE ADDITIVE APPROACH:
-if temp_error <= 0.5°C:
+if temp_error <= 0.2°C:
     correction_amount = temp_error * 5.0   # +5°C per degree
 elif temp_error <= 1.0°C:
     correction_amount = temp_error * 8.0   # +8°C per degree
@@ -671,12 +671,12 @@ corrected_outlet = outlet_temp + correction_amount  # Additive adjustment
 
 #### Correction Examples
 
-**Scenario 1: Small trajectory error (0.5°C)**
+**Scenario 1: Small trajectory error (0.2°C)**
 ```
 Original outlet: 35°C
-Temperature error: 0.5°C (house cooling too fast)
-Correction: 0.5°C × 5.0 = +2.5°C
-Final outlet: 35°C + 2.5°C = 37.5°C (reasonable adjustment)
+Temperature error: 0.2°C (house cooling too fast)
+Correction: 0.2°C × 5.0 = +1.0°C
+Final outlet: 35°C + 1.0°C = 36.0°C (reasonable adjustment)
 ```
 
 **Scenario 2: Medium trajectory error (0.8°C)**
@@ -705,8 +705,8 @@ The correction factors (5°C, 8°C, 12°C per degree) are **empirically derived*
 - **Progressive response:** Smaller corrections for small errors, larger corrections only when significant drift occurs
 
 **2. Thermal Physics Considerations:**
-- **5°C per degree (≤0.5°C error):** Gentle nudges for minor trajectory deviations
-- **8°C per degree (0.5-1.0°C error):** Moderate corrections for noticeable drift  
+- **5°C per degree (≤0.2°C error):** Gentle nudges for minor trajectory deviations
+- **8°C per degree (0.2-1.0°C error):** Moderate corrections for noticeable drift
 - **12°C per degree (>1.0°C error):** Strong response for major disturbances (open windows, unexpected heat loss)
 
 **3. System Stability Analysis:**
@@ -721,7 +721,7 @@ The correction factors (5°C, 8°C, 12°C per degree) are **empirically derived*
 
 **Comparison with Alternative Approaches:**
 
-| Approach | Small Error (0.5°C) | Large Error (1.5°C) | Problems |
+| Approach | Small Error (0.2°C) | Large Error (1.5°C) | Problems |
 |----------|---------------------|----------------------|----------|
 | **ml_heating (additive)** | +2.5°C outlet | +18°C outlet | None - reasonable bounds |
 | **Naive multiplicative (7x)** | +350% outlet | +1050% outlet | Extreme temperature spikes |
@@ -1657,7 +1657,7 @@ Prevention strategies:
 ```
 Symptoms:
 - sensor.ml_heating_learning shows "poor" health persistently
-- MAE consistently > 0.5°C
+- MAE consistently > 0.2°C
 - Outlet temperatures at extremes (65°C or hitting minimums)
 - No improvement after 48+ hours
 
@@ -1835,9 +1835,11 @@ new_parameter = old_parameter - (learning_rate × gradient)
 
 | Situation | Learning Rate | Behavior |
 |-----------|---------------|----------|
-| Large errors (>2°C) | Higher (×3) | Learn faster to fix big problems |
-| Medium errors (0.5-2°C) | Normal | Standard learning |
-| Small errors (<0.5°C) | Lower | Fine-tuning only |
+| Critical errors (>3°C) | Boosted (×5) | Emergency adaptation |
+| Large errors (>2°C) | Boosted (×3) | Fast correction |
+| Medium errors (>1°C) | Boosted (×2) | Accelerated learning |
+| Small errors (>0.2°C) | Boosted (×1.5) | Active tuning |
+| Minor errors (<0.2°C) | Normal | Fine-tuning |
 | Parameters very stable | Reduced | Avoid over-correction |
 
 **Confidence** tracks how well the model is performing:
@@ -2157,8 +2159,8 @@ The `model_health` attribute is derived from the `learning_confidence` score usi
 
 | Attribute | Type | Description | Good Threshold |
 |-----------|------|-------------|----------------|
-| `recent_max_error` | float | Max error in last 10 predictions | < 0.5°C |
-| `std_error` | float | Standard deviation of errors | < 0.2°C |
+| `recent_max_error` | float | Max error in last 10 predictions | < 0.2°C |
+| `std_error` | float | Standard deviation of errors | < 0.1°C |
 | `mean_bias` | float | Average signed error (systematic bias) | Near 0 |
 | `prediction_count` | int | Predictions in calculation | - |
 | `last_updated` | timestamp | When metrics were updated | - |
@@ -2189,7 +2191,7 @@ The `model_health` attribute is derived from the `learning_confidence` score usi
 | `poor_accuracy_pct` | float | % predictions with >0.2°C error |
 | `prediction_count_24h` | int | Predictions in 24-hour window |
 | `excellent_all_time_pct` | float | % within ±0.1°C (all-time) |
-| `good_all_time_pct` | float | % within ±0.5°C (all-time) |
+| `good_all_time_pct` | float | % within ±0.2°C (all-time) |
 | `last_updated` | timestamp | When metrics were updated |
 
 ---

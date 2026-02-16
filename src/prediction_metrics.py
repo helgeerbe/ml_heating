@@ -12,6 +12,8 @@ from collections import deque
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 
+from src.thermal_constants import PhysicsConstants
+
 
 class PredictionMetrics:
     """
@@ -278,10 +280,10 @@ class PredictionMetrics:
         
         # Define accuracy categories
         categories = {
-            'excellent': 0.1,   # ±0.1°C
-            'very_good': 0.2,   # ±0.2°C
-            'good': 0.5,        # ±0.5°C
-            'acceptable': 1.0,  # ±1.0°C
+            'excellent': PhysicsConstants.ERROR_THRESHOLD_LOW,
+            'very_good': PhysicsConstants.ERROR_THRESHOLD_MEDIUM,
+            'good': 0.5,
+            'acceptable': PhysicsConstants.ERROR_THRESHOLD_HIGH,
             'poor': float('inf')
         }
         
@@ -435,8 +437,8 @@ class PredictionMetrics:
         
         # Count by simplified categories (using round to handle floating point precision)
         perfect_count = sum(1 for error in abs_errors if round(error, 10) == 0.0)
-        tolerable_count = sum(1 for error in abs_errors if 0.0 < round(error, 10) < 0.2) 
-        poor_count = sum(1 for error in abs_errors if round(error, 10) >= 0.2)
+        tolerable_count = sum(1 for error in abs_errors if 0.0 < round(error, 10) < PhysicsConstants.ERROR_THRESHOLD_MEDIUM)
+        poor_count = sum(1 for error in abs_errors if round(error, 10) >= PhysicsConstants.ERROR_THRESHOLD_MEDIUM)
         
         # Calculate percentages
         perfect_pct = (perfect_count / total_predictions) * 100 if total_predictions > 0 else 0
@@ -523,8 +525,8 @@ class PredictionMetrics:
         
         # Count by simplified categories (same logic as all-time method with floating point fix)
         perfect_count = sum(1 for error in abs_errors if round(error, 10) == 0.0)
-        tolerable_count = sum(1 for error in abs_errors if 0.0 < round(error, 10) < 0.2)
-        poor_count = sum(1 for error in abs_errors if round(error, 10) >= 0.2)
+        tolerable_count = sum(1 for error in abs_errors if 0.0 < round(error, 10) < PhysicsConstants.ERROR_THRESHOLD_MEDIUM)
+        poor_count = sum(1 for error in abs_errors if round(error, 10) >= PhysicsConstants.ERROR_THRESHOLD_MEDIUM)
         
         # Calculate percentages
         perfect_pct = (perfect_count / total_predictions) * 100 if total_predictions > 0 else 0
