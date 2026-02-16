@@ -467,9 +467,11 @@ class ThermalEquilibriumModel:
             
         if len(self.prediction_history) >= self.recent_errors_window:
             error_magnitude = abs(prediction_error)
-            if error_magnitude < 0.25:  # Good prediction
+            if error_magnitude < PhysicsConstants.ERROR_THRESHOLD_CONFIDENCE:
+                # Good prediction
                 self.learning_confidence *= self.confidence_boost_rate
-            elif error_magnitude > 1.0:  # Bad prediction
+            elif error_magnitude > PhysicsConstants.ERROR_THRESHOLD_HIGH:
+                # Bad prediction
                 self.learning_confidence *= self.confidence_decay_rate
 
             self.learning_confidence = float(
@@ -495,11 +497,17 @@ class ThermalEquilibriumModel:
             is_stable = temp_gradient < 0.1
             error_magnitude = abs(prediction_error)
 
-            if error_magnitude < 0.1 and is_stable:
+            if (
+                error_magnitude < PhysicsConstants.ERROR_THRESHOLD_LOW
+                and is_stable
+            ):
                 return "excellent"
-            elif error_magnitude < 0.5 and is_stable:
+            elif (
+                error_magnitude < PhysicsConstants.ERROR_THRESHOLD_MEDIUM
+                and is_stable
+            ):
                 return "good"
-            elif error_magnitude < 0.1:
+            elif error_magnitude < PhysicsConstants.ERROR_THRESHOLD_LOW:
                 return "fair"
             elif is_stable:
                 return "fair"
@@ -939,14 +947,18 @@ class ThermalEquilibriumModel:
                     if avg_error > 2.0:
                         base_rate /= 1.5  # Less aggressive reduction
                 else:
+                    # Boost learning rate for significant errors to adapt
+                    # faster
                     if avg_error > 3.0:
-                        base_rate /= 10.0
-                    elif avg_error > 2.0:
-                        base_rate /= 5.0
-                    elif avg_error > 1.0:
-                        base_rate /= 2.5
-                    elif avg_error > 0.5:
-                        base_rate /= 1.5
+                        base_rate *= 5.0
+                    elif (
+                        avg_error > PhysicsConstants.ERROR_THRESHOLD_VERY_HIGH
+                    ):
+                        base_rate *= PhysicsConstants.ERROR_BOOST_FACTOR_HIGH
+                    elif avg_error > PhysicsConstants.ERROR_THRESHOLD_HIGH:
+                        base_rate *= PhysicsConstants.ERROR_BOOST_FACTOR_MEDIUM
+                    elif avg_error > PhysicsConstants.ERROR_THRESHOLD_MEDIUM:
+                        base_rate *= PhysicsConstants.ERROR_BOOST_FACTOR_LOW
 
         return np.clip(base_rate, 0.0, self.max_learning_rate)
 

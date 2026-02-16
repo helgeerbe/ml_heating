@@ -77,7 +77,7 @@ class PhysicsConstants:
     ERROR_BOOST_FACTOR_HIGH = 3.0
     # Learning rate boost for large errors (>1°C)
     ERROR_BOOST_FACTOR_MEDIUM = 2.0
-    # Learning rate boost for medium errors (>0.5°C)
+    # Learning rate boost for medium errors (>0.2°C)
     ERROR_BOOST_FACTOR_LOW = 1.5
 
     # Error thresholds for learning rate scaling (Phase 3.2 addition)
@@ -85,8 +85,12 @@ class PhysicsConstants:
     ERROR_THRESHOLD_VERY_HIGH = 2.0
     # °C - threshold for large errors
     ERROR_THRESHOLD_HIGH = 1.0
-    # °C - threshold for medium errors
-    ERROR_THRESHOLD_MEDIUM = 0.5
+    # °C - threshold for medium errors (Trigger for learning boost)
+    ERROR_THRESHOLD_MEDIUM = 0.2
+    # °C - threshold for low errors (Target precision)
+    ERROR_THRESHOLD_LOW = 0.1
+    # °C - threshold for confidence boosting
+    ERROR_THRESHOLD_CONFIDENCE = 0.2
 
     # Parameter stability thresholds (Phase 3.2 addition)
     # Thermal time constant stability (hours)
