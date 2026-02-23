@@ -50,6 +50,16 @@ class ThermalEquilibriumModel:
                 from unified_thermal_state import get_thermal_state_manager
 
             state_manager = get_thermal_state_manager()
+            if not state_manager.load_state():
+                logging.warning(
+                    "⚠️ Failed to load thermal state. System is running with "
+                    "DEFAULT parameters (HLC=%.2f). Check logs for load "
+                    "errors.",
+                    state_manager.state["baseline_parameters"][
+                        "heat_loss_coefficient"
+                    ]
+                )
+
             thermal_state = state_manager.get_current_parameters()
 
             # Check for calibrated parameters in baseline_parameters section
