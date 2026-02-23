@@ -1,5 +1,15 @@
 # Active Context - Current Work & Decision State
 
+### 🎯 **PARAMETER JUMP FIX - February 23, 2026**
+
+**CRITICAL FIX**: Resolved a critical stability issue where the predicted outlet temperature jumped to 60°C after a restart. This was caused by a state desynchronization where the system fell back to defaults in memory but left a corrupted state file on disk, leading to a reload of the bad state later.
+
+#### ✅ **STATE CORRUPTION RECOVERY IMPLEMENTED**
+- **Context**: User reported "predicted temp is now at 60" after a restart. Logs showed `heat_loss_coefficient` jumping from ~0.64 to ~0.80.
+- **Diagnosis**: The system correctly fell back to defaults (HLC=0.4) when encountering an invalid state file but didn't clean up the file. A subsequent reload (or partial read) brought back the corrupted/extreme values.
+- **Fix**: Modified `src/unified_thermal_state.py` to explicitly overwrite the corrupted state file with fresh defaults when loading fails and recovery is impossible.
+- **Result**: Ensures that the persistent storage matches the in-memory reality (running on defaults), preventing "zombie" states from re-emerging. Verified with `validation/reproduce_parameter_jump.py`.
+
 ### 🎯 **THERMAL MODEL ROBUSTNESS & VALIDATION FIXES - February 23, 2026**
 
 **CRITICAL FIX**: Implemented robust fallback logic for thermal parameter loading. The system now gracefully handles validation failures by retaining valid parameters instead of reverting to hardcoded defaults. This prevents the "cold house" scenario where a minor schema mismatch causes the model to forget its calibration.

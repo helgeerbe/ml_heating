@@ -2,6 +2,12 @@
 
 ## 🎯 CURRENT STATUS - February 20, 2026
 
+### ✅ **PARAMETER JUMP FIX COMPLETE (February 23, 2026)**
+
+**System Status**: **OPERATIONAL & STABLE** - Resolved a critical issue where corrupted state files caused parameter jumps (e.g., HLC 0.4 -> 0.8) after restarts. The system now automatically resets corrupted state files to defaults, ensuring consistency between in-memory and on-disk state.
+
+**Test Suite Health**: **EXCELLENT** - 242/242 tests passing (100% success rate), including a new test case verifying the reset behavior for corrupted state files.
+
 ### ✅ **THERMAL MODEL ROBUSTNESS FIX COMPLETE (February 23, 2026)**
 
 **System Status**: **OPERATIONAL & ROBUST** - Implemented "soft validation failure" logic to prevent parameter resets during restarts. The system now retains calibrated parameters even if strict schema validation fails, ensuring heating continuity.
