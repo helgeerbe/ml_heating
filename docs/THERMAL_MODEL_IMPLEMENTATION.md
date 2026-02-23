@@ -600,6 +600,7 @@ The system uses `UnifiedPredictionContext` service (`src/prediction_context.py`)
 3. **Falls back gracefully** to current conditions when forecasts unavailable
 4. **Ensures identical parameters** across binary search, smart rounding, and trajectory prediction
 5. **Standardizes Interpolation**: Uses consistent interpolation weights (0.5 for short cycles) for PV forecasts to match the Trajectory Optimizer, preventing discrepancies.
+6. **Shared Logic**: Both the `PredictionContext` and `EnhancedModelWrapper` now share the exact same forecast interpolation logic (`_get_forecast_value`), ensuring that the trajectory optimizer sees the same future as the main control loop.
 
 **Implementation Example:**
 
@@ -1466,6 +1467,17 @@ python -c "from src.physics_calibration import run_phase0_calibration; run_phase
 ### System Failure Modes & Recovery
 
 Understanding potential failure modes helps you recognize and respond to system degradation before it affects heating comfort.
+
+#### Robust Parameter Loading
+
+To prevent catastrophic loss of calibration data during restarts:
+
+1.  **Soft Validation Failure**: If the thermal state file fails strict schema validation (e.g., due to minor format changes), the system attempts to load the core parameters anyway.
+2.  **Fallback Logic**:
+    *   **Primary**: Load validated state.
+    *   **Secondary**: If validation fails, check for existence of core keys (`heat_loss_coefficient`, `thermal_time_constant`, etc.). If present, use them and log a warning.
+    *   **Tertiary**: Only revert to hardcoded defaults if the file is unreadable or core keys are missing.
+3.  **Protection**: This prevents the "cold house" scenario where a minor software update causes the model to forget it needs higher temperatures for a poorly insulated house.
 
 #### Sensor Failure Detection & Degradation
 

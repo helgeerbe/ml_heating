@@ -2,6 +2,12 @@
 
 ## 🎯 CURRENT STATUS - February 20, 2026
 
+### ✅ **THERMAL MODEL ROBUSTNESS FIX COMPLETE (February 23, 2026)**
+
+**System Status**: **OPERATIONAL & ROBUST** - Implemented "soft validation failure" logic to prevent parameter resets during restarts. The system now retains calibrated parameters even if strict schema validation fails, ensuring heating continuity.
+
+**Test Suite Health**: **EXCELLENT** - 241/241 tests passing (100% success rate), including new tests for parameter loading robustness and configuration bounds.
+
 ### ✅ **PV FORECAST CONSISTENCY FIX COMPLETE**
 
 **System Status**: **OPERATIONAL & CONSISTENT** - Resolved a critical discrepancy in PV forecast usage between the Trajectory Optimizer and the internal prediction context. Both systems now use consistent interpolation logic, ensuring stable temperature predictions during rapid solar changes.

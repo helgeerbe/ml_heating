@@ -1,5 +1,23 @@
 # Active Context - Current Work & Decision State
 
+### 🎯 **THERMAL MODEL ROBUSTNESS & VALIDATION FIXES - February 23, 2026**
+
+**CRITICAL FIX**: Implemented robust fallback logic for thermal parameter loading. The system now gracefully handles validation failures by retaining valid parameters instead of reverting to hardcoded defaults. This prevents the "cold house" scenario where a minor schema mismatch causes the model to forget its calibration.
+
+#### ✅ **VALIDATION FALLBACK LOGIC IMPLEMENTED**
+- **Context**: System was reverting to default parameters (causing a 43°C -> 34°C target drop) because strict schema validation failed on restart, discarding valid calibrated data.
+- **Fix**: Modified `ThermalEquilibriumModel` to use "soft validation failure". If `validate_thermal_state_safely` fails, it logs a warning but *retains* the loaded parameters if core keys exist.
+- **Result**: Prevents catastrophic loss of calibration data due to minor schema mismatches.
+
+#### ✅ **PREDICTION CONTEXT ALIGNMENT**
+- **Context**: `PredictionContext` and `EnhancedModelWrapper` were using different logic for forecast interpolation, leading to trajectory divergence.
+- **Fix**: Updated `PredictionContext` to use the same `_get_forecast_value` logic as the main model wrapper.
+- **Result**: Consistent trajectory predictions across all system components.
+
+#### ✅ **CONFIGURATION BOUNDS TIGHTENED**
+- **Context**: `heat_loss_coefficient` allowed values that were physically improbable for the target building envelope.
+- **Fix**: Tightened bounds in `ThermalParameterConfig` and added unit tests.
+
 ### 🎯 **PV FORECAST CONSISTENCY FIX - February 20, 2026**
 
 **CRITICAL FIX**: Resolved a discrepancy in PV forecast interpolation between the Trajectory Optimizer and the internal `UnifiedPredictionContext`. This ensures that all parts of the system use the exact same forecast data, preventing temperature prediction anomalies.
