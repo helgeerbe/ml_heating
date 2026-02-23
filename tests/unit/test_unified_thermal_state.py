@@ -1,6 +1,7 @@
 
 import pytest
 import os
+import json
 
 from src.unified_thermal_state import (
     ThermalStateManager, get_thermal_state_manager
@@ -49,6 +50,25 @@ class TestThermalStateManager:
         # Create a new manager instance to load the state from the file
         new_manager = ThermalStateManager(state_file=str(temp_state_file))
         assert new_manager.state["operational_state"]["last_indoor_temp"] == 21.5
+
+    def test_corrupted_state_reset(self, temp_state_file):
+        """Test that a corrupted state file is reset to defaults."""
+        # Create a corrupted state file
+        with open(temp_state_file, 'w') as f:
+            f.write("{ invalid json }")
+
+        # Initialize manager (should trigger reset)
+        manager = ThermalStateManager(state_file=str(temp_state_file))
+
+        # Verify in-memory state is default
+        params = manager.get_computed_parameters()
+        assert params["heat_loss_coefficient"] == 0.4
+
+        # Verify on-disk file is valid JSON and has default values
+        with open(temp_state_file, 'r') as f:
+            content = json.load(f)
+        
+        assert content["baseline_parameters"]["heat_loss_coefficient"] == 0.4
 
     def test_set_and_get_calibrated_baseline(self, state_manager):
         """Test setting and getting calibrated baseline parameters."""

@@ -23,9 +23,11 @@ import numpy as np
 try:
     from .thermal_config import ThermalParameterConfig
     from .config import UNIFIED_STATE_FILE
+    from .thermal_state_validator import ThermalStateValidator
 except ImportError:
     from thermal_config import ThermalParameterConfig
     from config import UNIFIED_STATE_FILE
+    from thermal_state_validator import ThermalStateValidator
 
 
 class ThermalStateManager:
@@ -71,9 +73,9 @@ class ThermalStateManager:
                 ThermalParameterConfig.get_default('fireplace_heat_weight'),
                 "tv_heat_weight":
                 ThermalParameterConfig.get_default('tv_heat_weight'),
-                "source": "config_defaults",
-                "calibration_date": None,
-                "calibration_cycles": 0
+            "source": "config",
+            "calibration_date": None,
+            "calibration_cycles": 0
             },
             "learning_state": {
                 "cycle_count": 0,
@@ -128,7 +130,7 @@ class ThermalStateManager:
             }
         }
 
-    def load_state(self) -> bool:
+    def load_state(self, allow_backup_recovery: bool = True) -> bool:
         """Load thermal state from JSON file."""
         try:
             with open(self.state_file, 'r') as f:
@@ -136,6 +138,11 @@ class ThermalStateManager:
 
             # Validate and merge with default structure
             self.state = self._merge_with_defaults(loaded_state)
+            
+            # Validate the merged state to ensure data integrity
+            # This will raise ThermalStateValidationError if invalid, triggering recovery
+            ThermalStateValidator.validate_thermal_state_data(self.state)
+            
             self.state["metadata"]["last_updated"] = datetime.now().isoformat()
 
             logging.info("✅ Loaded unified thermal state from %s", self.state_file)
@@ -147,7 +154,52 @@ class ThermalStateManager:
             return False
         except Exception as e:
             logging.error("❌ Failed to load thermal state: %s", e)
+
+            if allow_backup_recovery:
+                logging.info("🔄 Attempting to recover from backup...")
+                backups = self.list_backups()
+                if backups:
+                    latest_backup = backups[0]['path']
+                    logging.info("🔄 Found backup: %s", latest_backup)
+                    try:
+                        with open(latest_backup, 'r') as f:
+                            loaded_state = json.load(f)
+
+                        self.state = self._merge_with_defaults(loaded_state)
+                        self.state["metadata"]["last_updated"] = \
+                            datetime.now().isoformat()
+
+                        # We successfully loaded from backup.
+                        # Repair the main file to prevent future errors
+                        logging.info(
+                            "✅ Recovered state from backup. Repairing main file..."
+                        )
+                        self.save_state()
+                        return True
+                    except Exception as backup_e:
+                        logging.error(
+                            "❌ Failed to recover from backup: %s", backup_e
+                        )
+
+            logging.warning(
+                "⚠️ Could not recover state. Falling back to DEFAULTS."
+            )
+            # CRITICAL FIX: If we fall back to defaults, we MUST clear any
+            # existing state file to prevent "zombie" state from re-emerging
+            # later if the file is manually fixed or transiently readable.
+            # We overwrite the corrupted file with the clean default state.
             self.state = self._get_default_state()
+            try:
+                logging.warning(
+                    "🧹 Overwriting corrupted state file with fresh defaults "
+                    "to prevent parameter jumps."
+                )
+                self.save_state()
+            except Exception as save_e:
+                logging.error(
+                    "❌ Failed to overwrite corrupted state file: %s", save_e
+                )
+
             return False
 
     def save_state(self) -> bool:
@@ -444,7 +496,7 @@ class ThermalStateManager:
             shutil.copy2(backup_file, self.state_file)
 
             # Reload state from restored file
-            self.load_state()
+            self.load_state(allow_backup_recovery=False)
 
             logging.info("🔄 Restored thermal state from backup: %s",
                          os.path.basename(backup_file))
