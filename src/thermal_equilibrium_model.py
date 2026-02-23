@@ -566,7 +566,7 @@ class ThermalEquilibriumModel:
         self.prediction_history.append(prediction_record)
 
         if len(self.prediction_history) > 200:
-            self.prediction_history = self.prediction_history[-100:]
+            self.prediction_history = self.prediction_history[-200:]
 
         if len(self.prediction_history) >= self.recent_errors_window:
             error_magnitude = abs(prediction_error)
@@ -804,7 +804,7 @@ class ThermalEquilibriumModel:
         )
 
         if len(self.parameter_history) > 500:
-            self.parameter_history = self.parameter_history[-250:]
+            self.parameter_history = self.parameter_history[-500:]
 
         if (
             thermal_change > 0.001

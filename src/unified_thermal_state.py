@@ -321,9 +321,9 @@ class ThermalStateManager:
         history = self.state["learning_state"]["prediction_history"]
         history.append(prediction_record)
 
-        # Keep manageable history size
+        # Keep manageable history size (sliding window)
         if len(history) > 200:
-            self.state["learning_state"]["prediction_history"] = history[-100:]
+            self.state["learning_state"]["prediction_history"] = history[-200:]
 
         # Update prediction count
         self.state["prediction_metrics"]["total_predictions"] += 1
@@ -333,9 +333,9 @@ class ThermalStateManager:
         history = self.state["learning_state"]["parameter_history"]
         history.append(parameter_record)
 
-        # Keep manageable history size
+        # Keep manageable history size (sliding window)
         if len(history) > 500:
-            self.state["learning_state"]["parameter_history"] = history[-250:]
+            self.state["learning_state"]["parameter_history"] = history[-500:]
 
     # === OPERATIONAL STATE MANAGEMENT ===
 

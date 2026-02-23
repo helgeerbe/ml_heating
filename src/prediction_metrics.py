@@ -37,10 +37,12 @@ class PredictionMetrics:
         self.state_manager = state_manager
         
         # Time window configurations (in number of predictions)
+        # Note: 24h window (288 records) exceeds history limit (200 records)
+        # so it will effectively be capped at 200 records (~16.6 hours)
         self.windows = {
             '1h': 12,    # 12 predictions = 1 hour (5min intervals)
-            '6h': 72,    # 72 predictions = 6 hours  
-            '24h': 288,  # 288 predictions = 24 hours
+            '6h': 72,    # 72 predictions = 6 hours
+            '24h': 200,  # Capped at max history size (was 288)
             'all': None  # All available data
         }
         
@@ -92,6 +94,10 @@ class PredictionMetrics:
             # Convert deque to list for storage
             prediction_list = list(self.predictions)
             
+            # Enforce sliding window limit (200 records)
+            if len(prediction_list) > 200:
+                prediction_list = prediction_list[-200:]
+            
             # Update unified state prediction history
             self.state_manager.state["learning_state"]["prediction_history"] = prediction_list
             
@@ -132,6 +138,14 @@ class PredictionMetrics:
         
         self.predictions.append(prediction_record)
         
+        # Enforce sliding window limit on in-memory deque as well
+        # This ensures metrics are calculated on the same window as stored state
+        if len(self.predictions) > 200:
+            # Deque automatically handles maxlen if set, but we enforce it explicitly
+            # to match the 200 limit used in unified state
+            while len(self.predictions) > 200:
+                self.predictions.popleft()
+
         # Invalidate cache
         self._cache_timestamp = None
         

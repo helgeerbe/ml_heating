@@ -86,6 +86,49 @@ class TestThermalStateManager:
         assert len(history) == 1
         assert history[0]["predicted"] == 22.0
 
+    def test_prediction_history_sliding_window(self, state_manager):
+        """Test that prediction history maintains a sliding window of 200 records."""
+        # Add 205 records
+        for i in range(205):
+            record = {
+                "index": i,
+                "predicted": 20.0,
+                "actual": 20.0
+            }
+            state_manager.add_prediction_record(record)
+
+        history = state_manager.state["learning_state"]["prediction_history"]
+        
+        # Check size is capped at 200
+        assert len(history) == 200
+        
+        # Check that the oldest records were removed (indices 0-4 should be gone)
+        # The first record in history should be index 5
+        assert history[0]["index"] == 5
+        # The last record should be index 204
+        assert history[-1]["index"] == 204
+
+    def test_parameter_history_sliding_window(self, state_manager):
+        """Test that parameter history maintains a sliding window of 500 records."""
+        # Add 505 records
+        for i in range(505):
+            record = {
+                "index": i,
+                "param_value": 0.5
+            }
+            state_manager.add_parameter_history_record(record)
+
+        history = state_manager.state["learning_state"]["parameter_history"]
+        
+        # Check size is capped at 500
+        assert len(history) == 500
+        
+        # Check that the oldest records were removed (indices 0-4 should be gone)
+        # The first record in history should be index 5
+        assert history[0]["index"] == 5
+        # The last record should be index 504
+        assert history[-1]["index"] == 504
+
     def test_update_and_get_operational_state(self, state_manager):
         """Test updating and getting the operational state."""
         state_manager.update_operational_state(last_prediction=25.0)

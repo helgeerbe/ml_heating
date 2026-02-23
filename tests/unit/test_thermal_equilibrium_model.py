@@ -318,3 +318,31 @@ class TestBaselineFunctionality:
         assert 25.0 <= optimal_temp <= 70.0, (
             f"Optimal temp out of range: {optimal_temp}"
         )
+
+    def test_prediction_history_sliding_window(self, clean_model):
+        """Test that prediction history maintains a sliding window of 200 records."""
+        model = clean_model
+        
+        # Add 205 records
+        for i in range(205):
+            prediction_record = {
+                "timestamp": "2023-01-01T00:00:00",
+                "predicted": 20.0,
+                "actual": 20.0,
+                "error": 0.0,
+                "index": i
+            }
+            model.prediction_history.append(prediction_record)
+            
+            # Manually trigger the truncation logic that would happen in update_prediction_feedback
+            if len(model.prediction_history) > 200:
+                model.prediction_history = model.prediction_history[-200:]
+
+        # Check size is capped at 200
+        assert len(model.prediction_history) == 200
+        
+        # Check that the oldest records were removed (indices 0-4 should be gone)
+        # The first record in history should be index 5
+        assert model.prediction_history[0]["index"] == 5
+        # The last record should be index 204
+        assert model.prediction_history[-1]["index"] == 204

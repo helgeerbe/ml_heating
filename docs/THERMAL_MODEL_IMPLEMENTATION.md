@@ -1896,6 +1896,18 @@ Minimal adjustment needed - model has converged
 
 The system maintains thermal parameters using a **baseline + adjustments** approach that ensures stability across service restarts and prevents parameter drift.
 
+#### History Management (Sliding Window)
+
+To maintain system performance and stability, the model uses a **sliding window** strategy for history management:
+
+*   **Prediction History**: Keeps the most recent **200 records**. When the limit is reached, the oldest record is removed (FIFO). This prevents "data loss shocks" where bulk truncation (e.g., dropping 50% of history) would destabilize learning confidence.
+*   **Parameter History**: Keeps the most recent **500 records** of parameter updates.
+
+This approach ensures:
+1.  **Statistical Stability**: The model always has a consistent window of recent performance data.
+2.  **Memory Efficiency**: History size is bounded.
+3.  **Smooth Learning**: No sudden drops in available history that could trigger erratic parameter updates.
+
 #### How Parameter Storage Works
 
 ```
