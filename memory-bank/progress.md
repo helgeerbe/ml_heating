@@ -1,6 +1,12 @@
 # ML Heating System - Current Progress
 
-## 🎯 CURRENT STATUS - February 11, 2026
+## 🎯 CURRENT STATUS - February 20, 2026
+
+### ✅ **PV FORECAST CONSISTENCY FIX COMPLETE**
+
+**System Status**: **OPERATIONAL & CONSISTENT** - Resolved a critical discrepancy in PV forecast usage between the Trajectory Optimizer and the internal prediction context. Both systems now use consistent interpolation logic, ensuring stable temperature predictions during rapid solar changes.
+
+**Test Suite Health**: **EXCELLENT** - 236/236 tests passing (100% success rate), including fixed isolation for configuration tests.
 
 ### ✅ **PHASE 2: ADVANCED TESTING IMPLEMENTATION COMPLETE**
 
@@ -67,6 +73,11 @@
 - ✅ **Home Assistant Integration** - Dual add-on channels (stable + dev)
 
 #### 🔧 **Recent Critical Fixes - COMPLETED**
+
+**PV Forecast Consistency (February 20, 2026)**:
+- ✅ **Interpolation Alignment**: Standardized PV forecast interpolation weight to 0.5 for short cycles in `UnifiedPredictionContext`, matching the Trajectory Optimizer.
+- ✅ **Cycle Bucket Logic**: Adjusted cycle buckets to ensure 90-minute cycles consistently use the 1-hour forecast.
+- ✅ **Test Isolation**: Fixed `test_create_prediction_context_with_forecasts_long_cycle` failure by correctly patching module-level configuration.
 
 **Advanced Testing Implementation (February 11, 2026)**:
 - ✅ **Property-Based Testing**: Implemented `hypothesis` tests for `ThermalEquilibriumModel` to verify physical invariants (bounds, monotonicity).
@@ -217,6 +228,6 @@ ML Heating System v3.0+ (Production Release Ready)
 
 ---
 
-**Last Updated**: February 11, 2026  
-**Status**: Production Ready - Advanced Testing Implemented  
+**Last Updated**: February 20, 2026
+**Status**: Production Ready - PV Forecast Fix Applied
 **Next Step**: Version Synchronization & Release

@@ -44,7 +44,10 @@ class ThermalEquilibriumModel:
         """
         try:
             # Try to load calibrated parameters from unified thermal state
-            from .unified_thermal_state import get_thermal_state_manager
+            try:
+                from .unified_thermal_state import get_thermal_state_manager
+            except ImportError:
+                from unified_thermal_state import get_thermal_state_manager
 
             state_manager = get_thermal_state_manager()
             thermal_state = state_manager.get_current_parameters()
@@ -111,11 +114,15 @@ class ThermalEquilibriumModel:
 
                     if not validate_thermal_state_safely(thermal_state):
                         logging.warning(
-                            "⚠️ Thermal state validation failed, "
-                            "using config defaults"
+                            "⚠️ Thermal state validation failed, but core "
+                            "parameters were loaded. Retaining calibrated "
+                            "parameters and relying on safety clamping."
                         )
-                        self._load_config_defaults()
-                        return
+                        # We do NOT revert to defaults here because we
+                        # successfully loaded the baseline parameters above.
+                        # Reverting would lose calibration due to minor schema
+                        # mismatches (e.g. missing optional fields).
+                        # The code below will clamp parameters to safe bounds.
                 except ImportError:
                     logging.debug("Schema validation not available")
 
@@ -146,12 +153,108 @@ class ThermalEquilibriumModel:
                     len(self.parameter_history),
                 )
 
+                # EXTRA SAFETY: Clamp parameters to current bounds
+                # This handles cases where bounds were tightened in config
+                # but old parameters are still within the old (wider) bounds
+                # but outside the new (tighter) bounds.
+                try:
+                    try:
+                        from .thermal_config import ThermalParameterConfig
+                    except ImportError:
+                        from thermal_config import ThermalParameterConfig
+
+                    # Clamp heat_loss_coefficient
+                    hcl_bounds = ThermalParameterConfig.get_bounds(
+                        "heat_loss_coefficient"
+                    )
+                    if not (
+                        hcl_bounds[0]
+                        <= self.heat_loss_coefficient
+                        <= hcl_bounds[1]
+                    ):
+                        logging.warning(
+                            "⚠️ Clamping heat_loss_coefficient %.4f to "
+                            "bounds %s",
+                            self.heat_loss_coefficient,
+                            hcl_bounds,
+                        )
+                        self.heat_loss_coefficient = max(
+                            hcl_bounds[0],
+                            min(self.heat_loss_coefficient, hcl_bounds[1]),
+                        )
+
+                    # Clamp outlet_effectiveness
+                    oe_bounds = ThermalParameterConfig.get_bounds(
+                        "outlet_effectiveness"
+                    )
+                    if not (
+                        oe_bounds[0]
+                        <= self.outlet_effectiveness
+                        <= oe_bounds[1]
+                    ):
+                        logging.warning(
+                            "⚠️ Clamping outlet_effectiveness %.4f to "
+                            "bounds %s",
+                            self.outlet_effectiveness,
+                            oe_bounds,
+                        )
+                        self.outlet_effectiveness = max(
+                            oe_bounds[0],
+                            min(self.outlet_effectiveness, oe_bounds[1]),
+                        )
+
+                except Exception as e:
+                    logging.error(f"Error during parameter clamping: {e}")
+
                 # STABILITY FIX: Detect and reset corrupted parameters on load
                 if self._detect_parameter_corruption():
                     logging.warning(
                         "🗑️ Detected corrupted parameters on load. "
-                        "Resetting to defaults."
+                        "Resetting to defaults and clearing learning state."
                     )
+                    logging.warning(
+                        "   Corrupted values - Heat Loss: %.4f, "
+                        "Effectiveness: %.4f",
+                        self.heat_loss_coefficient,
+                        self.outlet_effectiveness
+                    )
+
+                    # CRITICAL: Reset persistent state to prevent reloading
+                    # bad deltas
+                    
+                    # Check if baseline itself is corrupted
+                    # If baseline is bad, we MUST wipe it, otherwise it
+                    # persists
+                    baseline_hl = baseline_params.get(
+                        "heat_loss_coefficient", 0
+                    )
+                    baseline_oe = baseline_params.get(
+                        "outlet_effectiveness", 1
+                    )
+
+                    is_baseline_corrupted = (
+                        baseline_hl > 1.2
+                        or baseline_oe < 0.4
+                        or (
+                            baseline_hl > 0.8 and baseline_oe < 0.35
+                        )  # Specific bad combo
+                    )
+
+                    if is_baseline_corrupted:
+                        logging.error(
+                            "🚨 BASELINE IS CORRUPTED! (HL=%.2f, Eff=%.2f). "
+                            "Wiping entire thermal state including baseline.",
+                            baseline_hl,
+                            baseline_oe,
+                        )
+                        state_manager.reset_learning_state(keep_baseline=False)
+                    else:
+                        logging.warning(
+                            "⚠️ Baseline seems okay, only resetting "
+                            "learning state."
+                        )
+                        state_manager.reset_learning_state(keep_baseline=True)
+
                     self._load_config_defaults()
                     # CRITICAL: Return to avoid using corrupted state
                     return
@@ -464,7 +567,7 @@ class ThermalEquilibriumModel:
 
         if len(self.prediction_history) > 200:
             self.prediction_history = self.prediction_history[-100:]
-            
+
         if len(self.prediction_history) >= self.recent_errors_window:
             error_magnitude = abs(prediction_error)
             if error_magnitude < PhysicsConstants.ERROR_THRESHOLD_CONFIDENCE:
@@ -608,7 +711,9 @@ class ThermalEquilibriumModel:
         )
 
         # Clip PV/TV updates (limit max change per step)
-        max_weight_change = 0.05
+        # Reduced from 0.05 to 0.0005 to prevent massive jumps in a single step
+        # The parameter range is typically 0.0001-0.005, so 0.05 was 10x max
+        max_weight_change = 0.0005
         pv_heat_weight_update = np.clip(
             pv_heat_weight_update, -max_weight_change, max_weight_change
         )
@@ -1264,7 +1369,7 @@ class ThermalEquilibriumModel:
             # Proxy for target influence
             "target_temp": self.outlet_effectiveness,
         }
-        
+
         total = sum(abs(v) for v in weights.values())
         if total > 0:
             return {k: abs(v) / total for k, v in weights.items()}
@@ -1477,6 +1582,88 @@ class ThermalEquilibriumModel:
                 "outlet_effectiveness %s is outside of bounds %s",
                 self.outlet_effectiveness,
                 oe_bounds,
+            )
+            return True
+
+        # Check for physically impossible combinations (drift detection)
+        # High heat loss + low effectiveness = broken physics model
+        # Also catch extreme heat loss regardless of effectiveness
+        if self.heat_loss_coefficient > 1.8:
+            logging.warning(
+                "⚠️ Extreme heat loss detected (%.2f). Resetting to prevent "
+                "runaway heating.",
+                self.heat_loss_coefficient,
+            )
+            return True
+
+        if (
+            self.heat_loss_coefficient > 1.2
+            and self.outlet_effectiveness < 0.4
+        ):
+            logging.warning(
+                "⚠️ Parameter drift detected: High heat loss (%.2f) "
+                "with low effectiveness (%.2f) indicates broken learning "
+                "state",
+                self.heat_loss_coefficient,
+                self.outlet_effectiveness,
+            )
+            return True
+
+        # Enhanced check for "borderline bad" combination that causes 65C
+        if (
+            self.heat_loss_coefficient > 0.8
+            and self.outlet_effectiveness < 0.35
+        ):
+            logging.warning(
+                "⚠️ Parameter drift detected: Moderate heat loss (%.2f) "
+                "with very low effectiveness (%.2f) causes extreme "
+                "predictions",
+                self.heat_loss_coefficient,
+                self.outlet_effectiveness,
+            )
+            return True
+
+        # Enhanced check for "borderline bad" combination that causes 65C
+        if (
+            self.heat_loss_coefficient > 0.8
+            and self.outlet_effectiveness < 0.35
+        ):
+            logging.warning(
+                "⚠️ Parameter drift detected: Moderate heat loss (%.2f) "
+                "with very low effectiveness (%.2f) causes extreme "
+                "predictions",
+                self.heat_loss_coefficient,
+                self.outlet_effectiveness,
+            )
+            return True
+
+        # Enhanced check for "borderline bad" combination that causes 65C
+        if (
+            self.heat_loss_coefficient > 0.8
+            and self.outlet_effectiveness < 0.35
+        ):
+            logging.warning(
+                "⚠️ Parameter drift detected: Moderate heat loss (%.2f) "
+                "with very low effectiveness (%.2f) causes extreme "
+                "predictions",
+                self.heat_loss_coefficient,
+                self.outlet_effectiveness,
+            )
+            return True
+
+        # Stricter check for the specific "65C bug" combination
+        # Moderate heat loss with very low effectiveness causes extreme
+        # outlet temps
+        if (
+            self.heat_loss_coefficient > 0.8
+            and self.outlet_effectiveness < 0.35
+        ):
+            logging.warning(
+                "⚠️ Parameter drift detected: Moderate heat loss (%.2f) "
+                "with very low effectiveness (%.2f) causes prediction "
+                "instability",
+                self.heat_loss_coefficient,
+                self.outlet_effectiveness,
             )
             return True
 

@@ -1,5 +1,16 @@
 # Active Context - Current Work & Decision State
 
+### 🎯 **PV FORECAST CONSISTENCY FIX - February 20, 2026**
+
+**CRITICAL FIX**: Resolved a discrepancy in PV forecast interpolation between the Trajectory Optimizer and the internal `UnifiedPredictionContext`. This ensures that all parts of the system use the exact same forecast data, preventing temperature prediction anomalies.
+
+#### ✅ **PV FORECAST CONSISTENCY RESTORED**
+- **Context**: The user reported a temperature anomaly where the prediction dropped significantly. Investigation revealed that the Trajectory Optimizer and `UnifiedPredictionContext` were using different interpolation weights (0.5 vs 0.25) for short cycles.
+- **Changes**:
+  - `src/prediction_context.py`: Updated interpolation weight to 0.5 for short cycles (`cycle_hours <= 0.5`) to match the optimizer's raw average. Adjusted cycle buckets to capture 90-minute cycles correctly (`<= 1.51`).
+  - `tests/unit/test_prediction_context.py`: Updated test expectations and fixed a test isolation issue using `patch.object`.
+- **Impact**: Eliminated a ~700W discrepancy in PV power estimation, ensuring consistent temperature predictions across the system.
+
 ### 🧠 **ADAPTIVE LEARNING & SOURCE ATTRIBUTION IMPLEMENTED - February 15, 2026**
 
 **CRITICAL MILESTONE**: The system now features advanced adaptive learning capabilities for external heat sources. It can dynamically learn the heat contribution of the fireplace, TV, and PV panels by observing prediction errors when these sources are active. This moves the system from static weight assumptions to dynamic, home-specific learning.
@@ -70,7 +81,10 @@
 - **Stability**: Resolved `InfluxDBClient` teardown issues by implementing robust cleanup in `InfluxService` and adding a global pytest fixture to reset the singleton after every test.
 
 **FILES MODIFIED**:
-- **CHANGELOG.md**: Version history corrected.
+- **src/prediction_context.py**: Aligned forecast interpolation weights.
+- **tests/unit/test_prediction_context.py**: Updated tests and fixed isolation issues.
+- **CHANGELOG.md**: Documented the fix.
+- **memory-bank/activeContext.md**: Updated with recent fix details.
 - **memory-bank/progress.md**: Updated status.
 - **plans/**: Archived implemented plans.
 - **tests/unit/test_thermal_equilibrium_model_properties.py**: Created.

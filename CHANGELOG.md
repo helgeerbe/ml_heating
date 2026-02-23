@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Control Stability:** Fixed "Deadbeat Control" oscillation by decoupling the control interval (30m) from the optimization horizon (4h). This prevents excessive outlet temperature spikes when correcting small deviations.
+- **PV Forecast Consistency:** Fixed a ~700W discrepancy in PV forecast interpolation between the Trajectory Optimizer and the internal `UnifiedPredictionContext`. Both systems now use a consistent 0.5 weight for short cycles (<= 30 mins), preventing temperature prediction drops during rapid solar changes.
+- **Parameter Drift Protection:** Implemented safety checks for physically impossible thermal parameter combinations (e.g., high heat loss with low outlet effectiveness) that could lead to incorrect equilibrium predictions. Added automatic reset of corrupted learning state to prevent persistent bad behavior.
+- **Baseline Corruption Fix:** Fixed a critical issue where corrupted baseline parameters (e.g., Heat Loss > 0.8 with Effectiveness < 0.4) would persist across restarts even after detection. The system now correctly wipes the corrupted baseline from disk when such invalid combinations are detected, ensuring a clean recovery to safe defaults.
 
 ### Technical Achievements
 

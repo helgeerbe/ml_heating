@@ -599,6 +599,7 @@ The system uses `UnifiedPredictionContext` service (`src/prediction_context.py`)
 2. **Integrates forecast data when available** (4-hour outdoor temp and PV forecasts)
 3. **Falls back gracefully** to current conditions when forecasts unavailable
 4. **Ensures identical parameters** across binary search, smart rounding, and trajectory prediction
+5. **Standardizes Interpolation**: Uses consistent interpolation weights (0.5 for short cycles) for PV forecasts to match the Trajectory Optimizer, preventing discrepancies.
 
 **Implementation Example:**
 

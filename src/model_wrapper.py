@@ -27,6 +27,7 @@ from src.prediction_metrics import PredictionMetrics
 from src import config
 from src.ha_client import create_ha_client
 from src.adaptive_fireplace_learning import AdaptiveFireplaceLearning
+from src.prediction_context import prediction_context_manager
 
 
 # Singleton pattern to prevent multiple model instantiation
@@ -98,11 +99,11 @@ class EnhancedModelWrapper:
             # rounding
             if hasattr(self, "cycle_aligned_forecast") and \
                     self.cycle_aligned_forecast:
+                pv_val = self.cycle_aligned_forecast.get('pv_power', 0.0)
+                caller_pv = kwargs.get('pv_power', 0.0)
                 logging.debug(
                     "🧠 Smart rounding is using cycle-aligned forecast: "
-                    f"PV={self.cycle_aligned_forecast.get('pv_power', 0.0):.0f}"
-                    f"W (caller sent "
-                    f"PV={kwargs.get('pv_power', 0.0):.0f}W)"
+                    f"PV={pv_val:.0f}W (caller sent PV={caller_pv:.0f}W)"
                 )
                 pv_power = self.cycle_aligned_forecast.get(
                     "pv_power", kwargs.get("pv_power", 0.0)
@@ -242,7 +243,7 @@ class EnhancedModelWrapper:
             current_indoor = features.get("indoor_temp_lag_30m", 21.0)
             target_indoor = features.get("target_temp", 21.0)
             outdoor_temp = features.get("outdoor_temp", 10.0)
-            
+
             # Store current indoor for trajectory correction
             self._current_indoor = current_indoor
 
@@ -319,13 +320,11 @@ class EnhancedModelWrapper:
         self, outdoor_temp: float, pv_power: float, thermal_features: Dict
     ) -> Tuple[float, float, list, list]:
         """
-        CYCLE-TIME-ALIGNED forecast condition calculation.
+        Get forecast conditions using UnifiedPredictionContext.
 
-        Uses cycle-appropriate forecast timing instead of 1-4h averaging to
-        eliminate timing mismatch between control cycles and forecast horizons.
-
-        Returns both cycle-aligned averages and arrays for trajectory
-        prediction.
+        Delegates to the centralized prediction context manager to ensure
+        consistency across all prediction systems (binary search, smart
+        rounding, trajectory optimization).
         """
         # BUGFIX: Ensure pv_power and outdoor_temp are scalars to prevent
         # TypeError in logging.
@@ -336,104 +335,26 @@ class EnhancedModelWrapper:
             outdoor_temp = \
                 float(outdoor_temp.iloc[0]) if not outdoor_temp.empty else 0.0
 
+        # Pass features to manager
         features = getattr(self, "_current_features", {})
+        prediction_context_manager.set_features(features)
 
-        # Get cycle time from config and validate
-        cycle_minutes = config.CYCLE_INTERVAL_MINUTES
-        cycle_hours = cycle_minutes / 60.0
+        # Create unified context
+        context = prediction_context_manager.create_context(
+            outdoor_temp=outdoor_temp,
+            pv_power=pv_power,
+            thermal_features=thermal_features
+        )
 
-        # Validate cycle time against reasonable limits (max 180min for good
-        # control)
-        max_reasonable_cycle = 180  # 3 hours maximum for responsive control
-        if cycle_minutes > max_reasonable_cycle:
-            logging.warning(
-                f"⚠️ Cycle time {cycle_minutes}min exceeds recommended "
-                f"max {max_reasonable_cycle}min. Using 180min limit for "
-                "forecast alignment."
-            )
-            cycle_hours = max_reasonable_cycle / 60.0
-
-        if features:
-            # Extract available forecast data
-            forecast_1h_outdoor = features.get(
-                "temp_forecast_1h", outdoor_temp
-            )
-            forecast_1h_pv = features.get("pv_forecast_1h", pv_power)
-            forecast_2h_outdoor = features.get(
-                "temp_forecast_2h", outdoor_temp
-            )
-            forecast_2h_pv = features.get("pv_forecast_2h", pv_power)
-            forecast_3h_outdoor = features.get(
-                "temp_forecast_3h", outdoor_temp
-            )
-            forecast_3h_pv = features.get("pv_forecast_3h", pv_power)
-            forecast_4h_outdoor = features.get(
-                "temp_forecast_4h", outdoor_temp
-            )
-            forecast_4h_pv = features.get("pv_forecast_4h", pv_power)
-
-            # Calculate cycle-aligned forecast using appropriate
-            # interpolation/selection
-            if cycle_hours <= 0.5:
-                # 0-30min cycles: interpolate between current and 1h
-                weight = cycle_hours / 1.0  # 0.0 to 0.5
-                cycle_outdoor = (
-                    outdoor_temp * (1 - weight) + forecast_1h_outdoor * weight
-                )
-                cycle_pv = pv_power * (1 - weight) + forecast_1h_pv * weight
-                method = f"interpolated ({cycle_minutes}min)"
-            elif cycle_hours <= 1.0:
-                # 30-60min cycles: use 1h forecast directly
-                cycle_outdoor = forecast_1h_outdoor
-                cycle_pv = forecast_1h_pv
-                method = "1h forecast"
-            elif cycle_hours <= 2.0:  # 60-120min cycles: use 2h forecast
-                cycle_outdoor = forecast_2h_outdoor
-                cycle_pv = forecast_2h_pv
-                method = "2h forecast"
-            elif cycle_hours <= 3.0:  # 120-180min cycles: use 3h forecast
-                cycle_outdoor = forecast_3h_outdoor
-                cycle_pv = forecast_3h_pv
-                method = "3h forecast"
-            else:  # >180min cycles: cap at 4h forecast with warning
-                cycle_outdoor = forecast_4h_outdoor
-                cycle_pv = forecast_4h_pv
-                method = "4h forecast (capped)"
-
-            # For trajectory prediction, still provide full forecast arrays
-            outdoor_forecast = [
-                forecast_1h_outdoor,
-                forecast_2h_outdoor,
-                forecast_3h_outdoor,
-                forecast_4h_outdoor,
-            ]
-            pv_forecast = [
-                forecast_1h_pv,
-                forecast_2h_pv,
-                forecast_3h_pv,
-                forecast_4h_pv,
-            ]
-
-            logging.info(
-                f"⏱️ Cycle-aligned forecast ({method}): "
-                f"outdoor={cycle_outdoor:.1f}°C (vs current "
-                f"{outdoor_temp:.1f}°C), PV={cycle_pv:.0f}W (vs current "
-                f"{pv_power:.0f}W) [cycle: {cycle_minutes}min]"
-            )
-        else:
-            # No forecast data available, use current values
-            cycle_outdoor = outdoor_temp
-            cycle_pv = pv_power
-            outdoor_forecast = [outdoor_temp] * 4
-            pv_forecast = [pv_power] * 4
-            method = "current (no forecasts)"
-
-            logging.debug(
-                f"⏱️ Cycle-aligned conditions ({method}): "
-                f"outdoor={outdoor_temp:.1f}°C, PV={pv_power:.0f}W"
-            )
-
-        return cycle_outdoor, cycle_pv, outdoor_forecast, pv_forecast
+        # Return values in expected format
+        # Note: We prepend current values to forecast arrays to match
+        # the 5-point format (t=0, 1h, 2h, 3h, 4h) expected by trajectory logic
+        return (
+            context['avg_outdoor'],
+            context['avg_pv'],
+            [outdoor_temp] + context['outdoor_forecast'],
+            [pv_power] + context['pv_forecast']
+        )
 
     def _calculate_required_outlet_temp(
         self,
@@ -551,7 +472,7 @@ class EnhancedModelWrapper:
                 temp_diff_abs = abs(temp_diff)
                 is_cooling_needed = temp_diff < -0.1  # Need to cool house
                 is_heating_needed = temp_diff > 0.1   # Need to heat house
-                
+
                 # Check if target is unreachable with system limits
                 if target_indoor < min_prediction - tolerance:
                     # Target below minimum capability
@@ -724,7 +645,7 @@ class EnhancedModelWrapper:
             temp_diff = target_indoor - current_indoor
             is_heating_scenario = temp_diff > 0.1  # Need to heat house
             is_cooling_scenario = temp_diff < -0.1  # Need to cool house
-            
+
             if is_heating_scenario:
                 # HEATING: Normal logic
                 if predicted_indoor < target_indoor:
@@ -852,45 +773,23 @@ class EnhancedModelWrapper:
                 logging.debug("🔍 Multi-horizon: No forecast data available")
                 return
 
-            # Get cycle time and calculate cycle-aligned forecast
+            # UNIFIED: Get cycle-aligned forecast from context manager
+            # This ensures the "cycle" method in logs matches exactly what was
+            # used for prediction
             cycle_minutes = config.CYCLE_INTERVAL_MINUTES
-            cycle_hours = cycle_minutes / 60.0
-            max_reasonable_cycle = 180
-            if cycle_minutes > max_reasonable_cycle:
-                cycle_hours = max_reasonable_cycle / 60.0
+            cycle_method = f"cycle({cycle_minutes}min)"
 
-            # Calculate cycle-aligned forecast conditions (same logic as
-            # _get_forecast_conditions)
-            forecast_1h_outdoor = features.get(
-                "temp_forecast_1h", outdoor_temp
-            )
-            forecast_1h_pv = features.get("pv_forecast_1h", pv_power)
-
-            if cycle_hours <= 0.5:
-                # 0-30min cycles: interpolate between current and 1h
-                weight = cycle_hours / 1.0
-                cycle_outdoor = (
-                    outdoor_temp * (1 - weight) + forecast_1h_outdoor * weight
-                )
-                cycle_pv = pv_power * (1 - weight) + forecast_1h_pv * weight
-                cycle_method = f"cycle({cycle_minutes}min)"
-            elif cycle_hours <= 1.0:
-                # 30-60min cycles: use 1h forecast directly
-                cycle_outdoor = forecast_1h_outdoor
-                cycle_pv = forecast_1h_pv
-                cycle_method = "cycle(1h)"
-            elif cycle_hours <= 2.0:  # 60-120min cycles: use 2h forecast
-                cycle_outdoor = features.get("temp_forecast_2h", outdoor_temp)
-                cycle_pv = features.get("pv_forecast_2h", pv_power)
-                cycle_method = "cycle(2h)"
-            elif cycle_hours <= 3.0:  # 120-180min cycles: use 3h forecast
-                cycle_outdoor = features.get("temp_forecast_3h", outdoor_temp)
-                cycle_pv = features.get("pv_forecast_3h", pv_power)
-                cycle_method = "cycle(3h)"
-            else:  # >180min cycles: cap at 4h forecast
-                cycle_outdoor = features.get("temp_forecast_4h", outdoor_temp)
-                cycle_pv = features.get("pv_forecast_4h", pv_power)
-                cycle_method = "cycle(4h-cap)"
+            # Use the unified context that should have been created during
+            # prediction
+            context = prediction_context_manager.get_context()
+            if context:
+                cycle_outdoor = context['avg_outdoor']
+                cycle_pv = context['avg_pv']
+            else:
+                # Fallback if context missing (shouldn't happen in normal flow)
+                cycle_outdoor = outdoor_temp
+                cycle_pv = pv_power
+                cycle_method = "cycle(fallback)"
 
             # Extract individual forecast horizons including cycle-aligned
             forecasts = {
@@ -1240,9 +1139,9 @@ class EnhancedModelWrapper:
                         if not relaxed_boundary_violation:
                             logging.info(
                                 f"✅ Target will be reached quickly in "
-                                f"{reaches_target_at:.1f}h with minor boundary "
-                                f"violation (±0.1-0.2°C range) - no "
-                                f"correction needed"
+                                f"{reaches_target_at:.1f}h with minor "
+                                "boundary violation (±0.1-0.2°C range) - no "
+                                "correction needed"
                             )
                             return outlet_temp
 
@@ -1330,7 +1229,10 @@ class EnhancedModelWrapper:
             else:
                 # Target not reached in time
                 reaches_target_at = trajectory.get("reaches_target_at")
-                if reaches_target_at is None or reaches_target_at > cycle_hours:
+                if (
+                    reaches_target_at is None
+                    or reaches_target_at > cycle_hours
+                ):
                     final_predicted_temp = trajectory_temps[-1]
                     temp_error = target_indoor - final_predicted_temp
                 else:
