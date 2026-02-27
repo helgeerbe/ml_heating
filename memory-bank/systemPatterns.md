@@ -219,11 +219,16 @@ if last_is_blocking and not is_blocking:
         grace_target = state.get("last_final_temp")
 
     set_target_temperature(grace_target)
-    wait_for_temperature_stabilization(grace_target, wait_condition)
+    
+    # Dynamic Wait Loop:
+    # Monitor indoor temperature during the grace period.
+    # If it drops significantly, recalculate the target immediately.
+    wait_for_temperature_stabilization(grace_target, dynamic_update=True)
 ```
 
 **Recovery Strategy**:
 - **Model-Driven**: Instead of static restoration, the system calculates the optimal temperature to recover from the thermal deficit caused by the blocking event (DHW, defrost).
+- **Dynamic Updates**: The system monitors indoor temperature *during* the grace period wait. If the temperature drops further, it recalculates and updates the target immediately, preventing "cold night drift".
 - **Resilient**: This makes the system more robust against heat loss and prevents prediction accuracy from dropping.
 - **Fallback**: A safe fallback to the previous temperature is retained for sensor data issues.
 

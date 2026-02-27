@@ -196,6 +196,9 @@ class BlockingStateManager:
             config.OUTDOOR_TEMP_ENTITY_ID, all_states
         )
 
+        wrapper = None
+        thermal_features = None
+
         if (
             current_indoor is None
             or target_indoor is None
@@ -283,16 +286,29 @@ class BlockingStateManager:
         )
         
         # Wait for temperature to reach target
-        self._wait_for_grace_target(ha_client, grace_target, wait_for_cooling)
+        self._wait_for_grace_target(
+            ha_client,
+            grace_target,
+            wait_for_cooling,
+            wrapper=wrapper,
+            thermal_features=thermal_features,
+        )
         
         logging.info("--- Grace Period Ended ---")
     
     def _wait_for_grace_target(
-        self, ha_client: HAClient, grace_target: float, wait_for_cooling: bool
+        self,
+        ha_client: HAClient,
+        initial_grace_target: float,
+        wait_for_cooling: bool,
+        wrapper=None,
+        thermal_features=None,
     ):
         """Wait for outlet temperature to reach grace target"""
         start_time = time.time()
         max_seconds = config.GRACE_PERIOD_MAX_MINUTES * 60
+        
+        current_grace_target = initial_grace_target
         
         logging.info(
             "Grace period: waiting for %s (timeout %d min).",
@@ -334,12 +350,67 @@ class BlockingStateManager:
                     "Cannot read actual_outlet_temp, exiting grace period."
                 )
                 break
+
+            # --- Dynamic Target Recalculation ---
+            if wrapper and thermal_features:
+                try:
+                    current_indoor = ha_client.get_state(
+                        config.INDOOR_TEMP_ENTITY_ID, all_states_poll
+                    )
+                    target_indoor = ha_client.get_state(
+                        config.TARGET_INDOOR_TEMP_ENTITY_ID, all_states_poll
+                    )
+                    outdoor_temp = ha_client.get_state(
+                        config.OUTDOOR_TEMP_ENTITY_ID, all_states_poll
+                    )
+                    
+                    if (
+                        current_indoor is not None
+                        and target_indoor is not None
+                        and outdoor_temp is not None
+                    ):
+                        new_target = wrapper._calculate_required_outlet_temp(
+                            float(current_indoor),
+                            float(target_indoor),
+                            float(outdoor_temp),
+                            thermal_features,
+                        )
+                        
+                        # If target changed significantly, update it
+                        if abs(new_target - current_grace_target) >= 0.5:
+                            logging.info(
+                                "Grace target updated: %.1f°C -> %.1f°C "
+                                "(Indoor: %.1f->%.1f, Outdoor: %.1f)",
+                                current_grace_target,
+                                new_target,
+                                float(current_indoor),
+                                float(target_indoor),
+                                float(outdoor_temp),
+                            )
+                            current_grace_target = new_target
+                            
+                            # Update HA entity
+                            ha_client.set_state(
+                                config.TARGET_OUTLET_TEMP_ENTITY_ID,
+                                current_grace_target,
+                                get_sensor_attributes(
+                                    config.TARGET_OUTLET_TEMP_ENTITY_ID
+                                ),
+                                round_digits=0,
+                            )
+                except Exception as e:
+                    logging.warning(
+                        "Failed to recalculate grace target: %s", e
+                    )
                 
             # Check if target reached
             target_reached = False
-            if wait_for_cooling and actual_outlet_temp <= grace_target:
+            if wait_for_cooling and actual_outlet_temp <= current_grace_target:
                 target_reached = True
-            elif not wait_for_cooling and actual_outlet_temp >= grace_target:
+            elif (
+                not wait_for_cooling
+                and actual_outlet_temp >= current_grace_target
+            ):
                 target_reached = True
                 
             if target_reached:
@@ -347,7 +418,7 @@ class BlockingStateManager:
                     "Actual outlet temp (%.1f°C) has reached grace target "
                     "(%.1f°C). Resuming control.",
                     actual_outlet_temp,
-                    grace_target,
+                    current_grace_target,
                 )
                 break
                 
@@ -365,7 +436,7 @@ class BlockingStateManager:
                 "target: %.1f°C). Elapsed: %d/%d min",
                 "cool to" if wait_for_cooling else "warm to",
                 actual_outlet_temp,
-                grace_target,
+                current_grace_target,
                 int(elapsed / 60),
                 config.GRACE_PERIOD_MAX_MINUTES,
             )

@@ -66,6 +66,16 @@ class PhysicsConstants:
     # Step size for TV heat weight gradients
     TV_HEAT_WEIGHT_EPSILON = 0.05
 
+    # Cold Weather Protection Thresholds
+    # °C - Outdoor temperature below which we dampen parameter updates
+    COLD_WEATHER_PROTECTION_THRESHOLD = 5.0
+    # °C - Outdoor temperature below which we strongly block parameter updates
+    EXTREME_COLD_PROTECTION_THRESHOLD = 0.0
+    # Factor to dampen updates by when in cold weather (0.1 = 10%)
+    COLD_WEATHER_DAMPING_FACTOR = 0.1
+    # Factor to dampen updates by when in extreme cold (0.01 = 1%)
+    EXTREME_COLD_DAMPING_FACTOR = 0.01
+
     # Learning rate bounds and factors (Phase 3.2 addition)
     # Learning confidence decay per cycle
     CONFIDENCE_DECAY_RATE = 0.99

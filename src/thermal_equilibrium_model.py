@@ -685,9 +685,55 @@ class ThermalEquilibriumModel:
         heat_loss_coefficient_update = (
             current_learning_rate * heat_loss_coefficient_gradient
         )
+
         outlet_effectiveness_update = (
             current_learning_rate * outlet_effectiveness_gradient
         )
+
+        # COLD WEATHER PROTECTION:
+        # If outdoor temperature is dropping rapidly (e.g. night), the house
+        # thermal mass (inertia) keeps it warm. The model might misinterpret
+        # this "staying warm" as "better insulation" (lower heat loss coeff)
+        # or "better radiators" (higher outlet effectiveness).
+        # We must prevent parameters from drifting incorrectly during these
+        # transient events.
+
+        # Calculate average outdoor temp from recent history
+        recent_outdoor = [
+            p["context"].get("outdoor_temp", 0) for p in recent_predictions
+        ]
+        avg_outdoor = np.mean(recent_outdoor)
+
+        # If it's cold outside, be skeptical of "better performance"
+        if avg_outdoor < PhysicsConstants.COLD_WEATHER_PROTECTION_THRESHOLD:
+            damping_factor = PhysicsConstants.COLD_WEATHER_DAMPING_FACTOR
+            if (
+                avg_outdoor
+                < PhysicsConstants.EXTREME_COLD_PROTECTION_THRESHOLD
+            ):
+                damping_factor = PhysicsConstants.EXTREME_COLD_DAMPING_FACTOR
+
+            # 1. Protect HLC (prevent reduction)
+            # update > 0 means we subtract, so HLC goes down
+            if heat_loss_coefficient_update > 0:
+                heat_loss_coefficient_update *= damping_factor
+                logging.debug(
+                    "❄️ Cold weather protection: Dampening HLC reduction by "
+                    "%.2f (outdoor=%.1f°C)",
+                    damping_factor,
+                    avg_outdoor,
+                )
+
+            # 2. Protect OE (prevent increase)
+            # update < 0 means we subtract a negative, so OE goes up
+            if outlet_effectiveness_update < 0:
+                outlet_effectiveness_update *= damping_factor
+                logging.debug(
+                    "❄️ Cold weather protection: Dampening OE increase by "
+                    "%.2f (outdoor=%.1f°C)",
+                    damping_factor,
+                    avg_outdoor,
+                )
         pv_heat_weight_update = (
             current_learning_rate * pv_heat_weight_gradient
         )

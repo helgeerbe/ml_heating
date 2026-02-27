@@ -870,7 +870,7 @@ def main():
             final_temp = suggested_temp
 
             # Log simplified prediction info
-            logging.debug(
+            logging.info(
                 "Model Wrapper: temp=%.1f°C, error=%.3f°C, confidence=%.3f",
                 suggested_temp,
                 abs(error_target_vs_actual),
@@ -1074,7 +1074,7 @@ def main():
                                 smart_rounded_temp = int(ceiling_temp)
                                 chosen = "ceiling"
 
-                            logging.debug(
+                            logging.info(
                                 f"Smart rounding: {final_temp:.2f}°C → "
                                 f"{smart_rounded_temp}°C (chose {chosen}: "
                                 f"floor→{floor_predicted:.2f}°C "
@@ -1128,7 +1128,6 @@ def main():
                 )
             except Exception as e:
                 logging.warning("Failed to log thermodynamic metrics: %s", e)
-
 
             # --- Update ML State sensor ---
             # Skip ML state sensor updates in shadow mode

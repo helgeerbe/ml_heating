@@ -99,8 +99,10 @@
 - ✅ **Linting and Formatting**: Resolved all outstanding linting and line-length errors in `src/model_wrapper.py`.
 - ✅ **Improved Readability**: The code is now cleaner, more readable, and adheres to project standards.
 
-**Intelligent Post-DHW Recovery (February 9, 2026)**:
+**Intelligent Post-DHW Recovery (February 27, 2026)**:
 - ✅ **Model-Driven Grace Period**: Re-architected the grace period logic to use the ML model to calculate a new, higher target temperature after DHW/defrost cycles.
+- ✅ **Dynamic Target Recalculation**: Implemented a dynamic wait loop that monitors indoor temperature during the grace period. If the temperature drops, the target is recalculated and updated immediately.
+- ✅ **Reduced Lockout Time**: Shortened `GRACE_PERIOD_MAX_MINUTES` from 30 to 15 minutes to prevent prolonged static states.
 - ✅ **Prevents Temperature Droop**: Actively compensates for heat loss during blocking events, ensuring the target indoor temperature is reached.
 - ✅ **Maintains Prediction Accuracy**: By correcting the thermal deficit, the model's performance is no longer negatively impacted by these interruptions.
 

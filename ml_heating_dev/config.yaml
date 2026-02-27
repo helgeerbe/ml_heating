@@ -152,7 +152,7 @@ options:
   
   # System Behavior Configuration - Timing and polling settings
   # Maximum minutes to wait during grace period after blocking ends
-  grace_period_max_minutes: 30
+  grace_period_max_minutes: 15
   # How often (seconds) to poll blocking entities during idle period
   blocking_poll_interval_seconds: 60
   # Prediction horizon steps for calibration

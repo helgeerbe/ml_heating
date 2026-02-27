@@ -212,7 +212,7 @@ MAX_TEMP_CHANGE_PER_CYCLE: int = int(
 )
 # Maximum minutes to wait during the grace period after blocking ends.
 GRACE_PERIOD_MAX_MINUTES: int = int(
-    os.getenv("GRACE_PERIOD_MAX_MINUTES", "30")
+    os.getenv("GRACE_PERIOD_MAX_MINUTES", "15")
 )
 
 # How often (seconds) to poll blocking entities during the idle period.

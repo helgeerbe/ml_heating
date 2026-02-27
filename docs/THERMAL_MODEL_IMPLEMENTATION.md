@@ -1387,9 +1387,9 @@ export OUTLET_EFFECTIVENESS=0.15
 
 **Cause:** The system needs time to recover after blocking events.
 
-**Solution:** Increase grace period:
+**Solution:** The system now uses a dynamic grace period (default max 15 minutes) that recalculates the target if the indoor temperature drops. If you still see instability, you can adjust the max duration, but be careful not to make it too long:
 ```bash
-export GRACE_PERIOD_MAX_MINUTES=45  # Default is 30
+export GRACE_PERIOD_MAX_MINUTES=20  # Default is 15
 ```
 
 #### Issue: Parameters Drift to Extreme Values

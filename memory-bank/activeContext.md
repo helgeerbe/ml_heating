@@ -1,5 +1,20 @@
 # Active Context - Current Work & Decision State
 
+### 🎯 **DYNAMIC GRACE PERIOD RECOVERY - February 27, 2026**
+
+**CRITICAL FIX**: Resolved an issue where the indoor temperature would drop significantly during the grace period following a defrost cycle ("cold night drift"). The system was locked in a static state for too long (30 mins) while the house cooled down.
+
+#### ✅ **DYNAMIC TARGET RECALCULATION IMPLEMENTED**
+- **Context**: User reported indoor temperature drops around midnight following defrost cycles.
+- **Diagnosis**: The 30-minute fixed grace period prevented the system from reacting to the temperature drop. The target was calculated once at the start of the grace period and not updated, even as the house cooled further.
+- **Fix**:
+    - Reduced `GRACE_PERIOD_MAX_MINUTES` from 30 to 15 minutes.
+    - Modified `src/heating_controller.py` to implement a dynamic wait loop.
+    - The system now checks the indoor temperature every minute during the grace period.
+    - If the temperature drops and the model calculates a new target (diff ≥ 0.5°C), the target is updated immediately.
+- **Result**: The system actively fights temperature drops during the recovery phase, preventing the "lockout" drift.
+- **Verification**: Added `test_wait_for_grace_target_dynamic_update` to `tests/unit/test_heating_controller.py`.
+
 ### 🎯 **PARAMETER JUMP FIX - February 23, 2026**
 
 **CRITICAL FIX**: Resolved a critical stability issue where the predicted outlet temperature jumped to 60°C after a restart. This was caused by a state desynchronization where the system fell back to defaults in memory but left a corrupted state file on disk, leading to a reload of the bad state later.
