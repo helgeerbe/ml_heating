@@ -15,6 +15,11 @@
 - **Result**: The system actively fights temperature drops during the recovery phase, preventing the "lockout" drift.
 - **Verification**: Added `test_wait_for_grace_target_dynamic_update` to `tests/unit/test_heating_controller.py`.
 
+#### ✅ **UNIT TESTS ADDED**
+- **New Test**: `test_wait_for_grace_target_dynamic_update` in `tests/unit/test_heating_controller.py`.
+- **Coverage**: Verifies that the loop correctly detects temperature drops, recalculates the target, and updates the Home Assistant entity.
+- **Status**: All 20 tests in `test_heating_controller.py` passed.
+
 ### 🎯 **PARAMETER JUMP FIX - February 23, 2026**
 
 **CRITICAL FIX**: Resolved a critical stability issue where the predicted outlet temperature jumped to 60°C after a restart. This was caused by a state desynchronization where the system fell back to defaults in memory but left a corrupted state file on disk, leading to a reload of the bad state later.
