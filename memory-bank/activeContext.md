@@ -1,5 +1,21 @@
 # Active Context - Current Work & Decision State
 
+### 🎯 **STATE POISONING BUG FIX - March 4, 2026**
+
+**CRITICAL FIX**: Resolved a "State Poisoning" bug where the heating target would drop to ~25°C after Domestic Hot Water (DHW) or Defrost cycles and persist into the next heating cycle. This was caused by the system overwriting the persistent target temperature with the low *actual* outlet temperature during the grace period.
+
+#### ✅ **STATE PRESERVATION IMPLEMENTED**
+- **Context**: User reported sudden target drops (e.g., 41°C -> 25°C) after DHW cycles, which persisted and caused the house to cool down.
+- **Diagnosis**: During the "Grace Period" (transition from DHW back to heating), the system was saving the current *actual* outlet temperature (which is low when heating is idle) as the `last_final_temp`. This corrupted value was then used as the baseline for the next cycle.
+- **Fix**:
+    - Modified `src/main.py` to explicitly **preserve the previous valid target** during grace periods instead of overwriting it.
+    - Marked these cycles as `grace_period_passthrough` to prevent the ML model from learning from these non-representative states.
+- **Result**: The system now maintains the correct target temperature through DHW/Defrost cycles, preventing the "drop to minimum" behavior.
+- **Verification**:
+    - Validated physics model correctness (calculated 43°C vs logged 25°C).
+    - Confirmed log entries reflected the corrupted state variable.
+    - Verified fix logic in `src/main.py`.
+
 ### 🎯 **DYNAMIC GRACE PERIOD RECOVERY - February 27, 2026**
 
 **CRITICAL FIX**: Resolved an issue where the indoor temperature would drop significantly during the grace period following a defrost cycle ("cold night drift"). The system was locked in a static state for too long (30 mins) while the house cooled down.

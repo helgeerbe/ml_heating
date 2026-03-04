@@ -199,14 +199,56 @@ class TestBlockingStateManager:
         assert mock_sleep.called
 
     @patch("src.heating_controller.time.sleep")
-    @patch("src.heating_controller.time.time", return_value=1000)
+    @patch("src.heating_controller.time.time")
     def test_wait_for_grace_target_reaches_target(
         self, mock_time, mock_sleep, blocking_manager, mock_ha_client
     ):
         """Test wait ends when target is reached."""
+        # Setup time to advance
+        mock_time.side_effect = [1000, 1001, 1002, 1003]
+        
         blocking_manager.check_blocking_state = Mock(return_value=(False, []))
-        mock_ha_client.get_state.side_effect = [50.0, 40.0]
-
+        # First call: 50.0 (too high), Second call: 40.0 (target reached)
+        # We need to provide enough values for get_state because it's called multiple times
+        # The loop checks:
+        # 1. actual_outlet_temp
+        # 2. current_indoor (for safety check)
+        # 3. target_indoor (for safety check)
+        # 4. current_indoor (for dynamic recalc - if wrapper exists)
+        # ...
+        
+        # In this test, wrapper is None, so we only hit the safety check calls.
+        # Iteration 1:
+        # - actual_outlet_temp: 50.0
+        # - current_indoor: 21.0
+        # - target_indoor: 20.0 (21 > 20, so no underheating abort)
+        
+        # Iteration 2:
+        # - actual_outlet_temp: 40.0 (Target reached!)
+        
+        # The loop calls get_state for:
+        # 1. actual_outlet_temp
+        # 2. current_indoor (safety)
+        # 3. target_indoor (safety)
+        # 4. current_indoor (dynamic recalc - if wrapper)
+        # 5. target_indoor (dynamic recalc - if wrapper)
+        # 6. outdoor_temp (dynamic recalc - if wrapper)
+        
+        # Since wrapper is None, we only need 1, 2, 3.
+        
+        mock_ha_client.get_state.side_effect = [
+            50.0, 21.0, 20.0, # Iteration 1: outlet, indoor, target
+            40.0, 21.0, 20.0  # Iteration 2: outlet, indoor, target (even if outlet matches, it might check safety first or after depending on flow)
+        ]
+        # Actually, looking at code:
+        # 1. check blocking (get_all_states)
+        # 2. get actual_outlet_temp (get_state) -> if None break
+        # 3. safety check (get_state x2)
+        # 4. dynamic recalc (get_state x3) - skipped if no wrapper
+        # 5. check condition -> break if met
+        
+        # So for Iteration 2, if condition is met at step 5, we still did steps 2 and 3.
+        
         blocking_manager._wait_for_grace_target(mock_ha_client, 40.0, True)
         mock_sleep.assert_called_once()
 

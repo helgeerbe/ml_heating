@@ -574,6 +574,7 @@ def main():
                             ),
                             "tv_on": learning_features.get("tv_on", 0.0),
                             "current_indoor": last_indoor_temp,
+                            "target_temp": last_indoor_temp,  # Use last indoor as target for learning context
                             "thermal_power": learning_features.get(
                                 "thermal_power_kw", None
                             ),
@@ -663,6 +664,17 @@ def main():
 
                         # Enhanced prediction context with learning mode info
                         enhanced_prediction_context = prediction_context.copy()
+                        
+                        # Check if the previous cycle was a grace period
+                        # passthrough. If so, override the learning mode to
+                        # reflect this
+                        if (
+                            isinstance(last_run_features, dict)
+                            and last_run_features.get("learning_mode")
+                            == "grace_period_passthrough"
+                        ):
+                            learning_mode = "grace_period_passthrough"
+                            
                         enhanced_prediction_context[
                             "learning_mode"
                         ] = learning_mode
@@ -739,15 +751,90 @@ def main():
             # Use modular blocking state manager for cleaner code
             # organization
             blocking_manager = BlockingStateManager()
-            if blocking_manager.handle_grace_period(
+            is_grace_period = blocking_manager.handle_grace_period(
                 ha_client, state, shadow_mode=effective_shadow_mode
-            ):
-                continue  # Skip cycle due to grace period
+            )
+            
+            if is_grace_period:
+                # We are in grace period, but we continue to allow passive
+                # learning (feature calculation and state saving)
+                logging.info("⏳ Grace period active - Passive learning mode")
+                # We will skip the CONTROL part later
+
+                # FIX: Do NOT overwrite last_final_temp with current actual
+                # outlet temp. This causes "state poisoning" where a low
+                # actual temp (e.g. 25C) becomes the target for the next
+                # cycle if sensors fail or another grace period occurs.
+                # Instead, preserve the previous valid target.
+                preserved_target = state.get("last_final_temp")
+                if preserved_target is None:
+                    # Fallback only if no previous state exists
+                    try:
+                        preserved_target = float(
+                            ha_client.get_state(
+                                config.ACTUAL_OUTLET_TEMP_ENTITY_ID, all_states
+                            )
+                        )
+                    except (ValueError, TypeError):
+                        preserved_target = 20.0 # Safe fallback
+
+                logging.info(
+                    "Preserving last_final_temp=%.1f°C during grace period",
+                    preserved_target
+                )
+
+                # Save state to ensure next cycle has valid 'last_run_features'
+                # Mark this as a grace period passthrough so the next cycle
+                # knows this wasn't a calculated target
+                save_state(
+                    last_final_temp=preserved_target,
+                    last_is_blocking=False,  # Grace period is not blocking
+                    # Preserve end time
+                    last_blocking_end_time=state.last_blocking_end_time,
+                    last_run_features={
+                        "learning_mode": "grace_period_passthrough"
+                    },
+                )
+                continue
 
             # --- Check if heating system is active ---
             heating_checker = HeatingSystemStateChecker()
             if not heating_checker.check_heating_active(ha_client, all_states):
                 time.sleep(PhysicsConstants.RETRY_DELAY_SECONDS)
+                continue
+            
+            if is_grace_period:
+                # Skip control logic but allow state saving at the end of loop
+                logging.info("⏭️ Grace period active - Skipping control logic")
+                
+                # FIX: Do NOT overwrite last_final_temp with current actual
+                # outlet temp. This causes "state poisoning" where a low
+                # actual temp (e.g. 25C) becomes the target for the next
+                # cycle if sensors fail or another grace period occurs.
+                # Instead, preserve the previous valid target.
+                preserved_target = state.get("last_final_temp")
+                if preserved_target is None:
+                    # Fallback only if no previous state exists
+                    try:
+                        preserved_target = float(
+                            ha_client.get_state(
+                                config.ACTUAL_OUTLET_TEMP_ENTITY_ID, all_states
+                            )
+                        )
+                    except (ValueError, TypeError):
+                        preserved_target = 20.0  # Safe fallback
+
+                logging.info(
+                    "Preserving last_final_temp=%.1f°C during grace period",
+                    preserved_target
+                )
+
+                save_state(
+                    last_final_temp=preserved_target,
+                    last_is_blocking=False,  # Grace period is not blocking
+                    # Preserve end time
+                    last_blocking_end_time=state.last_blocking_end_time,
+                )
                 continue
 
             if is_blocking:
@@ -1017,6 +1104,8 @@ def main():
                                 outdoor_temp=outdoor_temp,
                                 pv_power=thermal_features["pv_power"],
                                 thermal_features=thermal_features,
+                                target_temp=target_indoor_temp,
+                                current_temp=prediction_indoor_temp,
                             )
                         )
 

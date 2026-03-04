@@ -1,6 +1,12 @@
 # ML Heating System - Current Progress
 
-## 🎯 CURRENT STATUS - February 20, 2026
+## 🎯 CURRENT STATUS - March 4, 2026
+
+### ✅ **STATE POISONING BUG FIX COMPLETE (March 4, 2026)**
+
+**System Status**: **OPERATIONAL & STABLE** - Resolved a critical "State Poisoning" bug where the system would drop the heating target to ~25°C after DHW/Defrost cycles. The fix ensures the previous valid target is preserved during grace periods, preventing sudden temperature drops and protecting the ML model from learning invalid low-temperature data.
+
+**Test Suite Health**: **EXCELLENT** - All unit tests passing, including regression tests for grace period logic.
 
 ### ✅ **PARAMETER JUMP FIX COMPLETE (February 23, 2026)**
 
