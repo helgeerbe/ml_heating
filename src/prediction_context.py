@@ -32,7 +32,9 @@ class UnifiedPredictionContext:
         features: Optional[Dict],
         outdoor_temp: float,
         pv_power: float,
-        thermal_features: Dict
+        thermal_features: Dict,
+        target_temp: Optional[float] = None,
+        current_temp: Optional[float] = None,
     ) -> Dict:
         """
         Create a unified prediction context that all systems should use.
@@ -56,7 +58,10 @@ class UnifiedPredictionContext:
             - tv_on: TV status
             - use_forecasts: Boolean indicating if forecasts were used
         """
-        context = {}
+        context = {
+            "target_temp": target_temp,
+            "current_temp": current_temp,
+        }
 
         # Get cycle time from config
         cycle_minutes = config.CYCLE_INTERVAL_MINUTES
@@ -177,7 +182,9 @@ class UnifiedPredictionContext:
             'tv_on': thermal_features.get('tv_on', 0.0),
             'use_forecasts': use_forecasts,
             'current_outdoor': outdoor_temp,
-            'current_pv': pv_power
+            'current_pv': pv_power,
+            'target_temp': target_temp,
+            'current_temp': current_temp,
         }
         
         return context
@@ -221,7 +228,9 @@ class PredictionContextManager:
         self._features = features
         
     def create_context(self, outdoor_temp: float, pv_power: float,
-                       thermal_features: Dict) -> Dict:
+                       thermal_features: Dict,
+                       target_temp: Optional[float] = None,
+                       current_temp: Optional[float] = None) -> Dict:
         """
         Create and store unified prediction context.
 
@@ -233,7 +242,9 @@ class PredictionContextManager:
                 features=self._features,
                 outdoor_temp=outdoor_temp,
                 pv_power=pv_power,
-                thermal_features=thermal_features
+                thermal_features=thermal_features,
+                target_temp=target_temp,
+                current_temp=current_temp
             )
         )
         return self._current_context

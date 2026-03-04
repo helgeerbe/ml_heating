@@ -171,7 +171,7 @@ class BlockingStateManager:
                 "Failed to persist cleared blocking state.", exc_info=True
             )
             
-        return True  # Skip this cycle
+        return True  # Skip cycle
     
     def _execute_grace_period(
         self, ha_client: HAClient, state: SystemState, age: float
@@ -268,6 +268,31 @@ class BlockingStateManager:
             
         # Determine grace target and wait condition
         wait_for_cooling = delta0 > 0
+
+        # SAFETY CHECK: If we are underheating (current < target), we should
+        # NEVER wait for the system to cool down during a grace period. This
+        # can happen if the model predicts a low required outlet temp (e.g.
+        # 20C) but the system is currently running hotter (e.g. 35C) and the
+        # house is cold. Waiting would cause a temperature drop.
+        try:
+            if wait_for_cooling and float(current_indoor) < float(
+                target_indoor
+            ):
+                logging.warning(
+                    "Grace Period Safety: Underheating detected "
+                    "(%.1f°C < %.1f°C) but model requests cooling "
+                    "(%.1f°C -> %.1f°C). Skipping wait to prevent heat loss.",
+                    float(current_indoor),
+                    float(target_indoor),
+                    actual_outlet_temp_start,
+                    grace_target,
+                )
+                return
+        except (ValueError, TypeError):
+            logging.warning(
+                "Could not compare indoor vs target temps for grace period "
+                "safety check."
+            )
             
         logging.info(
             "Intelligent recovery: setting new outlet target to %.1f°C "
@@ -350,6 +375,37 @@ class BlockingStateManager:
                     "Cannot read actual_outlet_temp, exiting grace period."
                 )
                 break
+
+            # SAFETY CHECK: If we are underheating (current < target), we
+            # should NEVER wait for the system to cool down during a grace
+            # period. This check is repeated inside the loop because
+            # conditions might change (e.g. indoor temp drops further).
+            if wait_for_cooling:
+                try:
+                    current_indoor_poll = ha_client.get_state(
+                        config.INDOOR_TEMP_ENTITY_ID, all_states_poll
+                    )
+                    target_indoor_poll = ha_client.get_state(
+                        config.TARGET_INDOOR_TEMP_ENTITY_ID, all_states_poll
+                    )
+
+                    if (
+                        current_indoor_poll is not None
+                        and target_indoor_poll is not None
+                        and float(current_indoor_poll) < float(
+                            target_indoor_poll
+                        )
+                    ):
+                        logging.warning(
+                            "Grace Period Safety (Loop): Underheating "
+                            "detected (%.1f°C < %.1f°C) while waiting for "
+                            "cooling. Aborting wait to prevent heat loss.",
+                            float(current_indoor_poll),
+                            float(target_indoor_poll),
+                        )
+                        break
+                except (ValueError, TypeError):
+                    pass  # Ignore errors in safety check
 
             # --- Dynamic Target Recalculation ---
             if wrapper and thermal_features:

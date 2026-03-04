@@ -340,10 +340,21 @@ class EnhancedModelWrapper:
         prediction_context_manager.set_features(features)
 
         # Create unified context
+        target_temp = (
+            self._current_features.get("target_temp")
+            if hasattr(self, "_current_features") else None
+        )
+        current_temp = (
+            self._current_indoor
+            if hasattr(self, "_current_indoor") else None
+        )
+
         context = prediction_context_manager.create_context(
             outdoor_temp=outdoor_temp,
             pv_power=pv_power,
-            thermal_features=thermal_features
+            thermal_features=thermal_features,
+            target_temp=target_temp,
+            current_temp=current_temp,
         )
 
         # Return values in expected format
@@ -413,6 +424,12 @@ class EnhancedModelWrapper:
         # Use natural system bounds. Let binary search and physics model
         # handle optimal outlet temps.
         outlet_min, outlet_max = config.CLAMP_MIN_ABS, config.CLAMP_MAX_ABS
+
+        # SAFETY: If heating is required (target > current), enforce a minimum
+        # floor of 25°C to prevent the model from suggesting "cooling"
+        # temperatures (e.g. 14°C) just because of high PV or other gains.
+        if target_indoor > current_indoor:
+            outlet_min = max(outlet_min, 25.0)
 
         logging.debug(
             f"🔧 Using natural bounds: outlet_min={outlet_min:.1f}°C, "

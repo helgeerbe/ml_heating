@@ -509,10 +509,22 @@ class ThermalEquilibriumModel:
             return
 
         if is_blocking_active:
-            logging.debug(
-                "⏸️ Skipping learning during blocking event (DHW/Defrost)"
-            )
-            return
+            # Check if this is a safety floor event (outlet temp clamped to min)
+            # If so, we should still learn because the model might be
+            # over-optimistic
+            outlet_temp = prediction_context.get("outlet_temp")
+            is_safety_floor = False
+            # Assuming 25 is safety floor
+            if outlet_temp is not None and outlet_temp <= 25.0:
+                is_safety_floor = True
+
+            if not is_safety_floor:
+                logging.debug(
+                    "⏸️ Skipping learning during blocking event (DHW/Defrost)"
+                )
+                return
+            else:
+                logging.info("⚠️ Learning enabled during safety floor event")
 
         if self._detect_parameter_corruption():
             logging.warning(
@@ -649,13 +661,24 @@ class ThermalEquilibriumModel:
         has_catastrophic_error = any(error >= 5.0 for error in recent_errors)
 
         if has_catastrophic_error:
-            max_error = max(recent_errors)
-            logging.warning(
-                "🛑 Blocking parameter updates due to catastrophic error "
-                "(%.1f°C)",
-                max_error,
-            )
-            return
+            # Check if this is due to PV over-estimation (predicted >> actual)
+            # In this case, we WANT to learn (reduce PV weight)
+            raw_errors = [p["error"] for p in recent_predictions]
+            has_large_negative_error = any(e <= -5.0 for e in raw_errors)
+
+            if has_large_negative_error:
+                logging.warning(
+                    "⚠️ Large negative error (over-prediction) detected - "
+                    "Allowing learning to correct model."
+                )
+            else:
+                max_error = max(recent_errors)
+                logging.warning(
+                    "🛑 Blocking parameter updates due to catastrophic error "
+                    "(%.1f°C)",
+                    max_error,
+                )
+                return
 
         thermal_gradient = self._calculate_thermal_time_constant_gradient(
             recent_predictions
@@ -767,9 +790,9 @@ class ThermalEquilibriumModel:
         )
 
         # Clip PV/TV updates (limit max change per step)
-        # Reduced from 0.05 to 0.0005 to prevent massive jumps in a single step
-        # The parameter range is typically 0.0001-0.005, so 0.05 was 10x max
-        max_weight_change = 0.0005
+        # Increased from 0.0005 to 0.005 to allow faster adaptation for PV
+        # The parameter range is typically 0.0001-0.005, so 0.0005 was too slow
+        max_weight_change = 0.005
         pv_heat_weight_update = np.clip(
             pv_heat_weight_update, -max_weight_change, max_weight_change
         )
@@ -1091,12 +1114,32 @@ class ThermalEquilibriumModel:
             )
 
             if has_catastrophic_error:
-                base_rate = 0.0
-                max_error = max(recent_errors)
-                logging.warning(
-                    "🛑 Catastrophic error (%.1f°C) - learning DISABLED",
-                    max_error,
-                )
+                # Check if this is due to PV over-estimation (predicted >>
+                # actual) In this case, we WANT to learn (reduce PV weight)
+                # We need to check the sign of the error.
+                # recent_errors contains absolute errors, so we need to check
+                # the raw errors.
+                raw_errors = [p["error"] for p in self.prediction_history[-5:]]
+                # Error = Actual - Predicted.
+                # If Predicted >> Actual, Error is large negative.
+                # So we check if we have large negative errors.
+
+                has_large_negative_error = any(e <= -5.0 for e in raw_errors)
+
+                if has_large_negative_error:
+                    logging.warning(
+                        "⚠️ Large negative error (over-prediction) detected - "
+                        "Allowing learning to correct model."
+                    )
+                    # Allow learning, maybe even boost it?
+                    base_rate *= 2.0
+                else:
+                    base_rate = 0.0
+                    max_error = max(recent_errors)
+                    logging.warning(
+                        "🛑 Catastrophic error (%.1f°C) - learning DISABLED",
+                        max_error,
+                    )
 
             elif len(self.prediction_history) >= 5:
                 avg_error = np.mean(recent_errors)
@@ -1154,6 +1197,8 @@ class ThermalEquilibriumModel:
 
         time_step_hours = time_step_minutes / 60.0
         num_steps = int(time_horizon_hours * 60 / time_step_minutes)
+        if num_steps == 0:
+            num_steps = 1
 
         # Handle outdoor temperature forecast (array or scalar)
         if isinstance(outdoor_temp, (list, np.ndarray)):
