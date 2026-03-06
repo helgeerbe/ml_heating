@@ -69,7 +69,7 @@ class ThermalStateValidator:
         
         # Validate parameter ranges
         param_ranges = {
-            "thermal_time_constant": (0.1, 24.0),
+            "thermal_time_constant": (0.1, 100.0),
             "heat_loss_coefficient": (0.001, 1.0),
             "outlet_effectiveness": (0.001, 1.0),
             "pv_heat_weight": (0.0, 0.1),

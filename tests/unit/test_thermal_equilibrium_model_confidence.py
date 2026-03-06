@@ -15,7 +15,7 @@ def clean_model():
     model = ThermalEquilibriumModel()
     # Set realistic test parameters
     model.thermal_time_constant = 4.0
-    model.heat_loss_coefficient = 1.2
+    model.heat_loss_coefficient = 0.5  # Adjusted to be within valid bounds (0.01, 0.8)
     model.outlet_effectiveness = 0.75
     model.external_source_weights = {
         "pv": 0.0001,

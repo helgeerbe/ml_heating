@@ -1,5 +1,28 @@
 # Active Context - Current Work & Decision State
 
+### 🎯 **SUNRISE TEMPERATURE DROP FIX - March 6, 2026**
+
+**CRITICAL FIX**: Resolved an issue where the heating target would drop significantly (e.g., 43°C -> 35°C) at sunrise, causing the house to cool down just as the day began.
+
+#### ✅ **SOLAR GAIN FACTOR ADJUSTED**
+- **Context**: User reported that the heating system would throttle down aggressively at 08:00 AM, anticipating solar gain that hadn't yet warmed the house.
+- **Diagnosis**: The `solar_gain_factor` in `src/thermal_equilibrium_model.py` was set to `1.0`, assuming immediate and complete conversion of solar radiation into indoor temperature rise. This ignored the thermal mass of the building and the time lag required for solar energy to penetrate the envelope.
+- **Fix**:
+    - Reduced `solar_gain_factor` from `1.0` to `0.3` in `src/thermal_equilibrium_model.py`.
+    - This conservative value acknowledges that only a fraction of the solar radiation immediately contributes to the heat balance relevant for the heating system's setpoint.
+- **Result**: The system now maintains appropriate heating levels through the sunrise transition, preventing the "morning chill" effect.
+- **Verification**:
+    - **Reproduction Script**: `validation/verify_sunrise_drop.py` demonstrated that with factor 1.0, the target dropped by ~8°C. With factor 0.3, the drop was reduced to ~2°C, which is physically realistic.
+    - **Unit Tests**: Updated `tests/unit/test_thermal_equilibrium_model.py` to assert the new behavior.
+
+#### ✅ **DIFFERENTIAL SCALING DISABLED**
+- **Context**: Despite the solar gain fix, the system was still under-heating during the morning warm-up phase when high outlet temperatures were required.
+- **Diagnosis**: The `differential-based effectiveness scaling` logic was artificially boosting the `outlet_effectiveness` when the difference between outlet and indoor temperature was high (which happens during warm-up). This caused the model to predict a higher equilibrium temperature than reality, leading it to request a lower outlet temperature than necessary.
+- **Fix**:
+    - Disabled the scaling factor (set to 0.0) in `src/thermal_equilibrium_model.py`.
+    - The model now uses the base `outlet_effectiveness` consistently, regardless of the temperature differential.
+- **Result**: The model no longer over-predicts efficiency at high temperatures, ensuring it requests sufficient heat to reach the target.
+
 ### 🎯 **STATE POISONING BUG FIX - March 4, 2026**
 
 **CRITICAL FIX**: Resolved a "State Poisoning" bug where the heating target would drop to ~25°C after Domestic Hot Water (DHW) or Defrost cycles and persist into the next heating cycle. This was caused by the system overwriting the persistent target temperature with the low *actual* outlet temperature during the grace period.

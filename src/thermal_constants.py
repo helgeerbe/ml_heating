@@ -37,7 +37,7 @@ class PhysicsConstants:
     
     # Time constants (hours)
     MIN_TIME_CONSTANT = 0.5    # Minimum thermal time constant (30 minutes)
-    MAX_TIME_CONSTANT = 24.0   # Maximum thermal time constant (24 hours)
+    MAX_TIME_CONSTANT = 100.0  # Maximum thermal time constant (100 hours)
     
     # Heat loss bounds
     MIN_HEAT_LOSS_COEFF = 0.1  # Minimum heat loss coefficient
@@ -187,6 +187,7 @@ class ThermalUnits:
         'pv_heat_weight': '°C/W',
         'fireplace_heat_weight': '°C',
         'tv_heat_weight': '°C',
+        'solar_lag_minutes': 'minutes',
         
         # Temperature measurements
         'indoor_temperature': '°C',
@@ -240,6 +241,7 @@ class ThermalUnits:
         'pv_heat_weight': (0.0, 0.01),  # 0 to 0.01 °C/W
         'fireplace_heat_weight': (0.0, 10.0),  # 0 to 10°C
         'tv_heat_weight': (0.0, 2.0),  # 0 to 2°C
+        'solar_lag_minutes': (0.0, 180.0),  # 0 to 180 minutes
         'learning_rate': (0.001, 1.0),  # 0.1% to 100%
         'learning_confidence': (0.1, 10.0),  # 10% to 1000%
         'safety_margin': (0.1, 5.0),  # 0.1°C to 5°C

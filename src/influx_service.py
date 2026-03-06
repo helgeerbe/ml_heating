@@ -204,6 +204,12 @@ class InfluxService:
             config.INDOOR_TEMP_ENTITY_ID, steps, 21.0
         )
 
+    def fetch_pv_history(self, steps: int) -> list[float]:
+        """Fetches the historical PV power."""
+        return self.fetch_history(
+            config.PV_POWER_ENTITY_ID, steps, 0.0
+        )
+
     def fetch_recent_history(
         self,
         entities: list[str],

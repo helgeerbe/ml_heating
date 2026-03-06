@@ -30,6 +30,9 @@ class ThermalEquilibriumModel:
     """
 
     def __init__(self):
+        # Initialize default attributes to ensure existence
+        self.solar_lag_minutes = config.SOLAR_LAG_MINUTES
+
         # Load calibrated parameters first, fallback to config defaults
         self._load_thermal_parameters()
 
@@ -81,6 +84,12 @@ class ThermalEquilibriumModel:
                 self.outlet_effectiveness = (
                     baseline_params["outlet_effectiveness"]
                     + adjustments.get("outlet_effectiveness_delta", 0.0)
+                )
+                self.solar_lag_minutes = (
+                    baseline_params.get(
+                        "solar_lag_minutes", config.SOLAR_LAG_MINUTES
+                    )
+                    + adjustments.get("solar_lag_minutes_delta", 0.0)
                 )
 
                 self.external_source_weights = {
@@ -193,6 +202,26 @@ class ThermalEquilibriumModel:
                             min(self.heat_loss_coefficient, hcl_bounds[1]),
                         )
 
+                    # Clamp thermal_time_constant
+                    ttc_bounds = ThermalParameterConfig.get_bounds(
+                        "thermal_time_constant"
+                    )
+                    if not (
+                        ttc_bounds[0]
+                        <= self.thermal_time_constant
+                        <= ttc_bounds[1]
+                    ):
+                        logging.warning(
+                            "⚠️ Clamping thermal_time_constant %.2f to "
+                            "bounds %s",
+                            self.thermal_time_constant,
+                            ttc_bounds,
+                        )
+                        self.thermal_time_constant = max(
+                            ttc_bounds[0],
+                            min(self.thermal_time_constant, ttc_bounds[1]),
+                        )
+
                     # Clamp outlet_effectiveness
                     oe_bounds = ThermalParameterConfig.get_bounds(
                         "outlet_effectiveness"
@@ -292,6 +321,7 @@ class ThermalEquilibriumModel:
             "heat_loss_coefficient"
         )
         self.outlet_effectiveness = thermal_params.get("outlet_effectiveness")
+        self.solar_lag_minutes = thermal_params.get("solar_lag_minutes")
 
         self.external_source_weights = {
             "pv": thermal_params.get("pv_heat_weight"),
@@ -388,6 +418,9 @@ class ThermalEquilibriumModel:
         self.tv_heat_weight_bounds = ThermalParameterConfig.get_bounds(
             "tv_heat_weight"
         )
+        self.solar_lag_minutes_bounds = ThermalParameterConfig.get_bounds(
+            "solar_lag_minutes"
+        )
 
         self.parameter_stability_threshold = (
             PhysicsConstants.THERMAL_STABILITY_THRESHOLD
@@ -396,12 +429,65 @@ class ThermalEquilibriumModel:
             PhysicsConstants.ERROR_IMPROVEMENT_THRESHOLD
         )
 
+    def _calculate_effective_solar(
+        self, pv_input: float | List[float], lag_minutes: float = None
+    ) -> float:
+        """
+        Calculate effective solar power using a rolling average window.
+        Uses fractional steps to ensure differentiability for optimization.
+
+        Args:
+            pv_input: Current PV power (float) or history list (List[float])
+            lag_minutes: Window size in minutes (defaults to self.solar_lag)
+
+        Returns:
+            Effective PV power (float)
+        """
+        if lag_minutes is None:
+            lag_minutes = self.solar_lag_minutes
+
+        # Handle scalar input or empty list
+        if isinstance(pv_input, (int, float)):
+            return float(pv_input)
+        if not pv_input:
+            return 0.0
+
+        # Avoid division by zero for very small lags
+        if lag_minutes < 1e-3:
+            return float(pv_input[-1])
+
+        # Calculate number of steps to average (fractional)
+        step_minutes = config.HISTORY_STEP_MINUTES
+        float_steps = lag_minutes / step_minutes
+
+        # Split into full steps and fractional remainder
+        num_full_steps = int(float_steps)
+        fraction = float_steps - num_full_steps
+
+        total_val = 0.0
+
+        # Add full steps (most recent N steps)
+        if num_full_steps > 0:
+            full_window = pv_input[-num_full_steps:]
+            total_val += sum(full_window)
+
+        # Add fractional step (the one just before the full window)
+        if fraction > 0:
+            # Index for the partial step is -(num_full_steps + 1)
+            partial_idx = -(num_full_steps + 1)
+            if abs(partial_idx) <= len(pv_input):
+                total_val += pv_input[partial_idx] * fraction
+            # If history isn't long enough, we assume 0 for the missing
+            # past data
+
+        return float(total_val / float_steps)
+
     def predict_equilibrium_temperature(
         self,
         outlet_temp: float,
         outdoor_temp: float,
         current_indoor: float,
-        pv_power: float = 0,
+        pv_power: float | List[float] = 0,
         fireplace_on: float = 0,
         tv_on: float = 0,
         thermal_power: float = None,
@@ -414,7 +500,11 @@ class ThermalEquilibriumModel:
         Supports both temperature-based approximation and energy-based
         modeling.
         """
-        heat_from_pv = pv_power * self.external_source_weights.get("pv", 0.0)
+        # Calculate effective solar power with lag
+        effective_pv = self._calculate_effective_solar(pv_power)
+        heat_from_pv = effective_pv * self.external_source_weights.get(
+            "pv", 0.0
+        )
 
         if fireplace_power_kw is not None:
             heat_from_fireplace = fireplace_power_kw
@@ -456,12 +546,42 @@ class ThermalEquilibriumModel:
             return equilibrium_temp
 
         # Fallback: Temperature-based approximation
+        
+        # RESTORED: Differential-based effectiveness scaling
+        # Radiators are more effective at higher temperatures (non-linear
+        # output). We scale the base effectiveness based on how hot the outlet
+        # is relative to the room.
+        # Base scaling factor: 1.0 at 45°C (typical), increases for hotter
+        # water.
+        #
+        # UPDATE (2026-03-05): Disabled scaling (factor 0.0) as it was causing
+        # significant over-prediction of indoor temperature at high outlet
+        # temps, leading to under-heating.
+        if outlet_temp > current_indoor:
+            temp_diff = max(1.0, outlet_temp - current_indoor)
+            # Scale factor increases with temperature difference
+            # 0.5 at 25°C diff, 1.0 at 45°C diff, 1.5 at 65°C diff
+            # REDUCED TO 0.0 to disable scaling temporarily
+            scaling_factor = 1.0 + (temp_diff - 25.0) * 0.0
+            effective_outlet_effectiveness = (
+                self.outlet_effectiveness * max(0.8, scaling_factor)
+            )
+            if not _suppress_logging and scaling_factor > 1.1:
+                logging.debug(
+                    "🔥 High-Diff Scaling: diff=%.1f, factor=%.3f, "
+                    "base_eff=%.3f, effective_eff=%.3f",
+                    temp_diff, scaling_factor, self.outlet_effectiveness,
+                    effective_outlet_effectiveness
+                )
+        else:
+            effective_outlet_effectiveness = self.outlet_effectiveness
+
         total_conductance = (
-            self.heat_loss_coefficient + self.outlet_effectiveness
+            self.heat_loss_coefficient + effective_outlet_effectiveness
         )
         if total_conductance > 0:
             equilibrium_temp = (
-                self.outlet_effectiveness * outlet_temp
+                effective_outlet_effectiveness * outlet_temp
                 + self.heat_loss_coefficient * outdoor_temp
                 + external_thermal_power
             ) / total_conductance
@@ -509,8 +629,8 @@ class ThermalEquilibriumModel:
             return
 
         if is_blocking_active:
-            # Check if this is a safety floor event (outlet temp clamped to min)
-            # If so, we should still learn because the model might be
+            # Check if this is a safety floor event (outlet temp clamped to
+            # min). If so, we should still learn because the model might be
             # over-optimistic
             outlet_temp = prediction_context.get("outlet_temp")
             is_safety_floor = False
@@ -548,6 +668,11 @@ class ThermalEquilibriumModel:
 
         prediction_error = actual_temp - predicted_temp
 
+        # Pass PV history if available for trajectory calculation
+        pv_input = prediction_context.get("pv_power_history")
+        if pv_input is None:
+            pv_input = prediction_context.get("pv_power", 0)
+
         predicted_trajectory = self.predict_thermal_trajectory(
             current_indoor=current_indoor,
             target_indoor=current_indoor,
@@ -555,7 +680,7 @@ class ThermalEquilibriumModel:
             outdoor_temp=prediction_context.get("outdoor_temp", 10.0),
             time_horizon_hours=config.CYCLE_INTERVAL_MINUTES / 60.0,
             time_step_minutes=config.CYCLE_INTERVAL_MINUTES,
-            pv_power=prediction_context.get("pv_power", 0),
+            pv_power=pv_input,
             fireplace_on=prediction_context.get("fireplace_on", 0),
             tv_on=prediction_context.get("tv_on", 0),
             thermal_power=prediction_context.get("thermal_power"),
@@ -577,6 +702,7 @@ class ThermalEquilibriumModel:
                 "thermal_time_constant": self.thermal_time_constant,
                 "heat_loss_coefficient": self.heat_loss_coefficient,
                 "outlet_effectiveness": self.outlet_effectiveness,
+                "solar_lag_minutes": self.solar_lag_minutes,
             },
             "shadow_mode": config.SHADOW_MODE,
             "system_state": system_state,
@@ -695,6 +821,9 @@ class ThermalEquilibriumModel:
         tv_heat_weight_gradient = (
             self._calculate_tv_heat_weight_gradient(recent_predictions)
         )
+        solar_lag_gradient = (
+            self._calculate_solar_lag_gradient(recent_predictions)
+        )
 
         current_learning_rate = self._calculate_adaptive_learning_rate()
 
@@ -703,6 +832,7 @@ class ThermalEquilibriumModel:
         old_outlet_effectiveness = self.outlet_effectiveness
         old_pv_heat_weight = self.pv_heat_weight
         old_tv_heat_weight = self.tv_heat_weight
+        old_solar_lag = self.solar_lag_minutes
 
         thermal_update = current_learning_rate * thermal_gradient
         heat_loss_coefficient_update = (
@@ -763,6 +893,9 @@ class ThermalEquilibriumModel:
         tv_heat_weight_update = (
             current_learning_rate * tv_heat_weight_gradient
         )
+        solar_lag_update = (
+            current_learning_rate * solar_lag_gradient * 100.0
+        )
 
         max_heat_loss_coefficient_change = (
             PhysicsConstants.MAX_HEAT_LOSS_COEFFICIENT_CHANGE
@@ -799,6 +932,9 @@ class ThermalEquilibriumModel:
         tv_heat_weight_update = np.clip(
             tv_heat_weight_update, -max_weight_change, max_weight_change
         )
+        
+        # Limit lag change to +/- 5 minutes per update
+        solar_lag_update = np.clip(solar_lag_update, -5.0, 5.0)
 
         self.thermal_time_constant = float(
             np.clip(
@@ -839,6 +975,14 @@ class ThermalEquilibriumModel:
                 self.tv_heat_weight_bounds[1],
             )
         )
+        
+        self.solar_lag_minutes = float(
+            np.clip(
+                self.solar_lag_minutes - solar_lag_update,
+                self.solar_lag_minutes_bounds[0],
+                self.solar_lag_minutes_bounds[1],
+            )
+        )
 
         thermal_change = abs(
             self.thermal_time_constant - old_thermal_time_constant
@@ -851,6 +995,7 @@ class ThermalEquilibriumModel:
         )
         pv_heat_weight_change = abs(self.pv_heat_weight - old_pv_heat_weight)
         tv_heat_weight_change = abs(self.tv_heat_weight - old_tv_heat_weight)
+        solar_lag_change = abs(self.solar_lag_minutes - old_solar_lag)
 
         self.parameter_history.append(
             {
@@ -860,6 +1005,7 @@ class ThermalEquilibriumModel:
                 "outlet_effectiveness": self.outlet_effectiveness,
                 "pv_heat_weight": self.pv_heat_weight,
                 "tv_heat_weight": self.tv_heat_weight,
+                "solar_lag_minutes": self.solar_lag_minutes,
                 "learning_rate": current_learning_rate,
                 "learning_confidence": self.learning_confidence,
                 "avg_recent_error": np.mean(
@@ -871,6 +1017,7 @@ class ThermalEquilibriumModel:
                     "outlet_effectiveness": outlet_effectiveness_gradient,
                     "pv_heat_weight": pv_heat_weight_gradient,
                     "tv_heat_weight": tv_heat_weight_gradient,
+                    "solar_lag": solar_lag_gradient,
                 },
                 "changes": {
                     "thermal": thermal_change,
@@ -878,6 +1025,7 @@ class ThermalEquilibriumModel:
                     "outlet_effectiveness": outlet_effectiveness_change,
                     "pv_heat_weight": pv_heat_weight_change,
                     "tv_heat_weight": tv_heat_weight_change,
+                    "solar_lag": solar_lag_change,
                 },
             }
         )
@@ -891,6 +1039,7 @@ class ThermalEquilibriumModel:
             or outlet_effectiveness_change > 0.0001
             or pv_heat_weight_change > 0.0001
             or tv_heat_weight_change > 0.0001
+            or solar_lag_change > 0.1
         ):
             logging.info(
                 "Adaptive learning update: "
@@ -898,7 +1047,8 @@ class ThermalEquilibriumModel:
                 "heat_loss_coeff: %.4f→%.4f (Δ%+.5f), "
                 "outlet_eff: %.3f→%.3f (Δ%+.3f), "
                 "pv_weight: %.3f→%.3f (Δ%+.3f), "
-                "tv_weight: %.3f→%.3f (Δ%+.3f)",
+                "tv_weight: %.3f→%.3f (Δ%+.3f), "
+                "solar_lag: %.1f→%.1f (Δ%+.1f)",
                 old_thermal_time_constant,
                 self.thermal_time_constant,
                 thermal_change,
@@ -914,6 +1064,9 @@ class ThermalEquilibriumModel:
                 old_tv_heat_weight,
                 self.tv_heat_weight,
                 tv_heat_weight_change,
+                old_solar_lag,
+                self.solar_lag_minutes,
+                solar_lag_change,
             )
 
             self._save_learning_to_thermal_state(
@@ -927,12 +1080,13 @@ class ThermalEquilibriumModel:
             logging.debug(
                 "Micro learning update: thermal_Δ=%+.5f, "
                 "heat_loss_coeff_Δ=%+.7f, outlet_eff_Δ=%+.5f, "
-                "pv_Δ=%+.5f, tv_Δ=%+.5f",
+                "pv_Δ=%+.5f, tv_Δ=%+.5f, lag_Δ=%+.1f",
                 thermal_change,
                 heat_loss_coefficient_change,
                 outlet_effectiveness_change,
                 pv_heat_weight_change,
                 tv_heat_weight_change,
+                solar_lag_change,
             )
 
     def _calculate_parameter_gradient(
@@ -1055,6 +1209,19 @@ class ThermalEquilibriumModel:
         return self._calculate_parameter_gradient(
             "tv_heat_weight",
             PhysicsConstants.TV_HEAT_WEIGHT_EPSILON,
+            recent_predictions,
+        )
+
+    def _calculate_solar_lag_gradient(
+        self, recent_predictions: List[Dict]
+    ) -> float:
+        """
+        Calculate solar lag gradient.
+        """
+        # Use a larger epsilon for lag (e.g., 5 minutes) to see an effect
+        return self._calculate_parameter_gradient(
+            "solar_lag_minutes",
+            5.0,
             recent_predictions,
         )
 
@@ -1226,34 +1393,45 @@ class ThermalEquilibriumModel:
             outdoor_forecasts = [outdoor_temp] * num_steps
 
         # Handle PV power forecast (array or scalar)
-        if isinstance(pv_power, (list, np.ndarray)):
-            source_len = len(pv_power)
-            if source_len == num_steps:
-                pv_power_forecasts = list(pv_power)
-            else:
-                indices = np.linspace(0, source_len - 1, num_steps)
-                pv_power_forecasts = np.interp(
-                    indices, np.arange(source_len), pv_power
-                ).tolist()
-        elif pv_forecasts:
+        # CRITICAL: For trajectory, we need to maintain the rolling buffer
+        # Initialize buffer with history if available, else current value
+        pv_buffer = []
+        if isinstance(pv_power, list):
+            pv_buffer = list(pv_power)
+        else:
+            # If scalar, assume constant history for initialization
+            # (not ideal but safe fallback)
+            pv_buffer = [float(pv_power)] * 18  # 3 hours of history
+
+        # Prepare forecast source
+        if pv_forecasts:
             source_len = len(pv_forecasts)
             source_times = np.linspace(0, time_horizon_hours, source_len)
             target_times = np.linspace(0, time_horizon_hours, num_steps)
-            pv_power_forecasts = np.interp(
+            pv_future_values = np.interp(
                 target_times, source_times, pv_forecasts
             ).tolist()
         else:
-            pv_power_forecasts = [pv_power] * num_steps
+            # If no forecast, assume persistence of last known value
+            last_val = pv_buffer[-1] if pv_buffer else 0.0
+            pv_future_values = [last_val] * num_steps
 
         for step in range(num_steps):
             future_outdoor = outdoor_forecasts[step]
-            future_pv = pv_power_forecasts[step]
+            
+            # Update PV buffer: append forecast, remove oldest
+            next_pv_val = pv_future_values[step]
+            pv_buffer.append(next_pv_val)
+            if len(pv_buffer) > 18:  # Keep buffer size manageable
+                pv_buffer.pop(0)
 
+            # Pass the updated buffer to predict_equilibrium_temperature
+            # It will calculate the effective solar based on solar_lag_minutes
             equilibrium_temp = self.predict_equilibrium_temperature(
                 outlet_temp=outlet_temp,
                 outdoor_temp=future_outdoor,
                 current_indoor=current_temp,
-                pv_power=future_pv,
+                pv_power=pv_buffer,
                 fireplace_on=fireplace_on,
                 tv_on=tv_on,
                 thermal_power=thermal_power,
@@ -1705,34 +1883,6 @@ class ThermalEquilibriumModel:
                 "⚠️ Parameter drift detected: High heat loss (%.2f) "
                 "with low effectiveness (%.2f) indicates broken learning "
                 "state",
-                self.heat_loss_coefficient,
-                self.outlet_effectiveness,
-            )
-            return True
-
-        # Enhanced check for "borderline bad" combination that causes 65C
-        if (
-            self.heat_loss_coefficient > 0.8
-            and self.outlet_effectiveness < 0.35
-        ):
-            logging.warning(
-                "⚠️ Parameter drift detected: Moderate heat loss (%.2f) "
-                "with very low effectiveness (%.2f) causes extreme "
-                "predictions",
-                self.heat_loss_coefficient,
-                self.outlet_effectiveness,
-            )
-            return True
-
-        # Enhanced check for "borderline bad" combination that causes 65C
-        if (
-            self.heat_loss_coefficient > 0.8
-            and self.outlet_effectiveness < 0.35
-        ):
-            logging.warning(
-                "⚠️ Parameter drift detected: Moderate heat loss (%.2f) "
-                "with very low effectiveness (%.2f) causes extreme "
-                "predictions",
                 self.heat_loss_coefficient,
                 self.outlet_effectiveness,
             )

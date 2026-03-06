@@ -15,6 +15,7 @@ Key features:
 import json
 import os
 import logging
+import fcntl
 from typing import Dict, Any
 from datetime import datetime
 import numpy as np
@@ -133,8 +134,18 @@ class ThermalStateManager:
     def load_state(self, allow_backup_recovery: bool = True) -> bool:
         """Load thermal state from JSON file."""
         try:
-            with open(self.state_file, 'r') as f:
-                loaded_state = json.load(f)
+            # Use lock file to coordinate with writers
+            lock_file = f"{self.state_file}.lock"
+            
+            # Ensure lock file exists and acquire shared lock
+            # We use 'a+' to create if not exists without truncating
+            with open(lock_file, 'a+') as lock_f:
+                fcntl.flock(lock_f, fcntl.LOCK_SH)
+                try:
+                    with open(self.state_file, 'r') as f:
+                        loaded_state = json.load(f)
+                finally:
+                    fcntl.flock(lock_f, fcntl.LOCK_UN)
 
             # Validate and merge with default structure
             self.state = self._merge_with_defaults(loaded_state)
@@ -203,7 +214,7 @@ class ThermalStateManager:
             return False
 
     def save_state(self) -> bool:
-        """Save thermal state to JSON file."""
+        """Save thermal state to JSON file using atomic write and locking."""
         try:
             # Update metadata
             self.state["metadata"]["last_updated"] = datetime.now().isoformat()
@@ -211,8 +222,29 @@ class ThermalStateManager:
             # Convert numpy types to native Python for JSON serialization
             serializable_state = self._convert_numpy_types(self.state)
 
-            with open(self.state_file, 'w') as f:
-                json.dump(serializable_state, f, indent=2)
+            # Use a separate lock file to coordinate writes
+            lock_file = f"{self.state_file}.lock"
+            
+            # Acquire exclusive lock on lock file
+            with open(lock_file, 'w') as lock_f:
+                fcntl.flock(lock_f, fcntl.LOCK_EX)
+                try:
+                    # Atomic write pattern: write to temp file then rename
+                    # This prevents "Expecting value: line 1 column 1" errors (empty file)
+                    # and "Extra data" errors (partial writes)
+                    temp_file = f"{self.state_file}.tmp"
+                    
+                    with open(temp_file, 'w') as f:
+                        json.dump(serializable_state, f, indent=2)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    
+                    # Atomic rename - this is the critical step that ensures
+                    # readers never see a corrupted file
+                    os.replace(temp_file, self.state_file)
+                finally:
+                    # Release lock
+                    fcntl.flock(lock_f, fcntl.LOCK_UN)
 
             logging.debug("💾 Saved unified thermal state to %s", self.state_file)
             return True

@@ -46,7 +46,8 @@ def enforce_tdd_thermal_parameters(monkeypatch):
         "MIN_LEARNING_RATE": "0.01",
         "MAX_LEARNING_RATE": "0.2",
         "LEARNING_CONFIDENCE": "3.0",
-        "RECENT_ERRORS_WINDOW": "10"
+        "RECENT_ERRORS_WINDOW": "10",
+        "SOLAR_LAG_MINUTES": "45.0"
     }
     
     for key, value in tdd_params.items():

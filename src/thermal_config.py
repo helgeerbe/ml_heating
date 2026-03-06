@@ -43,6 +43,7 @@ class ThermalParameterConfig:
         'max_learning_rate': 0.1,
         'heat_loss_coefficient': 0.4,      # 1/hour (Corrected baseline)
         'outlet_effectiveness': 0.5,      # dimensionless
+        'solar_lag_minutes': 45.0,        # minutes
     }
 
     # Parameter bounds (min, max) for optimization and validation
@@ -61,8 +62,9 @@ class ThermalParameterConfig:
         'learning_confidence': (1.0, 5.0),
         'min_learning_rate': (0.0001, 0.01),
         'max_learning_rate': (0.01, 0.2),
-        'heat_loss_coefficient': (0.01, 1.5),
-        'outlet_effectiveness': (0.3, 1.0),
+        'heat_loss_coefficient': (0.01, 0.8),
+        'outlet_effectiveness': (0.01, 2.0),
+        'solar_lag_minutes': (0.0, 180.0),
     }
 
     # Parameter descriptions for documentation and debugging
@@ -82,7 +84,8 @@ class ThermalParameterConfig:
         'min_learning_rate': 'Minimum learning rate',
         'max_learning_rate': 'Maximum learning rate',
         'heat_loss_coefficient': 'Heat loss coefficient (1/hour)',
-        'outlet_effectiveness': 'Outlet effectiveness (dimensionless)'
+        'outlet_effectiveness': 'Outlet effectiveness (dimensionless)',
+        'solar_lag_minutes': 'Effective delay/smoothing window for solar gain'
     }
 
     # Parameter units for display and logging
@@ -100,7 +103,8 @@ class ThermalParameterConfig:
         'min_learning_rate': 'dimensionless',
         'max_learning_rate': 'dimensionless',
         'heat_loss_coefficient': '1/hour',
-        'outlet_effectiveness': 'dimensionless'
+        'outlet_effectiveness': 'dimensionless',
+        'solar_lag_minutes': 'minutes'
     }
 
     @classmethod

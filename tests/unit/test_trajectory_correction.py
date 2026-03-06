@@ -22,7 +22,7 @@ class TestBidirectionalTrajectoryCorrection:
             'tv_on': 0.0
         }
     
-    @patch('model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
+    @patch('src.model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
     def test_temperature_drop_detection_boundary_exact(self):
         """Test detection of temperature drop at exact boundary (20.9°C)."""
         # Mock trajectory with temperature dropping to exactly 20.9°C
@@ -48,7 +48,7 @@ class TestBidirectionalTrajectoryCorrection:
         # Should trigger correction since 20.9 <= 21.0 - 0.1
         assert result > 35.0, "Should apply correction for temp drop to boundary"
     
-    @patch('model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
+    @patch('src.model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
     def test_temperature_drop_detection_below_boundary(self):
         """Test detection of temperature drop below boundary (20.8°C)."""
         # Mock trajectory with temperature dropping below boundary
@@ -74,7 +74,7 @@ class TestBidirectionalTrajectoryCorrection:
         # Should trigger correction since 20.8 <= 21.0 - 0.1
         assert result > 35.0, "Should apply correction for temp drop below boundary"
     
-    @patch('model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
+    @patch('src.model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
     def test_temperature_rise_detection_boundary_exact(self):
         """Test detection of temperature rise at exact boundary (21.1°C)."""
         # Mock trajectory with temperature rising to exactly 21.1°C
@@ -100,7 +100,7 @@ class TestBidirectionalTrajectoryCorrection:
         # Should trigger correction since 21.1 >= 21.0 + 0.1
         assert result < 35.0, "Should apply -ve correction for temp rise to boundary"
     
-    @patch('model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
+    @patch('src.model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
     def test_temperature_rise_detection_above_boundary(self):
         """Test detection of temperature rise above boundary (21.2°C)."""
         # Mock trajectory with temperature rising above boundary
@@ -126,7 +126,7 @@ class TestBidirectionalTrajectoryCorrection:
         # Should trigger correction since 21.2 >= 21.0 + 0.1
         assert result < 35.0, "Should apply -ve correction for temp rise above boundary"
     
-    @patch('model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
+    @patch('src.model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
     def test_no_correction_within_boundaries(self):
         """Test no correction when temperature stays within boundaries."""
         # Mock trajectory with temperature staying within ±0.1°C
@@ -152,7 +152,7 @@ class TestBidirectionalTrajectoryCorrection:
         # Should NOT trigger correction since within boundaries
         assert result == 35.0, "Should not apply correction within boundaries"
     
-    @patch('model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
+    @patch('src.model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
     def test_cycle_aligned_trajectory_checking_with_violations(self):
         """Test cycle-time aligned logic checks for violations."""
         # Mock trajectory that reaches target but has boundary violations
@@ -177,7 +177,7 @@ class TestBidirectionalTrajectoryCorrection:
 
         assert result > 35.0, "Should apply correction for violations"
     
-    @patch('model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
+    @patch('src.model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
     def test_priority_1_does_not_override_when_too_slow(self):
         """Test PRIORITY 1 does not override when target is reached too slowly."""
         # Mock trajectory that reaches target slowly (should NOT override boundary checks)
@@ -203,7 +203,7 @@ class TestBidirectionalTrajectoryCorrection:
         # Should apply correction because target reached too slowly
         assert result > 35.0, "Should apply correction when target is reached too slowly"
     
-    @patch('model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
+    @patch('src.model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
     def test_trajectory_correction_handles_boundary_violations(self):
         """Test trajectory correction handles boundary violations."""
         # Mock trajectory with boundary violations (temperature drops and rises)
@@ -232,7 +232,7 @@ class TestBidirectionalTrajectoryCorrection:
         assert result > 35.0, "Should apply +ve correction for boundary violations"
         assert result <= 55.0, "Correction should be bounded by max physics correction"
     
-    @patch('model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
+    @patch('src.model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
     def test_internal_precision_with_sensor_boundaries(self):
         """Test internal precision values with sensor-aligned boundaries."""
         # Mock trajectory with high-precision internal values
@@ -258,7 +258,7 @@ class TestBidirectionalTrajectoryCorrection:
         # Should trigger correction since 20.876 <= 20.9 (21.0 - 0.1)
         assert result > 35.0, "Should handle internal precision with sensor boundaries"
     
-    @patch('model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
+    @patch('src.model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
     def test_correction_reason_messages(self):
         """Test correct reason messages for different scenarios."""
         # Test temperature drop reason
@@ -300,7 +300,7 @@ class TestBidirectionalTrajectoryCorrection:
         assert result_drop > 35.0, "Drop scenario should increase outlet temp"
         assert result_rise < 35.0, "Rise scenario should decrease outlet temp"
     
-    @patch('model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
+    @patch('src.model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
     def test_different_target_temperatures(self):
         """Test boundary logic with different target temps."""
         test_cases = [
@@ -345,7 +345,7 @@ class TestBidirectionalCorrectionIntegration:
         """Set up test environment."""
         self.wrapper = get_enhanced_model_wrapper()
     
-    @patch('model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
+    @patch('src.model_wrapper.config.TRAJECTORY_PREDICTION_ENABLED', True)
     def test_full_outlet_calculation_with_trajectory_correction(self):
         """Test full outlet temperature calculation with trajectory correction."""
         features = {

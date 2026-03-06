@@ -193,6 +193,8 @@ options:
   outdoor_coupling: 0.3
   # Thermal bridging losses factor (heat loss through building envelope)
   thermal_bridge_factor: 0.1
+  # Effective delay/smoothing window for solar gain (minutes)
+  solar_lag_minutes: 45.0
   
   # External Heat Source Weights - Only for sensors actually present in system
   # Solar heating contribution per 100W of PV power
@@ -343,6 +345,7 @@ schema:
   outlet_effectiveness: "float(0.01,1.5)"
   outdoor_coupling: "float(0.1,0.8)"
   thermal_bridge_factor: "float(0.01,0.5)"
+  solar_lag_minutes: "float(0.0,180.0)"
   # External Heat Source Weights - Float types with reasonable ranges
   pv_heat_weight: "float(0.0001,0.01)"
   fireplace_heat_weight: "float(0.1,10.0)"

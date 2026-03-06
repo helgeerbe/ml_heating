@@ -146,7 +146,8 @@ def test_calculate_mae_for_params(stable_periods_fixture):
         'outlet_effectiveness': 0.8,
         'pv_heat_weight': 0.001,
         'fireplace_heat_weight': 2.0,
-        'tv_heat_weight': 0.2
+        'tv_heat_weight': 0.2,
+        'solar_lag_minutes': 45.0
     }
 
     with patch('src.physics_calibration.ThermalEquilibriumModel') as mock_cls:
@@ -200,7 +201,7 @@ def test_calculate_direct_heat_loss():
     ]
 
     u_val = physics_calibration.calculate_direct_heat_loss(stable_periods)
-    
+
     # Expected: Average of 0.1 and 0.2 = 0.15
     assert u_val == pytest.approx(0.15)
 
@@ -212,7 +213,8 @@ def test_build_optimization_params():
         'outlet_effectiveness': 0.5,
         'pv_heat_weight': 0.001,
         'fireplace_heat_weight': 2.0,
-        'tv_heat_weight': 0.5
+        'tv_heat_weight': 0.5,
+        'solar_lag_minutes': 45.0
     }
     excluded_params = ['fireplace_heat_weight']
 
@@ -228,10 +230,11 @@ def test_build_optimization_params():
 
         assert 'fireplace_heat_weight' not in names
         assert 'pv_heat_weight' in names
-        # Expected params: heat_loss_coefficient, outlet_effectiveness, pv_heat_weight, tv_heat_weight
-        assert len(names) == 4
-        assert len(values) == 4
-        assert len(bounds) == 4
+        # Expected params: heat_loss_coefficient, outlet_effectiveness,
+        # pv_heat_weight, tv_heat_weight, solar_lag_minutes
+        assert len(names) == 5
+        assert len(values) == 5
+        assert len(bounds) == 5
         assert names[2] == 'pv_heat_weight'
         assert values[2] == 0.001
 
@@ -239,11 +242,11 @@ def test_build_optimization_params():
         names, values, bounds = physics_calibration.build_optimization_params(
             current_params, excluded_params, heat_loss_center=0.2
         )
-        
+
         # Find heat loss index
         hl_idx = names.index('heat_loss_coefficient')
         hl_bounds = bounds[hl_idx]
-        
+
         # Should be constrained to +/- 30% of 0.2 -> 0.14 to 0.26
         assert hl_bounds[0] == pytest.approx(0.14)
         assert hl_bounds[1] == pytest.approx(0.26)
@@ -282,4 +285,3 @@ def test_optimize_thermal_parameters_scipy_disabled(stable_periods_fixture):
             stable_periods_fixture
         )
         assert result is None
-

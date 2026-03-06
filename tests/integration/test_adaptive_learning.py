@@ -176,6 +176,9 @@ def test_source_attribution_learning():
 
     try:
         model = ThermalEquilibriumModel()
+        # Force safe parameters to avoid corruption detection during test
+        model.heat_loss_coefficient = 0.6
+        model.outlet_effectiveness = 0.6
         
         # --- Test TV Learning ---
         initial_tv_weight = model.external_source_weights['tv']

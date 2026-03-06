@@ -23,6 +23,7 @@ def clean_model():
         "fireplace": 1.5,
         "tv": 0.1
     }
+    model.solar_lag_minutes = 45.0
     return model
 
 
@@ -65,6 +66,37 @@ class TestCorrectedThermalPhysics:
         
         assert abs(predicted - expected) < 0.1, (
             f"Expected {expected:.1f}°C, got {predicted:.1f}°C")
+
+    def test_high_differential_scaling_is_disabled(self, clean_model):
+        """
+        Regression Test: Ensure differential effectiveness scaling is disabled.
+        
+        Previously, high temperature differences (Outlet - Indoor > 25) caused
+        an artificial boost in outlet effectiveness, leading to over-prediction.
+        This test ensures that even with a high differential (e.g. 40°C),
+        the standard weighted average logic applies.
+        """
+        outdoor_temp = 5.0
+        outlet_temp = 60.0  # High outlet temp
+        current_indoor = 20.0
+        # Diff = 40.0. Old logic would boost effectiveness by (40-25)*factor
+        
+        eff = clean_model.outlet_effectiveness
+        loss = clean_model.heat_loss_coefficient
+        
+        # Expected result using STANDARD (unscaled) effectiveness
+        expected = (eff * outlet_temp + loss * outdoor_temp) / (eff + loss)
+        
+        predicted = clean_model.predict_equilibrium_temperature(
+            outlet_temp=outlet_temp,
+            outdoor_temp=outdoor_temp,
+            current_indoor=current_indoor
+        )
+        
+        assert abs(predicted - expected) < 0.1, (
+            f"Scaling regression detected! Expected {expected:.1f}°C (unscaled), "
+            f"got {predicted:.1f}°C. High differential should not boost output."
+        )
 
     def test_energy_conservation_at_equilibrium(self, clean_model):
         """Test that energy is conserved at equilibrium (Heat Input = Heat Loss)."""

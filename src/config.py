@@ -368,3 +368,4 @@ ADAPTIVE_LEARNING_RATE: float = float(
 LEARNING_CONFIDENCE: float = float(os.getenv("LEARNING_CONFIDENCE", "3.0"))
 MIN_LEARNING_RATE: float = float(os.getenv("MIN_LEARNING_RATE", "0.001"))
 MAX_LEARNING_RATE: float = float(os.getenv("MAX_LEARNING_RATE", "0.1"))
+SOLAR_LAG_MINUTES: float = float(os.getenv("SOLAR_LAG_MINUTES", "45.0"))

@@ -5,10 +5,10 @@ class TestThermalConfigValues:
     """Test the actual configuration values in ThermalParameterConfig."""
 
     def test_heat_loss_coefficient_bounds(self):
-        """Verify heat_loss_coefficient bounds are tightened to (0.01, 1.5)."""
+        """Verify heat_loss_coefficient bounds are tightened to (0.01, 0.8)."""
         bounds = ThermalParameterConfig.get_bounds('heat_loss_coefficient')
-        assert bounds == (0.01, 1.5), \
-            "Heat loss coefficient bounds should be (0.01, 1.5)"
+        assert bounds == (0.01, 0.8), \
+            "Heat loss coefficient bounds should be (0.01, 0.8)"
 
     def test_all_parameters_have_bounds(self):
         """Ensure all default parameters have corresponding bounds."""

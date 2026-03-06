@@ -45,8 +45,8 @@ def test_build_physics_features_success(mock_ha_client, mock_influx_service):
     features_df, _ = build_physics_features(mock_ha_client, mock_influx_service)
     assert isinstance(features_df, pd.DataFrame)
     
-    # Verify column count (Original 37 + 6 new thermodynamic = 43)
-    assert len(features_df.columns) == 43
+    # Verify column count (Original 37 + 6 new thermodynamic + 1 solar lag = 44)
+    assert len(features_df.columns) == 44
     
     # Verify original features
     assert features_df['indoor_temp_lag_30m'][0] == 19.6

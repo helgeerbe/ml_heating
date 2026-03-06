@@ -167,10 +167,12 @@ def build_physics_features(
     
     # Get extended history for thermal momentum features
     # Need 6 steps for 60-minute lag analysis (6 * 10min = 60min)
-    extended_steps = max(6, config.HISTORY_STEPS)
+    # For PV lag, we need up to 3 hours (18 steps)
+    extended_steps = max(18, config.HISTORY_STEPS)
     outlet_history = influx_service.fetch_outlet_history(extended_steps)
     indoor_history = influx_service.fetch_indoor_history(extended_steps)
-    
+    pv_history = influx_service.fetch_pv_history(extended_steps)
+
     if len(indoor_history) < 6 or len(outlet_history) < 3:
         logging.error(
             "Insufficient history for enhanced features. "
@@ -426,6 +428,10 @@ def build_physics_features(
             max(0.0, (21.0 - temp_forecasts[3]) * 0.1)
             - (pv_forecasts[3] * 0.001)
         ),
+        
+        # === SOLAR THERMAL LAG FEATURES ===
+        # Pass the raw history for the model to process based on lag parameter
+        'pv_power_history': pv_history,
     }
     
     return pd.DataFrame([features]), outlet_history

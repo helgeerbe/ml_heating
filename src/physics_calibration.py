@@ -88,11 +88,16 @@ def train_thermal_equilibrium_model():
     )
 
     # Step 3b: Optimize dynamic parameters (transient)
-    logging.info("Step 3b: Optimizing dynamic parameters (thermal_time_constant)...")
+    logging.info(
+        "Step 3b: Optimizing dynamic parameters (thermal_time_constant)..."
+    )
 
-    # Create a temporary model with optimized static params for transient calibration
+    # Create a temporary model with optimized static params for transient
+    # calibration
     temp_model = ThermalEquilibriumModel()
-    temp_model.heat_loss_coefficient = optimized_params['heat_loss_coefficient']
+    temp_model.heat_loss_coefficient = optimized_params[
+        'heat_loss_coefficient'
+    ]
     temp_model.outlet_effectiveness = optimized_params['outlet_effectiveness']
 
     # Apply weights
@@ -109,12 +114,18 @@ def train_thermal_equilibrium_model():
 
     transient_samples = filter_transient_periods(df)
     if transient_samples:
-        best_tau = calibrate_transient_parameters(temp_model, transient_samples)
+        best_tau = calibrate_transient_parameters(
+            temp_model, transient_samples
+        )
         if best_tau:
             optimized_params['thermal_time_constant'] = best_tau
-            logging.info(f"✅ Optimized thermal_time_constant: {best_tau:.2f}h")
+            logging.info(
+                f"✅ Optimized thermal_time_constant: {best_tau:.2f}h"
+            )
     else:
-        logging.warning("⚠️ No transient periods found for dynamic calibration")
+        logging.warning(
+            "⚠️ No transient periods found for dynamic calibration"
+        )
 
     # Step 3c: Validate with cooling time constant (DHW periods)
     logging.info("Step 3c: Validating with cooling time constant...")
@@ -141,7 +152,9 @@ def train_thermal_equilibrium_model():
 
         # If heating calibration failed (default value) or has low confidence,
         # consider using cooling tau or a weighted average.
-        default_tau = ThermalParameterConfig.get_default('thermal_time_constant')
+        default_tau = ThermalParameterConfig.get_default(
+            'thermal_time_constant'
+        )
         if abs(heating_tau - default_tau) < 0.1 and cooling_r2 > 0.9:
             logging.info(
                 "Heating tau is default. Using high-confidence cooling tau."
@@ -163,7 +176,7 @@ def train_thermal_equilibrium_model():
         'outlet_effectiveness'
     ]
 
-    # Apply heat source weights
+    # Apply heat source weights and lag
     pv_weight = optimized_params.get(
         'pv_heat_weight',
         ThermalParameterConfig.get_default('pv_heat_weight')
@@ -176,10 +189,15 @@ def train_thermal_equilibrium_model():
         'tv_heat_weight',
         ThermalParameterConfig.get_default('tv_heat_weight')
     )
+    solar_lag = optimized_params.get(
+        'solar_lag_minutes',
+        ThermalParameterConfig.get_default('solar_lag_minutes')
+    )
 
     thermal_model.external_source_weights['pv'] = pv_weight
     thermal_model.external_source_weights['fireplace'] = fireplace_weight
     thermal_model.external_source_weights['tv'] = tv_weight
+    thermal_model.solar_lag_minutes = solar_lag
 
     # Set reasonable learning confidence based on optimization success
     thermal_model.learning_confidence = 3.0  # High confidence from scipy
@@ -206,6 +224,9 @@ def train_thermal_equilibrium_model():
         "TV heat weight: "
         f"{thermal_model.external_source_weights.get('tv', 0):.2f}"
     )
+    logging.info(
+        f"Solar lag: {thermal_model.solar_lag_minutes:.1f} min"
+    )
     logging.info(f"Optimization MAE: {optimized_params['mae']:.4f}°C")
     logging.info(
         f"Learning confidence: {thermal_model.learning_confidence:.3f}"
@@ -225,7 +246,8 @@ def train_thermal_equilibrium_model():
             'outlet_effectiveness': optimized_params['outlet_effectiveness'],
             'pv_heat_weight': pv_weight,
             'fireplace_heat_weight': fireplace_weight,
-            'tv_heat_weight': tv_weight
+            'tv_heat_weight': tv_weight,
+            'solar_lag_minutes': solar_lag
         }
 
         # Set as calibrated baseline
@@ -457,7 +479,8 @@ def main():
 
 def filter_transient_periods(df):
     """
-    Filter for transient periods (heating up or cooling down) for dynamic calibration.
+    Filter for transient periods (heating up or cooling down) for dynamic
+    calibration.
     Returns a list of samples, each containing current state and next state.
     """
     logging.info("=== FILTERING FOR TRANSIENT PERIODS ===")
@@ -478,7 +501,8 @@ def filter_transient_periods(df):
     df = df.sort_values('_time')
 
     # Calculate time diff in minutes
-    # Note: We need to handle the case where _time might not be datetime or might be missing
+    # Note: We need to handle the case where _time might not be datetime or
+    # might be missing
     try:
         time_diffs = df['_time'].diff().dt.total_seconds() / 60.0
     except Exception as e:
@@ -528,7 +552,8 @@ def filter_transient_periods(df):
 
 def calculate_cooling_time_constant(df):
     """
-    Estimate thermal time constant from cooling periods (e.g. during DHW cycles).
+    Estimate thermal time constant from cooling periods (e.g. during DHW
+    cycles).
     Uses log-linear regression on (T_indoor - T_outdoor).
     Returns (tau, r_squared).
     """
@@ -684,7 +709,10 @@ def calibrate_transient_parameters(thermal_model, transient_samples):
             # T_next = T_curr + (T_eq - T_curr) * (1 - exp(-dt/tau))
             dt = s['time_step_hours']
             approach = 1 - np.exp(-dt / tau)
-            pred_next = s['current_indoor'] + (eq_temp - s['current_indoor']) * approach
+            pred_next = (
+                s['current_indoor']
+                + (eq_temp - s['current_indoor']) * approach
+            )
 
             mse += (pred_next - s['next_indoor']) ** 2
 
@@ -731,6 +759,9 @@ def filter_stable_periods(df, temp_change_threshold=0.2, min_duration=20):
     pv_col = config.PV_POWER_ENTITY_ID.split(".", 1)[-1]
     fireplace_col = config.FIREPLACE_STATUS_ENTITY_ID.split(".", 1)[-1]
     tv_col = config.TV_STATUS_ENTITY_ID.split(".", 1)[-1]
+
+    # Ensure sorted by time for history extraction
+    df = df.sort_values('_time')
 
     # New sensors
     flow_rate_col = config.FLOW_RATE_ENTITY_ID.split(".", 1)[-1]
@@ -843,11 +874,20 @@ def filter_stable_periods(df, temp_change_threshold=0.2, min_duration=20):
                     delta_t
                 )
 
+        # Extract PV history for solar lag calculation
+        # (max 3 hours = ~36 samples)
+        pv_history = []
+        if pv_col in df.columns:
+            # Get up to 36 previous samples + current
+            hist_start = max(0, i - 36)
+            pv_history = df[pv_col].iloc[hist_start: i + 1].tolist()
+
         period = {
             'indoor_temp': center_row[indoor_col],
             'outlet_temp': center_row[outlet_col],
             'outdoor_temp': center_row[outdoor_col],
             'pv_power': center_row.get(pv_col, 0.0),
+            'pv_power_history': pv_history,
             'fireplace_on': center_row.get(fireplace_col, 0.0),
             'tv_on': center_row.get(tv_col, 0.0),
             'thermal_power_kw': thermal_power_kw,
@@ -954,8 +994,8 @@ def debug_thermal_predictions(stable_periods, sample_size=5):
 
 def calculate_direct_heat_loss(stable_periods):
     """
-    Calculate heat loss coefficient directly from periods with known thermal power
-    and minimal external heat sources.
+    Calculate heat loss coefficient directly from periods with known thermal
+    power and minimal external heat sources.
 
     U = P_thermal / (T_indoor - T_outdoor)
     """
@@ -1056,8 +1096,9 @@ def optimize_thermal_parameters(stable_periods):
 
     if data_availability['pv_power'] <= min_usage_threshold:
         excluded_params.append('pv_heat_weight')
+        excluded_params.append('solar_lag_minutes')
         logging.info(
-            "  🚫 Excluding pv_heat_weight "
+            "  🚫 Excluding pv_heat_weight and solar_lag_minutes "
             f"(only {data_availability['pv_power']:.1f}% usage)"
         )
 
@@ -1083,7 +1124,9 @@ def optimize_thermal_parameters(stable_periods):
             ThermalParameterConfig.get_default('pv_heat_weight'),
         'fireplace_heat_weight':
             ThermalParameterConfig.get_default('fireplace_heat_weight'),
-        'tv_heat_weight': ThermalParameterConfig.get_default('tv_heat_weight')
+        'tv_heat_weight': ThermalParameterConfig.get_default('tv_heat_weight'),
+        'solar_lag_minutes':
+            ThermalParameterConfig.get_default('solar_lag_minutes')
     }
 
     logging.info("=== PARAMETERS FOR OPTIMIZATION ===")
@@ -1099,10 +1142,28 @@ def optimize_thermal_parameters(stable_periods):
 
     logging.info(f"Optimizing {len(param_names)} parameters: {param_names}")
 
-    def objective_function(params):
-        """Calculate MAE for given parameters."""
+    # Define scaling factors for better optimization convergence
+    # We want all parameters to be roughly in the range [0.1, 10.0]
+    scaling_factors = []
+    for name in param_names:
+        if name == 'solar_lag_minutes':
+            scaling_factors.append(100.0)  # 45.0 -> 0.45
+        elif name == 'pv_heat_weight':
+            scaling_factors.append(0.001)  # 0.002 -> 2.0
+        else:
+            scaling_factors.append(1.0)
+
+    # Apply scaling to initial values and bounds
+    scaled_values = [v / s for v, s in zip(param_values, scaling_factors)]
+    scaled_bounds = [
+        (b[0] / s, b[1] / s) for b, s in zip(param_bounds, scaling_factors)
+    ]
+
+    def objective_function(scaled_params):
+        """Calculate MAE for given parameters (unscaling them first)."""
+        real_params = [p * s for p, s in zip(scaled_params, scaling_factors)]
         return calculate_mae_for_params(
-            params, param_names, stable_periods, current_params
+            real_params, param_names, stable_periods, current_params
         )
 
     logging.info(
@@ -1115,8 +1176,8 @@ def optimize_thermal_parameters(stable_periods):
     try:
         result = minimize(
             objective_function,
-            x0=param_values,
-            bounds=param_bounds,
+            x0=scaled_values,
+            bounds=scaled_bounds,
             method='L-BFGS-B',
             options={
                 'maxiter': 500,
@@ -1125,6 +1186,9 @@ def optimize_thermal_parameters(stable_periods):
                 'iprint': 2
             }
         )
+
+        # Unscale the result immediately for logging and downstream processing
+        result.x = result.x * np.array(scaling_factors)
 
         log_optimization_results(result, param_names, param_values)
 
@@ -1160,9 +1224,9 @@ def build_optimization_params(
         'outlet_effectiveness'
     ]
 
-    # Note: thermal_time_constant cannot be calibrated using stable (equilibrium)
-    # periods because the time-dependent exponential term decays to zero.
-    # It requires dynamic/transient data for calibration.
+    # Note: thermal_time_constant cannot be calibrated using stable
+    # (equilibrium) periods because the time-dependent exponential term decays
+    # to zero. It requires dynamic/transient data for calibration.
 
     for p in core_params:
         param_names.append(p)
@@ -1183,14 +1247,14 @@ def build_optimization_params(
                 f"{final_upper:.4f} based on direct calculation"
             )
         elif p == 'heat_loss_coefficient':
-            # Expand bounds for poorly insulated buildings if no direct calculation
-            # Default bounds might be too restrictive (e.g. 0.5 max)
+            # Use strict bounds from config to ensure physical realism
+            # Do not expand to 2.0 as that allows unrealistic "tent-like"
+            # physics
             default_bounds = ThermalParameterConfig.get_bounds(p)
-            expanded_upper = max(default_bounds[1], 2.0)  # Allow up to 2.0
-            param_bounds.append((default_bounds[0], expanded_upper))
+            param_bounds.append(default_bounds)
             logging.info(
-                f"  Using expanded bounds for heat_loss_coefficient: "
-                f"{default_bounds[0]}-{expanded_upper}"
+                f"  Using strict bounds for heat_loss_coefficient: "
+                f"{default_bounds[0]}-{default_bounds[1]}"
             )
         else:
             param_bounds.append(ThermalParameterConfig.get_bounds(p))
@@ -1198,7 +1262,8 @@ def build_optimization_params(
     heat_source_params = {
         'pv_heat_weight': (0.0005, 0.005),
         'fireplace_heat_weight': (1.0, 6.0),
-        'tv_heat_weight': (0.1, 1.5)
+        'tv_heat_weight': (0.1, 1.5),
+        'solar_lag_minutes': (0.0, 180.0)
     }
 
     for param, bounds in heat_source_params.items():
@@ -1262,19 +1327,27 @@ def calculate_mae_for_params(
                 'tv_heat_weight', current_params['tv_heat_weight']
             )
 
+            test_model.solar_lag_minutes = param_dict.get(
+                'solar_lag_minutes', current_params['solar_lag_minutes']
+            )
+
             # FORCE TEMPERATURE-BASED PHYSICS:
             # We intentionally pass thermal_power=None here even if available.
             # Why?
-            # 1. If we use thermal_power, the model uses the energy balance equation
-            #    which ignores 'outlet_effectiveness'. This causes outlet_effectiveness
-            #    calibration to stagnate (zero gradient).
+            # 1. If we use thermal_power, the model uses the energy balance
+            #    equation which ignores 'outlet_effectiveness'. This causes
+            #    outlet_effectiveness calibration to stagnate (zero gradient).
             # 2. The primary goal of this calibration is to tune the parameters
             #    (heat_loss_coefficient, outlet_effectiveness) so that the
             #    TEMPERATURE-BASED model (used for control planning) accurately
             #    predicts equilibrium.
-            # 3. We want the controller's "Required Outlet Temp" calculation to be
-            #    accurate, and that calculation relies on the relationship between
-            #    outlet_temp and equilibrium established by these two parameters.
+            # 3. We want the controller's "Required Outlet Temp" calculation to
+            #    be accurate, and that calculation relies on the relationship
+            #    between outlet_temp and equilibrium established by these two
+            #    parameters.
+
+            # Use PV history if available for lag calculation
+            pv_input = period.get('pv_power_history', period['pv_power'])
 
             predicted_temp = test_model.predict_equilibrium_temperature(
                 outlet_temp=period['outlet_temp'],
@@ -1282,7 +1355,7 @@ def calculate_mae_for_params(
                 current_indoor=period.get(
                     'indoor_temp', period['outdoor_temp'] + 10.0
                 ),
-                pv_power=period['pv_power'],
+                pv_power=pv_input,
                 fireplace_on=period['fireplace_on'],
                 tv_on=period['tv_on'],
                 thermal_power=None,  # Force temperature-based path
@@ -1292,7 +1365,10 @@ def calculate_mae_for_params(
             error = abs(predicted_temp - period['indoor_temp'])
 
             if error > 50.0:
-                if calculate_mae_for_params.call_count <= 1 and valid_predictions == 0:
+                if (
+                    calculate_mae_for_params.call_count <= 1
+                    and valid_predictions == 0
+                ):
                     logging.debug(
                         f"Skipping large error: {error:.1f} "
                         f"(Pred: {predicted_temp:.1f}, "

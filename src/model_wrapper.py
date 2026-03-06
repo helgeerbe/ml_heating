@@ -1267,11 +1267,13 @@ class EnhancedModelWrapper:
 
             # Physics-based scaling using house thermal characteristics.
             if self.thermal_model.outlet_effectiveness > 0.01:
+                # INCREASED: Boost base scale to overcome parameter drift
+                # Was 0.2, increased to 0.5 to make correction more assertive
                 base_scale = (
                     1.0 / self.thermal_model.outlet_effectiveness
-                ) * 0.2
+                ) * 0.5
             else:
-                base_scale = 15.0  # Fallback
+                base_scale = 25.0  # Fallback (increased from 15.0)
 
             physics_scale = base_scale
 

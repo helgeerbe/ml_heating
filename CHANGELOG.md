@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 ### Fixed
+- **Sunrise Temperature Drop:** Fixed a critical issue where the system would prematurely throttle heating at sunrise (e.g., 08:00) due to overestimating solar gain. The `solar_gain_factor` was reduced from 1.0 to 0.3 to account for the lag between solar radiation and indoor temperature rise, preventing the target temperature from dropping while the house is still cold.
+- **Differential Scaling Disabled:** Disabled the differential-based effectiveness scaling in the thermal model. This mechanism was artificially boosting effectiveness at high outlet temperatures, leading to over-prediction of indoor temperature and subsequent under-heating during morning warm-up periods.
 - **Control Stability:** Fixed "Deadbeat Control" oscillation by decoupling the control interval (30m) from the optimization horizon (4h). This prevents excessive outlet temperature spikes when correcting small deviations.
 - **PV Forecast Consistency:** Fixed a ~700W discrepancy in PV forecast interpolation between the Trajectory Optimizer and the internal `UnifiedPredictionContext`. Both systems now use a consistent 0.5 weight for short cycles (<= 30 mins), preventing temperature prediction drops during rapid solar changes.
 - **Parameter Drift Protection:** Implemented safety checks for physically impossible thermal parameter combinations (e.g., high heat loss with low outlet effectiveness) that could lead to incorrect equilibrium predictions. Added automatic reset of corrupted learning state to prevent persistent bad behavior.
