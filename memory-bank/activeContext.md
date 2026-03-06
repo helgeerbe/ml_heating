@@ -23,6 +23,23 @@
     - The model now uses the base `outlet_effectiveness` consistently, regardless of the temperature differential.
 - **Result**: The model no longer over-predicts efficiency at high temperatures, ensuring it requests sufficient heat to reach the target.
 
+### 🎯 **SUNRISE TEMPERATURE DROP FIX - March 6, 2026**
+
+**CRITICAL FIX**: Resolved a "Sunrise Temperature Drop" issue where the indoor temperature would dip significantly (e.g., 20.3°C -> 19.7°C) just as the sun came up.
+
+#### ✅ **PHYSICS MODEL CORRECTIONS**
+- **Context**: User reported that despite the heating being active, the indoor temperature dropped at sunrise.
+- **Diagnosis**:
+    1.  **Over-optimistic Effectiveness**: The "Differential Scaling" logic (which boosted effectiveness at high outlet temps) was causing the model to believe it was delivering more heat than it actually was. This led it to request lower outlet temperatures than necessary.
+    2.  **Instant Solar Impact**: The model assumed PV power converted to heat instantly. In reality, there is a thermal lag (heating the floor/structure) before it affects air temperature.
+- **Fix**:
+    - **Disabled Differential Scaling**: Set the scaling factor to 0.0 in `src/thermal_equilibrium_model.py`. This forces the model to rely on the base `outlet_effectiveness`, resulting in higher (correct) outlet temperature requests.
+    - **Implemented Solar Lag**: Added `solar_lag_minutes` (default 45m) to `ThermalEquilibriumModel`. The `_calculate_effective_solar` method now uses a rolling average of PV power to smooth the solar input.
+- **Result**: The model now requests higher outlet temperatures during the morning ramp-up and delays the "solar benefit" reduction, preventing the temperature dip.
+- **Verification**:
+    - Validated with `validation/verify_sunrise_drop.py`.
+    - Confirmed `solar_lag_minutes` is learnable via gradient descent.
+
 ### 🎯 **STATE POISONING BUG FIX - March 4, 2026**
 
 **CRITICAL FIX**: Resolved a "State Poisoning" bug where the heating target would drop to ~25°C after Domestic Hot Water (DHW) or Defrost cycles and persist into the next heating cycle. This was caused by the system overwriting the persistent target temperature with the low *actual* outlet temperature during the grace period.

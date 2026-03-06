@@ -4,9 +4,9 @@
 
 ### ✅ **SUNRISE TEMPERATURE DROP FIX COMPLETE (March 6, 2026)**
 
-**System Status**: **OPERATIONAL & STABLE** - Resolved an issue where the indoor temperature would drop during sunrise recovery due to model over-prediction. Disabled the differential-based effectiveness scaling to ensure conservative and realistic temperature predictions during high-output heating phases.
+**System Status**: **OPERATIONAL & STABLE** - Resolved a critical issue where indoor temperature dropped at sunrise. The fix involves disabling over-optimistic differential scaling and implementing a 45-minute solar lag to correctly model thermal inertia.
 
-**Test Suite Health**: **EXCELLENT** - All tests passing.
+**Test Suite Health**: **EXCELLENT** - All unit tests passing, including new validation for solar lag calculations.
 
 ### ✅ **STATE POISONING BUG FIX COMPLETE (March 4, 2026)**
 
@@ -98,11 +98,10 @@
 
 #### 🔧 **Recent Critical Fixes - COMPLETED**
 
-**Sunrise Temperature Drop (March 6, 2026)**:
-- ✅ **Solar Gain Overestimation Resolved**: Reduced `solar_gain_factor` from 1.0 to 0.3 in `src/thermal_equilibrium_model.py` to prevent premature throttling at sunrise.
-- ✅ **Differential Scaling Disabled**: Disabled artificial effectiveness boosting at high outlet temperatures to prevent over-prediction and under-heating during warm-up.
-- ✅ **Comfort Maintained**: Ensures heating continues until solar gain effectively warms the indoor space, eliminating the "morning chill".
-- ✅ **Verified**: Validated with `validation/verify_sunrise_drop.py` and updated unit tests.
+**Sunrise Temperature Drop Fix (March 6, 2026)**:
+- ✅ **Differential Scaling Disabled**: Removed the artificial effectiveness boost that was causing under-heating during high-demand periods.
+- ✅ **Solar Lag Implemented**: Added a 45-minute rolling average to PV input to model the thermal delay of solar gain.
+- ✅ **Configuration Updated**: Added `solar_lag_minutes` to `ThermalParameterConfig`.
 
 **PV Forecast Consistency (February 20, 2026)**:
 - ✅ **Interpolation Alignment**: Standardized PV forecast interpolation weight to 0.5 for short cycles in `UnifiedPredictionContext`, matching the Trajectory Optimizer.
@@ -260,6 +259,6 @@ ML Heating System v3.0+ (Production Release Ready)
 
 ---
 
-**Last Updated**: February 20, 2026
-**Status**: Production Ready - PV Forecast Fix Applied
+**Last Updated**: March 6, 2026
+**Status**: Production Ready - Sunrise Temperature Drop Fix Applied
 **Next Step**: Version Synchronization & Release
