@@ -160,7 +160,13 @@ class TestBlockingStateManager:
         """Test intelligent recovery when outlet temp is close to target."""
         state = SystemState(last_is_blocking=True, last_blocking_end_time=90)
         blocking_manager.check_blocking_state = Mock(return_value=(False, []))
-        mock_ha_client.get_state.side_effect = [21.0, 22.0, 5.0, 44.8]
+        # get_state calls:
+        # 1. INDOOR_TEMP (for intelligent recovery)
+        # 2. TARGET_INDOOR_TEMP (for intelligent recovery)
+        # 3. OUTDOOR_TEMP (for intelligent recovery)
+        # 4. ACTUAL_OUTLET_TEMP (for gradual control baseline)
+        # 5. ACTUAL_OUTLET_TEMP (for grace start check)
+        mock_ha_client.get_state.side_effect = [21.0, 22.0, 5.0, 44.8, 44.8]
 
         mock_wrapper = Mock()
         mock_wrapper._calculate_required_outlet_temp.return_value = 45.0
@@ -369,11 +375,92 @@ class TestBlockingStateManager:
         )
 
         # Verify
-        # Should have updated target exactly once (in Loop 3)
-        mock_ha_client.set_state.assert_called_once()
+        # Should have updated target twice due to clamping (40.0 -> 40.5 -> 41.0)
+        assert mock_ha_client.set_state.call_count == 2
         args, _ = mock_ha_client.set_state.call_args
         assert args[0] == config.TARGET_OUTLET_TEMP_ENTITY_ID
         assert args[1] == 41.0
+
+    @patch("src.heating_controller.time.time", return_value=100)
+    @patch("src.model_wrapper.get_enhanced_model_wrapper")
+    @patch("src.physics_features.build_physics_features")
+    @patch("src.influx_service.create_influx_service")
+    @patch("src.heating_controller.BlockingStateManager._wait_for_grace_target")
+    def test_grace_period_clamps_overshoot(
+        self,
+        mock_wait,
+        mock_influx,
+        mock_build,
+        mock_wrapper_getter,
+        mock_time,
+        blocking_manager,
+        mock_ha_client,
+    ):
+        """
+        Test that grace period clamps the target temperature to prevent overshoot
+        when the model predicts a very high temperature after a blocking event.
+        """
+        from src.heating_controller import config
+
+        # Setup state: Blocking just ended, previous setpoint was 40.0
+        state = SystemState(
+            last_is_blocking=True,
+            last_blocking_end_time=90,
+            last_final_temp=40.0
+        )
+        
+        # Mock blocking check to return False (blocking ended)
+        blocking_manager.check_blocking_state = Mock(return_value=(False, []))
+        
+        # Mock sensor readings
+        # 1. INDOOR_TEMP (for intelligent recovery)
+        # 2. TARGET_INDOOR_TEMP (for intelligent recovery)
+        # 3. OUTDOOR_TEMP (for intelligent recovery)
+        # 4. ACTUAL_OUTLET_TEMP (for gradual control baseline)
+        # 5. ACTUAL_OUTLET_TEMP (for grace start check)
+        mock_ha_client.get_state.side_effect = [
+            20.0,  # Indoor
+            21.0,  # Target
+            5.0,   # Outdoor
+            35.0,  # Actual Outlet (cooling down)
+            35.0   # Actual Outlet (repeated)
+        ]
+        
+        # Mock Model Wrapper to return a high temperature (e.g. 65.0)
+        mock_wrapper = Mock()
+        mock_wrapper._calculate_required_outlet_temp.return_value = 65.0
+        mock_wrapper._extract_thermal_features.return_value = {"some": "features"}
+        mock_wrapper_getter.return_value = mock_wrapper
+        
+        # Mock features DataFrame
+        mock_df = Mock()
+        mock_df.empty = False
+        mock_row = Mock()
+        mock_row.to_dict.return_value = {"some": "features"}
+        mock_df.iloc = [mock_row]
+        mock_build.return_value = (mock_df, {})
+        
+        # Mock MAX_TEMP_CHANGE_PER_CYCLE to 2.0
+        # We need to patch it where it is used in temperature_control.py
+        with patch(
+            "src.temperature_control.config.MAX_TEMP_CHANGE_PER_CYCLE", 2.0
+        ):
+            with patch("src.heating_controller.save_state"):
+                blocking_manager.handle_grace_period(mock_ha_client, state)
+
+                # Verify that set_state was called with clamped value
+                # Baseline is last_final_temp (40.0)
+                # Max change is 2.0
+                # Expected target = 40.0 + 2.0 = 42.0
+                # (Even though model asked for 65.0)
+
+                mock_ha_client.set_state.assert_called_once()
+                args, kwargs = mock_ha_client.set_state.call_args
+                entity_id = args[0]
+                value = args[1]
+
+                assert entity_id == config.TARGET_OUTLET_TEMP_ENTITY_ID
+                assert value == 42.0
 
 
 class TestSensorDataManager:

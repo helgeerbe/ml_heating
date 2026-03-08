@@ -111,24 +111,12 @@ class UnifiedPredictionContext:
             ]
 
             # Calculate cycle-aligned forecast using appropriate interpolation
-            if cycle_hours <= 0.5:
-                # 0-30min cycles: use average over the cycle
+            if cycle_hours <= 1.0:
+                # 0-60min cycles: use average over the cycle
                 # Assuming linear interpolation between current and 1h forecast
-                # For 30 min cycle, we want the average condition during that
-                # 30 mins. This is roughly the value at t=15min (0.25h)
-                # UPDATE: Using 0.5 (midpoint/average of current+forecast)
-                # to align with trajectory optimizer and avoid drops during
-                # rapid solar changes
-                weight = 0.5  # Increased weight to capture rapid solar rise
-
-                avg_outdoor = (
-                    outdoor_temp * (1 - weight) + forecast_1h_outdoor * weight
-                )
-                avg_pv = pv_power * (1 - weight) + forecast_1h_pv * weight
-
-            elif cycle_hours <= 1.0:
-                # 30-60min cycles: use average over the cycle
-                # Assuming linear interpolation between current and 1h forecast
+                # The average condition during the cycle is the value at the midpoint.
+                # For a 30 min cycle (0.5h), midpoint is 15 min (0.25h).
+                # Weight = midpoint / 1h = (cycle_hours / 2) / 1 = cycle_hours / 2
                 weight = cycle_hours / 2.0
 
                 avg_outdoor = (

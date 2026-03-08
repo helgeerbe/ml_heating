@@ -19,12 +19,12 @@ def test_create_prediction_context_with_forecasts_short_cycle():
         assert context['use_forecasts'] is True
         
         # Expected: Linear interpolation for 30 mins (0.5h)
-        # Weight = 0.5 (updated to align with trajectory optimizer)
-        # Outdoor = 8 * 0.5 + 10 * 0.5 = 4 + 5 = 9.0
-        assert context['avg_outdoor'] == 9.0
+        # Weight = 0.5 / 2.0 = 0.25 (midpoint of cycle)
+        # Outdoor = 8 * 0.75 + 10 * 0.25 = 6 + 2.5 = 8.5
+        assert context['avg_outdoor'] == 8.5
         
-        # PV = 50 * 0.5 + 100 * 0.5 = 25 + 50 = 75.0
-        assert context['avg_pv'] == 75.0
+        # PV = 50 * 0.75 + 100 * 0.25 = 37.5 + 25 = 62.5
+        assert context['avg_pv'] == 62.5
 
 
 def test_create_prediction_context_with_forecasts_long_cycle():
@@ -77,7 +77,53 @@ def test_prediction_context_manager(manager):
         manager.create_context(8, 50, thermal_features)
         
         assert manager.get_context() is not None
-        # 9.0 as calculated in short_cycle test (updated from 8.5)
-        assert manager.get_thermal_model_params()['outdoor_temp'] == 9.0
+        # 8.5 as calculated in short_cycle test
+        assert manager.get_thermal_model_params()['outdoor_temp'] == 8.5
         assert manager.get_forecast_arrays()[0][0] == 10
         assert manager.uses_forecasts() is True
+
+
+def test_morning_drop_prevention():
+    """
+    Regression test for 'morning drop' issue.
+    
+    Ensures that for short cycles (e.g. 30 mins), the forecast blending weight
+    targets the cycle midpoint (15 mins) rather than a hardcoded 0.5 (30 mins).
+    
+    Scenario:
+    - Current Outdoor: 6.0°C
+    - 1h Forecast: 10.0°C (Rising temperature, e.g. sunrise)
+    - Cycle: 30 mins (0.5h)
+    
+    Calculation:
+    - Midpoint = 15 mins = 0.25h
+    - Weight = 0.25 / 1.0 = 0.25
+    - Effective Temp = 6.0 * (1 - 0.25) + 10.0 * 0.25
+                     = 6.0 * 0.75 + 2.5
+                     = 4.5 + 2.5 = 7.0°C
+                     
+    (Buggy behavior would use weight 0.5 -> 8.0°C)
+    """
+    features = {
+        'temp_forecast_1h': 10.0,
+        'temp_forecast_2h': 12.0,
+        'temp_forecast_3h': 14.0,
+        'temp_forecast_4h': 15.0,
+        'pv_forecast_1h': 100,
+        'pv_forecast_2h': 200,
+        'pv_forecast_3h': 300,
+        'pv_forecast_4h': 400,
+    }
+    thermal_features = {'fireplace_on': 0, 'tv_on': 0}
+    current_outdoor = 6.0
+    
+    with patch.object(src.prediction_context.config, 'CYCLE_INTERVAL_MINUTES', 30):
+        context = UnifiedPredictionContext.create_prediction_context(
+            features,
+            current_outdoor,
+            0,
+            thermal_features
+        )
+        
+        expected_temp = 7.0
+        assert context['avg_outdoor'] == expected_temp

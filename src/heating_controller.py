@@ -237,12 +237,43 @@ class BlockingStateManager:
             
             thermal_features = wrapper._extract_thermal_features(features_dict)
 
-            grace_target = wrapper._calculate_required_outlet_temp(
+            from .temperature_control import GradualTemperatureControl
+
+            raw_grace_target = wrapper._calculate_required_outlet_temp(
                 float(current_indoor),
                 float(target_indoor),
                 float(outdoor_temp),
                 thermal_features,
             )
+
+            # Apply gradual control to prevent sudden jumps (e.g. 65°C)
+            # We use last_final_temp as baseline if available, else current
+            # outlet
+            gradual_ctrl = GradualTemperatureControl()
+
+            # Create a minimal state dict for gradual control
+            temp_control_state = {
+                "last_final_temp": state.last_final_temp
+            }
+
+            # Get current outlet for fallback baseline
+            current_outlet_for_gradual = ha_client.get_state(
+                config.ACTUAL_OUTLET_TEMP_ENTITY_ID, all_states
+            )
+
+            grace_target = gradual_ctrl.apply_gradual_control(
+                raw_grace_target,
+                current_outlet_for_gradual,
+                temp_control_state
+            )
+
+            if abs(grace_target - raw_grace_target) > 0.1:
+                logging.info(
+                    "Grace target clamped by gradual control: "
+                    "%.1f°C -> %.1f°C",
+                    raw_grace_target,
+                    grace_target,
+                )
 
         # Get current outlet temperature
         actual_outlet_temp_start = ha_client.get_state(
@@ -255,6 +286,26 @@ class BlockingStateManager:
                 "Cannot read actual_outlet_temp at grace start; skipping wait."
             )
             return
+
+        # Apply gradual control to prevent overshoot
+        # This ensures that even if the model predicts a high temperature
+        # (e.g. 65C) after a DHW cycle, we only increase by a safe amount
+        # (e.g. +3C) from the previous setpoint.
+        from .temperature_control import GradualTemperatureControl
+        gradual_ctrl = GradualTemperatureControl()
+
+        # Convert SystemState to dict for compatibility with
+        # apply_gradual_control
+        if hasattr(state, "to_dict"):
+            state_dict = state.to_dict()
+        else:
+            state_dict = state.__dict__
+
+        grace_target = gradual_ctrl.apply_gradual_control(
+            grace_target,
+            actual_outlet_temp_start,
+            state_dict
+        )
             
         delta0 = actual_outlet_temp_start - grace_target
         if abs(delta0) < 1.0:
@@ -434,26 +485,91 @@ class BlockingStateManager:
                         
                         # If target changed significantly, update it
                         if abs(new_target - current_grace_target) >= 0.5:
-                            logging.info(
-                                "Grace target updated: %.1f°C -> %.1f°C "
-                                "(Indoor: %.1f->%.1f, Outdoor: %.1f)",
-                                current_grace_target,
-                                new_target,
-                                float(current_indoor),
-                                float(target_indoor),
-                                float(outdoor_temp),
-                            )
-                            current_grace_target = new_target
+                            # Apply gradual control to the dynamic update as
+                            # well. We use the current grace target as the
+                            # "previous" value to ensure smooth transitions
+                            # during the grace period.
+
+                            # FIX: We must limit the rate of change relative to
+                            # the INITIAL grace target, not just the current
+                            # one, to prevent ramping up indefinitely in a
+                            # loop. However, since we want to allow *some*
+                            # adaptation, we should clamp the change per minute
+                            # or per loop.
+
+                            # Better approach: Use the standard gradual control
+                            # but ensure we don't ramp up too fast.
+                            # The issue is that apply_gradual_control allows
+                            # +2C change. If we call this every minute, we can
+                            # ramp up +2C every minute!
+
+                            # We need a much stricter limit for the dynamic
+                            # loop. Let's limit the change to 0.5C per update
+                            # loop (every 60s), which is still fast (5C in 10
+                            # mins) but better than 2C/min.
+
+                            # Even better: Don't use apply_gradual_control here
+                            # with its default 2C limit. Manually clamp the
+                            # delta.
+
+                            # FIX: Limit change relative to INITIAL grace
+                            # target to prevent runaway ramping.
+                            # We allow a maximum deviation from the initial
+                            # calculation to account for changing conditions,
+                            # but cap it strictly.
                             
-                            # Update HA entity
-                            ha_client.set_state(
-                                config.TARGET_OUTLET_TEMP_ENTITY_ID,
-                                current_grace_target,
-                                get_sensor_attributes(
-                                    config.TARGET_OUTLET_TEMP_ENTITY_ID
-                                ),
-                                round_digits=0,
+                            # Calculate what the target would be if we just
+                            # clamped the delta from current
+                            delta = new_target - current_grace_target
+                            max_dynamic_change = 0.5
+                            clamped_delta = max(
+                                -max_dynamic_change,
+                                min(delta, max_dynamic_change)
                             )
+                            proposed_target = (
+                                current_grace_target + clamped_delta
+                            )
+                            
+                            # Now apply a global clamp relative to initial
+                            # grace target. Allow max +1.0C / -1.0C deviation
+                            # from the start of the grace period.
+                            max_deviation = 1.0
+                            
+                            final_target = max(
+                                initial_grace_target - max_deviation,
+                                min(
+                                    proposed_target,
+                                    initial_grace_target + max_deviation
+                                )
+                            )
+
+                            if (
+                                abs(final_target - current_grace_target)
+                                >= 0.1  # Update even for small changes
+                            ):
+                                logging.info(
+                                    "Grace target updated: %.1f°C -> %.1f°C "
+                                    "(raw %.1f°C, initial %.1f°C) "
+                                    "(Indoor: %.1f->%.1f, Outdoor: %.1f)",
+                                    current_grace_target,
+                                    final_target,
+                                    new_target,
+                                    initial_grace_target,
+                                    float(current_indoor),
+                                    float(target_indoor),
+                                    float(outdoor_temp),
+                                )
+                                current_grace_target = final_target
+
+                                # Update HA entity
+                                ha_client.set_state(
+                                    config.TARGET_OUTLET_TEMP_ENTITY_ID,
+                                    current_grace_target,
+                                    get_sensor_attributes(
+                                        config.TARGET_OUTLET_TEMP_ENTITY_ID
+                                    ),
+                                    round_digits=0,
+                                )
                 except Exception as e:
                     logging.warning(
                         "Failed to recalculate grace target: %s", e
