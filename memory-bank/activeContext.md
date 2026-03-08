@@ -57,6 +57,21 @@
     - The model now uses the base `outlet_effectiveness` consistently, regardless of the temperature differential.
 - **Result**: The model no longer over-predicts efficiency at high temperatures, ensuring it requests sufficient heat to reach the target.
 
+### 🎯 **CONFIGURATION PARAMETER FIXES - March 8, 2026**
+
+**CRITICAL FIX**: Resolved issues with excessive parameter clamping warnings and strict state validation failures.
+
+#### ✅ **CLAMPING WARNINGS RESOLVED**
+- **Context**: Users reported frequent warnings about `heat_loss_coefficient` being clamped to 0.8.
+- **Diagnosis**: The upper bound of 0.8 was too restrictive for some building types, preventing the model from learning the true heat loss characteristics.
+- **Fix**: Increased the upper bound for `heat_loss_coefficient` to 1.2 in `src/thermal_config.py`.
+- **Result**: The model can now adapt to a wider range of building envelopes without hitting artificial ceilings.
+
+#### ✅ **ROBUST STATE VALIDATION**
+- **Context**: Strict validation was causing failures when loading legacy states or states with minor drift.
+- **Fix**: Refactored `ThermalStateValidator` to use centralized bounds and issue warnings instead of raising errors for out-of-bound parameters.
+- **Result**: The system is more resilient to minor state imperfections and can recover gracefully.
+
 ### 🎯 **STARTUP OVERSHOOT FIX - March 8, 2026**
 
 **CRITICAL FIX**: Resolved a "Startup Overshoot" issue where the system would jump to 65°C immediately after a restart due to corrupted thermal parameters.

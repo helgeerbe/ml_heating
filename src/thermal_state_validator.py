@@ -68,27 +68,71 @@ class ThermalStateValidator:
                 )
         
         # Validate parameter ranges
-        param_ranges = {
-            "thermal_time_constant": (0.1, 100.0),
-            "heat_loss_coefficient": (0.001, 1.0),
-            "outlet_effectiveness": (0.001, 1.0),
-            "pv_heat_weight": (0.0, 0.1),
-            "fireplace_heat_weight": (0.0, 50.0),
-            "tv_heat_weight": (0.0, 5.0)
-        }
-        
-        for param, (min_val, max_val) in param_ranges.items():
-            if param in baseline:
-                value = baseline[param]
-                if not isinstance(value, (int, float)):
-                    raise ThermalStateValidationError(
-                        f"Parameter {param} must be numeric, got {type(value)}"
-                    )
-                if not (min_val <= value <= max_val):
-                    raise ThermalStateValidationError(
-                        f"Parameter {param}={value} out of range "
-                        f"[{min_val}, {max_val}]"
-                    )
+        # MIGRATION: Use centralized bounds from ThermalParameterConfig
+        try:
+            from .thermal_config import ThermalParameterConfig
+            
+            # Map state parameter names to config parameter names if they differ
+            # Currently they match, but good to be explicit
+            param_map = {
+                "thermal_time_constant": "thermal_time_constant",
+                "heat_loss_coefficient": "heat_loss_coefficient",
+                "outlet_effectiveness": "outlet_effectiveness",
+                "pv_heat_weight": "pv_heat_weight",
+                "fireplace_heat_weight": "fireplace_heat_weight",
+                "tv_heat_weight": "tv_heat_weight"
+            }
+            
+            for state_param, config_param in param_map.items():
+                if state_param in baseline:
+                    value = baseline[state_param]
+                    if not isinstance(value, (int, float)):
+                        raise ThermalStateValidationError(
+                            f"Parameter {state_param} must be numeric, got {type(value)}"
+                        )
+                    
+                    # Get bounds from config
+                    try:
+                        min_val, max_val = ThermalParameterConfig.get_bounds(config_param)
+                        
+                        # Allow slight tolerance for floating point issues or legacy data
+                        # that might be slightly out of new bounds but still valid
+                        if not (min_val * 0.9 <= value <= max_val * 1.1):
+                            # Log warning but don't fail validation for minor bound violations
+                            # This allows the system to load and then clamp to new bounds
+                            logging.warning(
+                                f"Parameter {state_param}={value} outside config bounds "
+                                f"[{min_val}, {max_val}]"
+                            )
+                    except KeyError:
+                        # Parameter not in config, skip bound check
+                        pass
+                        
+        except ImportError:
+            # Fallback if config module not available (e.g. during some tests)
+            param_ranges = {
+                "thermal_time_constant": (0.1, 100.0),
+                "heat_loss_coefficient": (0.001, 1.2),  # Updated to match new config
+                "outlet_effectiveness": (0.001, 2.0),   # Updated to match new config
+                "pv_heat_weight": (0.0, 0.1),
+                "fireplace_heat_weight": (0.0, 50.0),
+                "tv_heat_weight": (0.0, 5.0)
+            }
+            
+            for param, (min_val, max_val) in param_ranges.items():
+                if param in baseline:
+                    value = baseline[param]
+                    if not isinstance(value, (int, float)):
+                        raise ThermalStateValidationError(
+                            f"Parameter {param} must be numeric, got {type(value)}"
+                        )
+                    # NOTE: We changed behavior to log warning instead of raising exception for bound violations
+                    # to allow loading legacy states and clamping them later.
+                    if not (min_val <= value <= max_val):
+                        logging.warning(
+                            f"Parameter {param}={value} out of range "
+                            f"[{min_val}, {max_val}]"
+                        )
         
         # Validate source enum
         valid_sources = ["config", "calibrated", "adaptive"]

@@ -57,10 +57,13 @@ def test_validate_thermal_state_data_missing_parameter(valid_thermal_state_data)
 
 
 def test_validate_thermal_state_data_parameter_out_of_range(valid_thermal_state_data):
-    """Test that an out-of-range parameter fails validation."""
-    valid_thermal_state_data["baseline_parameters"]["thermal_time_constant"] = 100.1
-    with pytest.raises(ThermalStateValidationError, match="out of range"):
-        ThermalStateValidator.validate_thermal_state_data(valid_thermal_state_data)
+    """Test that an out-of-range parameter logs a warning but does not raise exception."""
+    # NOTE: We changed behavior to log warning instead of raising exception for bound violations
+    # to allow loading legacy states and clamping them later.
+    valid_thermal_state_data["baseline_parameters"]["thermal_time_constant"] = 200.0
+    
+    # Should NOT raise exception anymore
+    assert ThermalStateValidator.validate_thermal_state_data(valid_thermal_state_data) is True
 
 
 def test_validate_thermal_state_data_invalid_parameter_type(

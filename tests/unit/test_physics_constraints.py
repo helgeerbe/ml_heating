@@ -8,7 +8,7 @@ from src.thermal_constants import PhysicsConstants
 class TestPhysicsConstraints:
     """
     Regression tests for physics constraints:
-    1. Heat loss coefficient (U) < 0.8
+    1. Heat loss coefficient (U) < 1.2
     2. Thermal time constant up to 100h
     3. Solar lag behavior
     """
@@ -34,7 +34,7 @@ class TestPhysicsConstraints:
 
     def test_heat_loss_coefficient_clamping_on_load(self):
         """
-        Test that heat_loss_coefficient is clamped to the maximum bound (0.8)
+        Test that heat_loss_coefficient is clamped to the maximum bound (1.2)
         when loading parameters, even if the saved state has a higher value.
         """
         # Create a real model but mock the state manager to return a high U value
@@ -42,7 +42,7 @@ class TestPhysicsConstraints:
             mock_manager = MagicMock()
             mock_get_manager.return_value = mock_manager
             
-            # Setup a state with U = 1.5 (way above 0.8 limit)
+            # Setup a state with U = 1.5 (way above 1.2 limit)
             mock_manager.load_state.return_value = True
             mock_manager.get_current_parameters.return_value = {
                 "baseline_parameters": {
@@ -71,7 +71,7 @@ class TestPhysicsConstraints:
             # Assert U was clamped
             assert model.heat_loss_coefficient == max_u
             assert model.heat_loss_coefficient < 1.5
-            assert model.heat_loss_coefficient == 0.8  # Explicit check for the requirement
+            assert model.heat_loss_coefficient == 1.2  # Explicit check for the requirement
 
     def test_thermal_time_constant_extended_range(self):
         """
@@ -182,10 +182,10 @@ class TestPhysicsConstraints:
 
     def test_heat_loss_coefficient_learning_constraints(self, model):
         """
-        Test that adaptive learning respects the 0.8 limit for heat_loss_coefficient.
+        Test that adaptive learning respects the 1.2 limit for heat_loss_coefficient.
         """
         # Set U to near the limit
-        model.heat_loss_coefficient = 0.79
+        model.heat_loss_coefficient = 1.19
         
         # Mock prediction history to suggest U should increase (positive error)
         # If actual > predicted, it means we are losing less heat than thought (or gaining more).
@@ -206,7 +206,7 @@ class TestPhysicsConstraints:
         
         # Mock the gradient calculation methods
         with patch.object(model, '_calculate_heat_loss_coefficient_gradient') as mock_grad:
-            # We want U to increase. 
+            # We want U to increase.
             # update = lr * grad
             # new_val = old_val - update
             # To increase new_val, update must be negative.
@@ -222,8 +222,8 @@ class TestPhysicsConstraints:
                 
                 model._adapt_parameters_from_recent_errors()
                 
-                # It should have tried to increase U, but clamped at 0.8
-                assert model.heat_loss_coefficient <= 0.8
-                # It should have increased from 0.79, likely hitting 0.8
-                # (Assuming learning rate allows it to reach 0.8)
-                assert model.heat_loss_coefficient >= 0.79
+                # It should have tried to increase U, but clamped at 1.2
+                assert model.heat_loss_coefficient <= 1.2
+                # It should have increased from 1.19, likely hitting 1.2
+                # (Assuming learning rate allows it to reach 1.2)
+                assert model.heat_loss_coefficient >= 1.19
