@@ -1,6 +1,21 @@
 # Active Context - Current Work & Decision State
 
-### 🎯 **SUNRISE TEMPERATURE DROP FIX - March 6, 2026**
+### 🎯 **RELEASE PREPARATION - March 8, 2026**
+
+**CRITICAL MILESTONE**: The system has reached a stable state with all critical bugs resolved. We are now preparing for the v0.2.1 release.
+
+#### ✅ **DHW OVERSHOOT PREVENTION COMPLETE**
+- **Context**: User reported that after a DHW cycle, the system would sometimes jump to the maximum possible temperature (e.g., 65°C) instead of resuming gently.
+- **Diagnosis**: The `handle_grace_period` method in `src/heating_controller.py` calculated a new target temperature using the model wrapper but applied it directly to the thermostat without passing it through the `GradualTemperatureControl` logic. This bypassed the safety mechanisms that normally limit temperature changes (e.g., `MAX_TEMP_CHANGE_PER_CYCLE`).
+- **Fix**:
+    - Modified `src/heating_controller.py` to import and use `GradualTemperatureControl`.
+    - The calculated grace target is now passed through `apply_gradual_control` before being set.
+    - This ensures that the target temperature only increases by a safe amount (e.g., +2°C) from the previous setpoint, even if the model requests a much higher temperature.
+- **Result**: The system now resumes heating gently after DHW cycles, preventing temperature spikes and improving comfort/efficiency.
+- **Verification**:
+    - **Reproduction Script**: `validation/reproduce_dhw_overshoot.py` confirmed that the overshoot is prevented and the target is clamped to a safe value.
+
+#### ✅ **SUNRISE TEMPERATURE DROP FIX COMPLETE**
 
 **CRITICAL FIX**: Resolved an issue where the heating target would drop significantly (e.g., 43°C -> 35°C) at sunrise, causing the house to cool down just as the day began.
 

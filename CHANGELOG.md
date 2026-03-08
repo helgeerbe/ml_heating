@@ -5,13 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Added
-
-### Changed
+## [0.2.1] - 2026-03-08
 
 ### Fixed
+- **DHW Overshoot Prevention:** Fixed a critical issue where the system would jump to maximum temperature (e.g., 65°C) after a DHW cycle if the model predicted a high requirement. Integrated `GradualTemperatureControl` into the grace period logic to ensure temperature changes are clamped to safe limits (e.g., +2°C per cycle).
 - **Sunrise Temperature Drop:** Fixed a critical issue where the indoor temperature would drop significantly at sunrise. This was caused by the model over-reacting to initial solar gain and simultaneously over-predicting the heating effect of high outlet temperatures.
     - **Differential Scaling Disabled:** Removed the artificial boost to outlet effectiveness at high temperature differences, which was causing the model to underestimate the required outlet temperature.
     - **Solar Lag Implementation:** Introduced a `solar_lag_minutes` parameter (default 45 mins) to smooth the impact of PV power on the thermal model, reflecting the physical delay between solar radiation and indoor heating.
@@ -20,10 +17,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Parameter Drift Protection:** Implemented safety checks for physically impossible thermal parameter combinations (e.g., high heat loss with low outlet effectiveness) that could lead to incorrect equilibrium predictions. Added automatic reset of corrupted learning state to prevent persistent bad behavior.
 - **Baseline Corruption Fix:** Fixed a critical issue where corrupted baseline parameters (e.g., Heat Loss > 0.8 with Effectiveness < 0.4) would persist across restarts even after detection. The system now correctly wipes the corrupted baseline from disk when such invalid combinations are detected, ensuring a clean recovery to safe defaults.
 - **State Corruption Recovery:** Fixed a critical stability issue where corrupted state files caused parameter jumps (e.g., HLC 0.4 -> 0.8) after restarts. The system now automatically resets corrupted state files to defaults, ensuring consistency between in-memory and on-disk state.
-
-### Technical Achievements
-
-
 
 ## [0.2.0] - 2026-02-10
 

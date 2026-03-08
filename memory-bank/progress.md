@@ -1,6 +1,12 @@
 # ML Heating System - Current Progress
 
-## 🎯 CURRENT STATUS - March 6, 2026
+## 🎯 CURRENT STATUS - March 8, 2026
+
+### ✅ **DHW OVERSHOOT PREVENTION COMPLETE (March 8, 2026)**
+
+**System Status**: **OPERATIONAL & STABLE** - Resolved a critical issue where the system would jump to maximum temperature (e.g., 65°C) after a DHW cycle. The fix integrates `GradualTemperatureControl` into the grace period logic, ensuring temperature changes are clamped to safe limits (e.g., +2°C per cycle).
+
+**Test Suite Health**: **EXCELLENT** - All unit tests passing. Reproduction script `validation/reproduce_dhw_overshoot.py` confirms the fix.
 
 ### ✅ **SUNRISE TEMPERATURE DROP FIX COMPLETE (March 6, 2026)**
 
@@ -259,6 +265,6 @@ ML Heating System v3.0+ (Production Release Ready)
 
 ---
 
-**Last Updated**: March 6, 2026
-**Status**: Production Ready - Sunrise Temperature Drop Fix Applied
+**Last Updated**: March 8, 2026
+**Status**: Production Ready - DHW Overshoot Fix Applied
 **Next Step**: Version Synchronization & Release
