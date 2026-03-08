@@ -63,7 +63,7 @@ class ThermalParameterConfig:
         'min_learning_rate': (0.0001, 0.01),
         'max_learning_rate': (0.01, 0.2),
         'heat_loss_coefficient': (0.01, 0.8),
-        'outlet_effectiveness': (0.01, 2.0),
+        'outlet_effectiveness': (0.2, 2.0),
         'solar_lag_minutes': (0.0, 180.0),
     }
 

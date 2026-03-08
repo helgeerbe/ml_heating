@@ -4,6 +4,15 @@
 
 **CRITICAL MILESTONE**: The system has reached a stable state with all critical bugs resolved. We are now preparing for the v0.2.1 release.
 
+#### ✅ **STARTUP OVERSHOOT FIX COMPLETE**
+- **Context**: User reported that the system would sometimes request maximum heat (65°C) immediately after a restart, even with a small temperature gap.
+- **Diagnosis**: The thermal state file contained a "poisoned" combination of parameters (High Heat Loss + Low Effectiveness) that persisted across restarts. This caused the model to calculate an infinite heat requirement.
+- **Fix**:
+    - Enhanced `_detect_parameter_corruption` in `src/thermal_equilibrium_model.py` to catch this specific "drift" pattern (HLC > 0.6 AND Eff < 0.35).
+    - The system now automatically wipes the corrupted state and resets to safe defaults when this pattern is detected on startup.
+- **Result**: The system boots safely even if the previous state was corrupted, preventing the 65°C spike.
+- **Verification**: `validation/reproduce_startup_overshoot.py` confirmed the fix.
+
 #### ✅ **DHW OVERSHOOT PREVENTION COMPLETE**
 - **Context**: User reported that after a DHW cycle, the system would sometimes jump to the maximum possible temperature (e.g., 65°C) instead of resuming gently.
 - **Diagnosis**: The `handle_grace_period` method in `src/heating_controller.py` calculated a new target temperature using the model wrapper but applied it directly to the thermostat without passing it through the `GradualTemperatureControl` logic. This bypassed the safety mechanisms that normally limit temperature changes (e.g., `MAX_TEMP_CHANGE_PER_CYCLE`).

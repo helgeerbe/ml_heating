@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.1] - 2026-03-08
 
 ### Fixed
+- **Startup Overshoot:** Fixed a critical issue where the system would request maximum heat (65°C) immediately after a restart. This was caused by a "poisoned" thermal state (High Heat Loss + Low Effectiveness) persisting across restarts. Added enhanced corruption detection to catch this specific parameter combination and automatically reset to safe defaults.
 - **DHW Overshoot Prevention:** Fixed a critical issue where the system would jump to maximum temperature (e.g., 65°C) after a DHW cycle if the model predicted a high requirement. Integrated `GradualTemperatureControl` into the grace period logic to ensure temperature changes are clamped to safe limits (e.g., +2°C per cycle).
 - **Sunrise Temperature Drop:** Fixed a critical issue where the indoor temperature would drop significantly at sunrise. This was caused by the model over-reacting to initial solar gain and simultaneously over-predicting the heating effect of high outlet temperatures.
     - **Differential Scaling Disabled:** Removed the artificial boost to outlet effectiveness at high temperature differences, which was causing the model to underestimate the required outlet temperature.

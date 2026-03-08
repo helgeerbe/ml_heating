@@ -2,6 +2,12 @@
 
 ## 🎯 CURRENT STATUS - March 8, 2026
 
+### ✅ **STARTUP OVERSHOOT FIX COMPLETE (March 8, 2026)**
+
+**System Status**: **OPERATIONAL & STABLE** - Resolved a critical issue where the system would request maximum heat (65°C) after a restart due to corrupted thermal parameters. The fix implements enhanced corruption detection to catch invalid parameter combinations (High Heat Loss + Low Effectiveness) and automatically resets the system to safe defaults.
+
+**Test Suite Health**: **EXCELLENT** - All unit tests passing. Reproduction script `validation/reproduce_startup_overshoot.py` confirms the fix.
+
 ### ✅ **DHW OVERSHOOT PREVENTION COMPLETE (March 8, 2026)**
 
 **System Status**: **OPERATIONAL & STABLE** - Resolved a critical issue where the system would jump to maximum temperature (e.g., 65°C) after a DHW cycle. The fix integrates `GradualTemperatureControl` into the grace period logic, ensuring temperature changes are clamped to safe limits (e.g., +2°C per cycle).

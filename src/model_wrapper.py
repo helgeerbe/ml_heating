@@ -329,11 +329,13 @@ class EnhancedModelWrapper:
         # BUGFIX: Ensure pv_power and outdoor_temp are scalars to prevent
         # TypeError in logging.
         if hasattr(pv_power, "iloc"):
-            pv_power = \
-                float(pv_power.iloc[0]) if not pv_power.empty else 0.0
+            # type: ignore
+            pv_power = float(pv_power.iloc[0]) if not pv_power.empty else 0.0
         if hasattr(outdoor_temp, "iloc"):
-            outdoor_temp = \
+            # type: ignore
+            outdoor_temp = (
                 float(outdoor_temp.iloc[0]) if not outdoor_temp.empty else 0.0
+            )
 
         # Pass features to manager
         features = getattr(self, "_current_features", {})
@@ -1262,18 +1264,25 @@ class EnhancedModelWrapper:
 
             # k controls the aggression of the exponential curve. A higher
             # value means a more aggressive response to temperature deviations.
-            k = 1.5
-            aggression_factor = np.exp(k * initial_deviation)
+            # REDUCED: Lowered k from 1.5 to 0.5 to prevent massive overshoot
+            # during startup when deviation is large (>1.5°C).
+            k = 0.5
+            raw_aggression = np.exp(k * initial_deviation)
+
+            # Clamp aggression to prevent runaway correction
+            aggression_factor = min(raw_aggression, 3.0)
 
             # Physics-based scaling using house thermal characteristics.
             if self.thermal_model.outlet_effectiveness > 0.01:
-                # INCREASED: Boost base scale to overcome parameter drift
-                # Was 0.2, increased to 0.5 to make correction more assertive
-                base_scale = (
+                # REVERTED: Reduced base scale multiplier from 0.5 back to 0.3
+                # and added hard clamp to prevent explosion when effectiveness
+                # is very low (e.g. < 0.05).
+                raw_scale = (
                     1.0 / self.thermal_model.outlet_effectiveness
-                ) * 0.5
+                ) * 0.3
+                base_scale = min(raw_scale, 10.0)
             else:
-                base_scale = 25.0  # Fallback (increased from 15.0)
+                base_scale = 10.0  # Fallback (reduced from 25.0)
 
             physics_scale = base_scale
 
@@ -1314,7 +1323,9 @@ class EnhancedModelWrapper:
 
             # Clamp the correction to a reasonable maximum to prevent extreme
             # values.
-            max_correction = 20.0
+            # REDUCED: Cap max correction to 15.0°C (was 20.0°C) to prevent
+            # startup overshoot.
+            max_correction = 15.0
             correction = max(-max_correction, min(max_correction, correction))
 
             # Final outlet temperature.
@@ -1846,10 +1857,21 @@ def simplified_outlet_prediction(
         else:
             features_dict = records[0]
 
-        features_dict["indoor_temp_lag_30m"] = current_temp
+        # CRITICAL FIX: Do not overwrite indoor_temp_lag_30m with current_temp!
+        # This destroys the gradient information calculated in
+        # build_physics_features.
+        # The lag feature should come from history, not be forced to current.
+        # features_dict["indoor_temp_lag_30m"] = current_temp
+        
         features_dict["target_temp"] = target_temp
 
         # Get simplified prediction
+        logging.info(
+            f"DEBUG: Wrapper params: "
+            f"U={wrapper.thermal_model.heat_loss_coefficient}, "
+            f"eff={wrapper.thermal_model.outlet_effectiveness}, "
+            f"tau={wrapper.thermal_model.thermal_time_constant}"
+        )
         outlet_temp, metadata = wrapper.calculate_optimal_outlet_temp(
             features_dict
         )

@@ -345,13 +345,32 @@ def build_physics_features(
     # Calculate time period for gradient (in hours)
     time_period = config.HISTORY_STEP_MINUTES / 60.0
     
+    # FIX: Handle missing history (defaults) to prevent artificial gradients
+    # If history is default (21.0) but actual is different, clamp gradient
+    hist_start = float(indoor_history[0])
+    if hist_start == 21.0 and abs(actual_indoor_f - 21.0) > 0.5:
+        # Likely missing history, use current temp to zero out gradient
+        hist_start = actual_indoor_f
+
+    hist_10m = float(indoor_history[-1])
+    hist_60m = float(indoor_history[-6])
+    
+    if hist_10m == 21.0 and abs(actual_indoor_f - 21.0) > 0.5:
+        hist_10m = actual_indoor_f
+    if hist_60m == 21.0 and abs(actual_indoor_f - 21.0) > 0.5:
+        hist_60m = actual_indoor_f
+
+    hist_30m = float(indoor_history[-3])
+    if hist_30m == 21.0 and abs(actual_indoor_f - 21.0) > 0.5:
+        hist_30m = actual_indoor_f
+
     # Build enhanced feature dictionary with thermal momentum features
     features = {
         # === ORIGINAL 19 FEATURES (for backward compatibility) ===
         
         # Core temperatures
         'outlet_temp': outlet_temp_f,
-        'indoor_temp_lag_30m': float(indoor_history[-3]),  # 30 min ago
+        'indoor_temp_lag_30m': hist_30m,  # 30 min ago
         'target_temp': target_temp_f,
         'outdoor_temp': outdoor_temp_f,
         
@@ -382,20 +401,20 @@ def build_physics_features(
         
         # P0 Priority: Thermal momentum analysis (3 features)
         'temp_diff_indoor_outdoor': actual_indoor_f - outdoor_temp_f,
-        'indoor_temp_gradient': ((actual_indoor_f - float(indoor_history[0]))
+        'indoor_temp_gradient': ((actual_indoor_f - hist_start)
                                  / time_period),
         'outlet_indoor_diff': outlet_temp_f - actual_indoor_f,
         
         # P0 Priority: Extended lag features (4 features)
-        'indoor_temp_lag_10m': float(indoor_history[-1]),  # 10 min ago
-        'indoor_temp_lag_60m': float(indoor_history[-6]),  # 60 min ago
+        'indoor_temp_lag_10m': hist_10m,  # 10 min ago
+        'indoor_temp_lag_60m': hist_60m,  # 60 min ago
         'outlet_temp_lag_30m': float(outlet_history[-3]),  # 30 min ago
         'outlet_temp_change': outlet_temp_f - float(outlet_history[-1]),
         
         # P1 Priority: Delta analysis (3 features)
-        'indoor_temp_delta_10m': actual_indoor_f - float(indoor_history[-1]),
-        'indoor_temp_delta_30m': actual_indoor_f - float(indoor_history[-3]),
-        'indoor_temp_delta_60m': actual_indoor_f - float(indoor_history[-6]),
+        'indoor_temp_delta_10m': actual_indoor_f - hist_10m,
+        'indoor_temp_delta_30m': actual_indoor_f - hist_30m,
+        'indoor_temp_delta_60m': actual_indoor_f - hist_60m,
         
         # P1 Priority: Cyclical time encoding (4 features)
         'hour_sin': math.sin(2 * math.pi * current_hour / 24),

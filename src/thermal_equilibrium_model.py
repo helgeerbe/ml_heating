@@ -1889,30 +1889,15 @@ class ThermalEquilibriumModel:
             return True
 
         # Enhanced check for "borderline bad" combination that causes 65C
+        # Lowered threshold to catch more cases (0.8 -> 0.6)
         if (
-            self.heat_loss_coefficient > 0.8
+            self.heat_loss_coefficient > 0.6
             and self.outlet_effectiveness < 0.35
         ):
             logging.warning(
                 "⚠️ Parameter drift detected: Moderate heat loss (%.2f) "
                 "with very low effectiveness (%.2f) causes extreme "
                 "predictions",
-                self.heat_loss_coefficient,
-                self.outlet_effectiveness,
-            )
-            return True
-
-        # Stricter check for the specific "65C bug" combination
-        # Moderate heat loss with very low effectiveness causes extreme
-        # outlet temps
-        if (
-            self.heat_loss_coefficient > 0.8
-            and self.outlet_effectiveness < 0.35
-        ):
-            logging.warning(
-                "⚠️ Parameter drift detected: Moderate heat loss (%.2f) "
-                "with very low effectiveness (%.2f) causes prediction "
-                "instability",
                 self.heat_loss_coefficient,
                 self.outlet_effectiveness,
             )
