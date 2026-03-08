@@ -47,6 +47,20 @@
     - The model now uses the base `outlet_effectiveness` consistently, regardless of the temperature differential.
 - **Result**: The model no longer over-predicts efficiency at high temperatures, ensuring it requests sufficient heat to reach the target.
 
+### 🎯 **STARTUP OVERSHOOT FIX - March 8, 2026**
+
+**CRITICAL FIX**: Resolved a "Startup Overshoot" issue where the system would jump to 65°C immediately after a restart due to corrupted thermal parameters.
+
+#### ✅ **STATE CORRUPTION RECOVERY**
+- **Context**: User reported sudden spikes to 65°C after restarts. Logs showed physically impossible parameters (High Heat Loss + Low Effectiveness).
+- **Diagnosis**: The adaptive learning algorithm could enter a "death spiral," finding a mathematical solution that was physically nonsensical. This corrupted state was saved to disk and reloaded on restart.
+- **Fix**:
+    - **Enhanced Detection**: Added logic to `ThermalEquilibriumModel` to detect this specific "broken physics" state.
+    - **Auto-Reset**: The system now automatically resets to safe defaults if corruption is detected on load.
+    - **State Repair**: The `ThermalStateManager` now overwrites the corrupted file to prevent recurrence.
+- **Result**: The system safely recovers from corrupted states, preventing the 65°C spikes.
+- **Verification**: Validated with `validation/reproduce_startup_overshoot.py`.
+
 ### 🎯 **SUNRISE TEMPERATURE DROP FIX - March 6, 2026**
 
 **CRITICAL FIX**: Resolved a "Sunrise Temperature Drop" issue where the indoor temperature would dip significantly (e.g., 20.3°C -> 19.7°C) just as the sun came up.

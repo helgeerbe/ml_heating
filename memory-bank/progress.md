@@ -110,6 +110,11 @@
 
 #### 🔧 **Recent Critical Fixes - COMPLETED**
 
+**Startup Overshoot Fix (March 8, 2026)**:
+- ✅ **Corruption Detection**: Implemented enhanced validation to detect invalid parameter combinations (High Heat Loss + Low Effectiveness).
+- ✅ **Auto-Reset**: System automatically resets to safe defaults when corruption is detected, preventing 65°C spikes.
+- ✅ **Verification**: Added reproduction script and unit tests to confirm the fix.
+
 **Sunrise Temperature Drop Fix (March 6, 2026)**:
 - ✅ **Differential Scaling Disabled**: Removed the artificial effectiveness boost that was causing under-heating during high-demand periods.
 - ✅ **Solar Lag Implemented**: Added a 45-minute rolling average to PV input to model the thermal delay of solar gain.
