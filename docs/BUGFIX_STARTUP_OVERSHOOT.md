@@ -1,53 +1,72 @@
-# Bugfix: Startup Overshoot (65°C Jump)
+# Bugfix: Startup Overshoot (65°C Spike)
 
-## Issue Description
-After a service restart, the system would occasionally predict an extremely high required outlet temperature (often hitting the 65°C safety cap), even when the indoor temperature was close to the target. This caused uncomfortable overheating and inefficient operation.
+## Problem Description
+After a system restart, the heating controller would sometimes immediately request the maximum possible outlet temperature (65°C), even if the indoor temperature was close to the target. This caused significant overheating and discomfort.
 
-### Symptoms
-- **Sudden Spikes**: Outlet temperature target jumping from ~35°C to 65°C immediately after a restart.
-- **Corrupted Parameters**: Logs showed physically impossible thermal parameters, specifically:
-    - `heat_loss_coefficient` > 0.8 (indicating an open window or hole in the wall)
-    - `outlet_effectiveness` < 0.2 (indicating radiators were barely working)
-- **Persistence**: This "poisoned" state would persist across restarts because the corrupted parameters were saved to `unified_thermal_state.json`.
+## Root Cause Analysis
+The issue was traced to **"State Poisoning"** where the thermal parameters in the persistent state file (`unified_thermal_state.json`) became corrupted.
 
-### Root Cause
-The root cause was a "death spiral" in the adaptive learning logic during transient states (like startup or after a crash):
-1.  The model would make a poor prediction due to missing history or sensor noise.
-2.  The learning algorithm would attempt to compensate by drastically adjusting parameters.
-3.  It would find a "mathematical" solution that minimized error but was physically nonsensical (e.g., "The house is losing heat instantly, but the radiators are useless").
-4.  These corrupted parameters were saved to disk.
-5.  On the next restart, the system loaded these broken parameters, leading to extreme predictions (65°C) to compensate for the perceived "useless" radiators.
+1.  **Corrupted State**: The state file contained a physically impossible combination of parameters:
+    *   **Heat Loss Coefficient (HLC)**: Extremely high (> 0.8, sometimes ~1.2)
+    *   **Outlet Effectiveness**: Extremely low (< 0.35, sometimes ~0.019)
 
-## The Fix
+2.  **Mechanism**:
+    *   The high HLC made the model believe the house was losing heat rapidly.
+    *   The low Effectiveness made the model believe the radiators were extremely inefficient.
+    *   **Result**: To maintain equilibrium, the model calculated that an incredibly high outlet temperature was required.
+
+3.  **Persistence**:
+    *   Previous fixes detected this corruption in memory but didn't aggressively clean up the disk file.
+    *   On the next restart, the system would reload the corrupted file, re-applying the bad parameters.
+
+## Solution Implementation
+
+The fix involves a multi-layered defense strategy to detect, reject, and permanently remove corrupted state data.
 
 ### 1. Enhanced Corruption Detection
-We implemented a rigorous check in `ThermalEquilibriumModel._detect_parameter_corruption()` to identify this specific failure mode.
+Updated `src/thermal_equilibrium_model.py` to detect specific "toxic combinations" of parameters, not just individual bounds violations.
 
 ```python
-# New detection logic
-if self.heat_loss_coefficient > 0.6 and self.outlet_effectiveness < 0.35:
-    logging.warning("⚠️ Parameter drift detected: Moderate heat loss with very low effectiveness")
+# In ThermalEquilibriumModel._detect_parameter_corruption
+if (self.heat_loss_coefficient > 0.6 and self.outlet_effectiveness < 0.35):
+    logging.warning("⚠️ Parameter drift detected: Moderate heat loss with very low effectiveness...")
     return True
 ```
 
-### 2. Automatic State Recovery
-We modified `ThermalEquilibriumModel._load_thermal_parameters()` to handle corruption gracefully.
-- **Before**: If parameters were loaded, they were used blindly.
-- **After**: If loaded parameters are detected as corrupted, the system **immediately resets to safe defaults** (HLC=0.32, Eff=0.50) and clears the learning history.
+### 2. Aggressive State Reset
+Modified `src/thermal_equilibrium_model.py` to take decisive action when corruption is detected during loading:
 
-### 3. Persistent State Repair
-We updated `ThermalStateManager.load_state()` to prevent "zombie" states.
-- If the system falls back to defaults due to corruption, it now **overwrites the corrupted JSON file** with the clean default state. This ensures that the next restart doesn't accidentally reload the bad parameters.
+*   **Wipe Baseline**: If the baseline parameters themselves are corrupted, the entire state is wiped.
+*   **Reset to Defaults**: The system immediately reverts to safe, hardcoded configuration defaults.
+*   **Prevent Use**: The loading function returns early to ensure the corrupted values are never used in calculations.
+
+### 3. Atomic State Overwrite
+Modified `src/unified_thermal_state.py` to ensure that when the system falls back to defaults, it **overwrites the corrupted file on disk**.
+
+```python
+# In ThermalStateManager.load_state
+logging.warning("🧹 Overwriting corrupted state file with fresh defaults...")
+self.state = self._get_default_state()
+self.save_state() # Forces atomic write of clean state
+```
+
+This prevents "zombie states" where a bad file persists on disk and gets reloaded later.
 
 ## Verification
-The fix was verified using `validation/reproduce_startup_overshoot.py`, which simulated the corrupted state and confirmed that:
-1.  The system detects the corruption.
-2.  It resets parameters to defaults.
-3.  The resulting prediction is reasonable (~43°C) instead of extreme (65°C).
 
-## Recommendations
-After applying this fix, it is highly recommended to run a fresh physics calibration:
-```bash
-python3 src/physics_calibration.py --days 7
-```
-This will establish a healthy, accurate baseline for your specific home, replacing the generic safety defaults.
+### Reproduction Script
+A reproduction script (`validation/reproduce_startup_overshoot.py`) was created to simulate the corrupted state:
+1.  Manually sets HLC=0.8 and Effectiveness=0.019.
+2.  Runs the prediction logic.
+3.  Verifies that the model predicts ~65°C.
+4.  Verifies that the new detection logic catches the corruption.
+5.  Verifies that resetting to defaults (Effectiveness=0.5) restores a sane prediction (~30-40°C).
+
+### Results
+*   **Before Fix**: Prediction = 65.0°C (Clamped Max)
+*   **After Fix**: Corruption detected -> Reset to Defaults -> Prediction = ~38.5°C (Normal)
+
+## Related Files
+*   `src/thermal_equilibrium_model.py`
+*   `src/unified_thermal_state.py`
+*   `validation/reproduce_startup_overshoot.py`

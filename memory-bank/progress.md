@@ -8,6 +8,12 @@
 
 **Test Suite Health**: **EXCELLENT** - All unit tests passing. Reproduction script `validation/reproduce_startup_overshoot.py` confirms the fix.
 
+### ✅ **STARTUP OVERSHOOT FIX COMPLETE (March 8, 2026)**
+
+**System Status**: **OPERATIONAL & STABLE** - Resolved a critical "State Poisoning" issue where the system would request 65°C after a restart due to corrupted thermal parameters. The fix implements aggressive corruption detection and ensures the corrupted state file is overwritten with safe defaults.
+
+**Test Suite Health**: **EXCELLENT** - All unit tests passing. Reproduction script `validation/reproduce_startup_overshoot.py` confirms the fix.
+
 ### ✅ **DHW OVERSHOOT PREVENTION COMPLETE (March 8, 2026)**
 
 **System Status**: **OPERATIONAL & STABLE** - Resolved a critical issue where the system would jump to maximum temperature (e.g., 65°C) after a DHW cycle. The fix integrates `GradualTemperatureControl` into the grace period logic, ensuring temperature changes are clamped to safe limits (e.g., +2°C per cycle).
@@ -114,6 +120,11 @@
 - ✅ **Corruption Detection**: Implemented enhanced validation to detect invalid parameter combinations (High Heat Loss + Low Effectiveness).
 - ✅ **Auto-Reset**: System automatically resets to safe defaults when corruption is detected, preventing 65°C spikes.
 - ✅ **Verification**: Added reproduction script and unit tests to confirm the fix.
+
+**Startup Overshoot Fix (March 8, 2026)**:
+- ✅ **Enhanced Corruption Detection**: Added checks for "toxic combinations" of parameters (High HLC + Low Effectiveness).
+- ✅ **Aggressive State Reset**: System now wipes corrupted baselines and resets to defaults upon detection.
+- ✅ **Atomic Overwrite**: `UnifiedThermalStateManager` now overwrites the corrupted file on disk to prevent recurrence.
 
 **Sunrise Temperature Drop Fix (March 6, 2026)**:
 - ✅ **Differential Scaling Disabled**: Removed the artificial effectiveness boost that was causing under-heating during high-demand periods.

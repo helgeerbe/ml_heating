@@ -13,6 +13,16 @@
 - **Result**: The system boots safely even if the previous state was corrupted, preventing the 65°C spike.
 - **Verification**: `validation/reproduce_startup_overshoot.py` confirmed the fix.
 
+#### ✅ **STARTUP OVERSHOOT FIX COMPLETE**
+- **Context**: System would sometimes request maximum temperature (65°C) immediately after a restart.
+- **Diagnosis**: "State Poisoning" where the persistent state file contained a toxic combination of parameters (High Heat Loss + Low Effectiveness). Previous fixes detected this in memory but didn't aggressively clean up the disk file, leading to re-occurrence on restart.
+- **Fix**:
+    - **Enhanced Detection**: Updated `ThermalEquilibriumModel` to catch specific "toxic combinations" (e.g., HLC > 0.6 AND Eff < 0.35).
+    - **Aggressive Reset**: If corruption is detected on load, the system now wipes the baseline and resets to hardcoded defaults.
+    - **Atomic Overwrite**: Modified `UnifiedThermalStateManager` to explicitly overwrite the corrupted file on disk when falling back to defaults, preventing "zombie" states.
+- **Result**: The system reliably starts up with safe parameters even if the previous state was corrupted.
+- **Verification**: `validation/reproduce_startup_overshoot.py` confirmed the detection and reset logic.
+
 #### ✅ **DHW OVERSHOOT PREVENTION COMPLETE**
 - **Context**: User reported that after a DHW cycle, the system would sometimes jump to the maximum possible temperature (e.g., 65°C) instead of resuming gently.
 - **Diagnosis**: The `handle_grace_period` method in `src/heating_controller.py` calculated a new target temperature using the model wrapper but applied it directly to the thermostat without passing it through the `GradualTemperatureControl` logic. This bypassed the safety mechanisms that normally limit temperature changes (e.g., `MAX_TEMP_CHANGE_PER_CYCLE`).
