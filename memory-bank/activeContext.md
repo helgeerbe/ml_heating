@@ -57,6 +57,21 @@
     - The model now uses the base `outlet_effectiveness` consistently, regardless of the temperature differential.
 - **Result**: The model no longer over-predicts efficiency at high temperatures, ensuring it requests sufficient heat to reach the target.
 
+### 🎯 **SHADOW MODE FIXES - March 9, 2026**
+
+**CRITICAL FIX**: Resolved issues with missing target temperature logging and explained prediction jumps in Shadow Mode.
+
+#### ✅ **MISSING TARGET TEMP FIXED**
+- **Context**: In Shadow Mode, logs showed the *current* indoor temperature as the *predicted* indoor temperature.
+- **Diagnosis**: The `simplified_outlet_prediction` function in `src/model_wrapper.py` was not calculating `predicted_indoor` or returning it in the metadata. In Active Mode, `smart_rounding` masked this, but Shadow Mode skips that step.
+- **Fix**: Updated `src/model_wrapper.py` to explicitly calculate `predicted_indoor` and include it in the returned metadata.
+- **Result**: Logs now correctly show the model's predicted indoor temperature in Shadow Mode.
+
+#### ✅ **PREDICTION JUMP EXPLAINED**
+- **Context**: Users reported a sudden jump in predicted outlet temperature (e.g., 25°C -> 40.6°C) when switching to Shadow Mode.
+- **Diagnosis**: Shadow Mode intentionally skips the "Grace Period" logic (which clamps temperature ramp-up after blocking events) to show the raw physics-based demand.
+- **Action**: Updated `docs/SHADOW_MODE_USER_GUIDE.md` and created `docs/SHADOW_MODE_ANALYSIS.md` to explain this intentional behavior.
+
 ### 🎯 **CONFIGURATION PARAMETER FIXES - March 8, 2026**
 
 **CRITICAL FIX**: Resolved issues with excessive parameter clamping warnings and strict state validation failures.

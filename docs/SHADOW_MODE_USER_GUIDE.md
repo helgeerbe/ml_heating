@@ -285,6 +285,9 @@ Enhanced learning with weather data:
 ### Q: Is shadow mode safe for my heating system?
 **A:** Completely safe - shadow mode only observes and learns, never controls heating equipment.
 
+### Q: Why does the predicted outlet temperature jump (e.g., 25°C -> 40°C) when I switch to Shadow Mode?
+**A:** This is normal. Shadow Mode intentionally skips safety mechanisms like the "Grace Period" (which ramps up temperature slowly after DHW/Defrost) to show you the *raw* physics-based demand. Active Mode would clamp this value for safety, but Shadow Mode shows the unconstrained model output.
+
 ## Support
 
 For additional help:

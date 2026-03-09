@@ -101,9 +101,17 @@ class EnhancedModelWrapper:
                     self.cycle_aligned_forecast:
                 pv_val = self.cycle_aligned_forecast.get('pv_power', 0.0)
                 caller_pv = kwargs.get('pv_power', 0.0)
+                
+                # Handle list logging safely
+                caller_pv_display = caller_pv
+                if isinstance(caller_pv, list):
+                    caller_pv_display = f"List(len={len(caller_pv)})"
+                elif isinstance(caller_pv, (int, float)):
+                    caller_pv_display = f"{caller_pv:.0f}"
+                
                 logging.debug(
                     "🧠 Smart rounding is using cycle-aligned forecast: "
-                    f"PV={pv_val:.0f}W (caller sent PV={caller_pv:.0f}W)"
+                    f"PV={pv_val:.0f}W (caller sent PV={caller_pv_display}W)"
                 )
                 pv_power = self.cycle_aligned_forecast.get(
                     "pv_power", kwargs.get("pv_power", 0.0)
@@ -258,9 +266,21 @@ class EnhancedModelWrapper:
                 thermal_features,
             )
 
+            # Calculate predicted indoor temp for the optimal outlet temp
+            # This ensures we have a valid target prediction for logging
+            predicted_indoor = self.predict_indoor_temp(
+                outlet_temp=optimal_outlet_temp,
+                outdoor_temp=outdoor_temp,
+                current_indoor=current_indoor,
+                pv_power=thermal_features.get("pv_power", 0.0),
+                fireplace_on=thermal_features.get("fireplace_on", 0.0),
+                tv_on=thermal_features.get("tv_on", 0.0),
+            )
+
             # Get prediction metadata
             confidence = self.thermal_model.learning_confidence
             prediction_metadata = {
+                "predicted_indoor": predicted_indoor,
                 "thermal_time_constant":
                     self.thermal_model.thermal_time_constant,
                 "heat_loss_coefficient":
@@ -296,6 +316,8 @@ class EnhancedModelWrapper:
 
         # Multi-heat source features
         thermal_features["pv_power"] = features.get("pv_now", 0.0)
+        # Pass PV history for lag calculation
+        thermal_features["pv_power_history"] = features.get("pv_power_history")
         thermal_features["fireplace_on"] = float(
             features.get("fireplace_on", 0)
         )
@@ -456,6 +478,14 @@ class EnhancedModelWrapper:
             "tv_on": tv_on,
         }
 
+        # Use PV history if available to respect solar lag
+        pv_input = thermal_features.get("pv_power_history")
+        if not pv_input:
+            logging.debug(f"DEBUG: No PV history found, using scalar avg_pv: {avg_pv}")
+            pv_input = avg_pv
+        else:
+            logging.debug(f"DEBUG: Using PV history (len={len(pv_input)}) instead of scalar {avg_pv}")
+
         # Pre-check for unreachable targets to avoid futile searching
         try:
             # Check what minimum outlet temp produces
@@ -464,7 +494,7 @@ class EnhancedModelWrapper:
                     outlet_temp=outlet_min,
                     outdoor_temp=avg_outdoor,
                     current_indoor=current_indoor,
-                    pv_power=avg_pv,
+                    pv_power=pv_input,
                     fireplace_on=fireplace_on,
                     tv_on=tv_on,
                     _suppress_logging=True,
@@ -477,7 +507,7 @@ class EnhancedModelWrapper:
                     outlet_temp=outlet_max,
                     outdoor_temp=avg_outdoor,
                     current_indoor=current_indoor,
-                    pv_power=avg_pv,
+                    pv_power=pv_input,
                     fireplace_on=fireplace_on,
                     tv_on=tv_on,
                     _suppress_logging=True,
@@ -574,7 +604,8 @@ class EnhancedModelWrapper:
                         outdoor_temp=outdoor_forecast,  # Pass array directly
                         time_horizon_hours=optimization_horizon,
                         time_step_minutes=config.CYCLE_INTERVAL_MINUTES,
-                        pv_power=pv_forecast,  # Pass array directly
+                        pv_power=pv_input,  # Pass history for initialization
+                        pv_forecasts=pv_forecast,  # Pass forecast for future
                         fireplace_on=fireplace_on,
                         tv_on=tv_on,
                         fireplace_power_kw=fireplace_power_kw,
