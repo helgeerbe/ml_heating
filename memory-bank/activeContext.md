@@ -57,6 +57,21 @@
     - The model now uses the base `outlet_effectiveness` consistently, regardless of the temperature differential.
 - **Result**: The model no longer over-predicts efficiency at high temperatures, ensuring it requests sufficient heat to reach the target.
 
+### 🎯 **MORNING DROP FIX - March 10, 2026**
+
+**CRITICAL FIX**: Resolved a "Morning Drop" issue where indoor temperature fell despite rising outdoor temperature and PV.
+
+#### ✅ **SOLAR GAIN HALLUCINATION FIXED**
+- **Context**: Users reported a "Morning Drop" where indoor temperature fell despite rising outdoor temperature and PV.
+- **Diagnosis**:
+    1.  **History Initialization**: The model initialized its history buffer using a *blended forecast* instead of actual sensor data. This caused it to "hallucinate" solar gain that hadn't happened yet.
+    2.  **Optimization Horizon**: The fixed 4-hour horizon caused the model to "coast" on future solar gain, reducing immediate heating output too early.
+- **Fix**:
+    - **Corrected History**: `_calculate_required_outlet_temp` now uses `current_pv` (actual sensor data) for history initialization.
+    - **Dynamic Horizon**: Implemented a dynamic optimization horizon. If the house is cold (>0.5°C below target), the horizon shortens to 1 hour to prioritize immediate comfort.
+- **Result**: The model now correctly responds to the immediate thermal deficit and ignores future solar gain until it actually occurs.
+- **Verification**: Validated with `validation/reproduce_morning_drop_context.py`.
+
 ### 🎯 **SHADOW MODE FIXES - March 9, 2026**
 
 **CRITICAL FIX**: Resolved issues with missing target temperature logging and explained prediction jumps in Shadow Mode.

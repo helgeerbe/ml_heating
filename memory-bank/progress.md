@@ -1,6 +1,24 @@
 # ML Heating System - Current Progress
 
-## 🎯 CURRENT STATUS - March 8, 2026
+## 🎯 CURRENT STATUS - March 10, 2026
+
+### ✅ **MORNING DROP FIX COMPLETE (March 10, 2026)**
+
+**System Status**: **OPERATIONAL & STABLE** - Resolved a critical issue where indoor temperature dropped at sunrise due to "hallucinated" solar gain.
+
+**Fix**:
+- **Corrected History**: `_calculate_required_outlet_temp` now uses `current_pv` (actual sensor data) for history initialization instead of blended forecast.
+- **Dynamic Horizon**: Implemented a dynamic optimization horizon (1h when cold, 4h when stable) to prevent "coasting" on future solar gain.
+
+**Test Suite Health**: **EXCELLENT** - Validated with `validation/reproduce_morning_drop_context.py`.
+
+### ✅ **SHADOW MODE FIXES COMPLETE (March 9, 2026)**
+
+**System Status**: **OPERATIONAL & STABLE** - Resolved missing target temperature in logs and documented prediction jump behavior.
+
+**Fix**:
+- **Missing Target**: Explicitly calculated `predicted_indoor` in `simplified_outlet_prediction`.
+- **Prediction Jump**: Documented that Shadow Mode shows raw physics demand (no grace period clamping).
 
 ### ✅ **CONFIGURATION PARAMETER FIXES COMPLETE (March 8, 2026)**
 
