@@ -481,10 +481,20 @@ class EnhancedModelWrapper:
         # Use PV history if available to respect solar lag
         pv_input = thermal_features.get("pv_power_history")
         if not pv_input:
-            logging.debug(f"DEBUG: No PV history found, using scalar avg_pv: {avg_pv}")
-            pv_input = avg_pv
+            # FIX: Use current PV instead of blended average to avoid
+            # "morning drop" where forecast causes model to hallucinate past
+            # solar gain
+            current_pv = thermal_features.get("pv_power", 0.0)
+            logging.debug(
+                f"DEBUG: No PV history found, using current PV: {current_pv} "
+                f"(was avg_pv: {avg_pv})"
+            )
+            pv_input = current_pv
         else:
-            logging.debug(f"DEBUG: Using PV history (len={len(pv_input)}) instead of scalar {avg_pv}")
+            logging.debug(
+                f"DEBUG: Using PV history (len={len(pv_input)}) instead of "
+                f"scalar {avg_pv}"
+            )
 
         # Pre-check for unreachable targets to avoid futile searching
         try:
@@ -587,11 +597,31 @@ class EnhancedModelWrapper:
             # Predict indoor temperature with this outlet temperature using
             # cycle-aligned conditions
             try:
-                # STABILITY FIX: Use a longer prediction horizon (4h) for
-                # control optimization to prevent oscillation. Optimizing for
-                # 30min (cycle time) leads to "deadbeat control" behavior and
-                # excessive outlet temperatures.
-                optimization_horizon = 4.0
+                # DYNAMIC HORIZON: Adjust optimization horizon based on need.
+                # If we are cold (below target), shorten the horizon to
+                # prioritize near-term recovery and prevent "coasting" on
+                # future solar gain.
+                # If we are close to target, use long horizon for stability.
+                temp_diff = target_indoor - current_indoor
+                if temp_diff > 0.3:
+                    # Cold (>0.3°C gap): Focus on next 1.0 hour for aggressive
+                    # recovery. This prevents the "morning drop" where the
+                    # system coasts on predicted solar gain despite being cold.
+                    optimization_horizon = 1.0
+                    logging.debug(
+                        "   Dynamic Horizon: 1.0h (Aggressive Recovery)"
+                    )
+                elif temp_diff > 0.1:
+                    # Cool (>0.1°C gap): Focus on next 2.0 hours for moderate
+                    # recovery
+                    optimization_horizon = 2.0
+                    logging.debug(
+                        "   Dynamic Horizon: 2.0h (Moderate Recovery)"
+                    )
+                else:
+                    # Maintenance/Warm: Focus on 4.0h for maximum stability
+                    optimization_horizon = 4.0
+                    logging.debug("   Dynamic Horizon: 4.0h (Stability)")
 
                 # Pass full forecast arrays to thermal model for accurate
                 # trajectory. outdoor_forecast contains [1h, 2h, 3h, 4h]
