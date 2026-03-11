@@ -78,3 +78,48 @@ The fix involved two key changes in `src/model_wrapper.py`:
 ### Verification
 -   **Reproduction Script**: `validation/reproduce_morning_drop_v2.py` demonstrated that the fix reduced the drop from ~15°C to 0°C.
 -   **Regression Test**: Added `tests/unit/test_morning_drop.py` with comprehensive tests for both the history initialization and the dynamic horizon logic.
+
+---
+
+## 5. Morning Drop Regression (Horizon Sensitivity)
+
+### Issue Description
+Even with the previous fixes, the system would sometimes underheat when the indoor temperature was very close to the target (e.g., 20.95°C vs 21.0°C). In this "micro-deficit" state, if the forecast showed strong solar gain in 3-4 hours, the system would "coast," failing to close the final 0.05°C gap and potentially letting the temperature drop further.
+
+### Root Cause Analysis
+The dynamic horizon logic had a "dead zone":
+-   Diff > 0.3°C: 1.0h Horizon (Aggressive)
+-   Diff > 0.1°C: 2.0h Horizon (Moderate)
+-   Diff <= 0.1°C: 4.0h Horizon (Stability)
+
+When the deficit was small (e.g., 0.05°C), the system used the 4.0h horizon. This long horizon allowed the model to "see" the strong solar gain expected in hour 3 or 4. The optimization algorithm concluded that no heating was needed now because the sun would eventually raise the temperature, ignoring the immediate discomfort of being slightly cold.
+
+### Resolution
+Modified `src/model_wrapper.py` to make the 2.0h horizon the standard for *any* temperature deficit, no matter how small.
+-   **New Logic**:
+    -   Diff > 0.3°C: 1.0h Horizon (Aggressive)
+    -   Diff > 0.0°C: 2.0h Horizon (Moderate)  <-- Changed from > 0.1
+    -   Diff <= 0.0°C: 4.0h Horizon (Stability)
+
+Now, the 4.0h horizon is reserved strictly for maintaining temperature (equilibrium or overshoot). Any deficit triggers a shorter horizon (max 2.0h), forcing the model to focus on near-term recovery rather than distant solar gains.
+
+### Verification
+-   **Reproduction Script**: `validation/reproduce_morning_drop_v3.py` showed that with a 0.04°C deficit and strong forecast, the outlet temp increased from ~29.7°C (underheating) to ~34.7°C (correct heating).
+-   **Unit Tests**: Updated `tests/unit/test_morning_drop.py` to verify the new thresholds.
+
+---
+
+## 6. Morning Drop Regression (Forecast Interpolation)
+
+### Issue Description
+A latent bug in the forecast interpolation logic caused the model to "compress" future solar gains into the near term when using shorter horizons. For example, if the horizon was 2.0h, the model would incorrectly map the 4-hour forecast array to the 2-hour window, making solar gain expected at hour 4 appear at hour 2.
+
+### Root Cause Analysis
+In `src/thermal_equilibrium_model.py`, the legacy `weather_forecasts` interpolation block used `np.linspace(0, time_horizon_hours, source_len)` for the source time axis. This meant that if `time_horizon_hours` was 2.0 and `source_len` was 5 (0h, 1h, 2h, 3h, 4h), the source times were interpreted as `[0.0, 0.5, 1.0, 1.5, 2.0]`. This effectively accelerated time by 2x, causing the model to anticipate future heat much sooner than reality.
+
+### Resolution
+Updated the interpolation logic to use `np.arange(source_len) * 1.0` for the source time axis. This ensures that the forecast data points are always mapped to their correct physical times (0h, 1h, 2h, 3h, 4h), regardless of the simulation horizon length.
+
+### Verification
+-   **Reproduction Script**: `validation/reproduce_morning_drop_v3.py` confirmed that the drop was eliminated (0.14°C vs ~5°C previously).
+-   **Regression Tests**: Updated `tests/unit/test_prediction_context.py` and `tests/unit/test_regression_scenarios.py` to reflect the correct interpolation behavior.

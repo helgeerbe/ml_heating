@@ -5,9 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.1] - 2026-03-08
+## [0.2.1] - 2026-03-11
 
 ### Fixed
+- **Morning Drop Regression:** Fixed a critical regression where forecast data was being compressed in time, causing future solar gain to be applied prematurely.
+    - **Corrected Interpolation:** Replaced `np.linspace` with `np.arange` in `thermal_equilibrium_model.py` to ensure forecast data points map to correct physical times (0h, 1h, 2h...) regardless of the optimization horizon.
+    - **Step Interpolation:** Confirmed step-wise interpolation (zero-order hold) for PV data to prevent ramping up solar gain before it actually occurs.
 - **Startup Overshoot:** Fixed a critical issue where the system would request maximum heat (65°C) immediately after a restart. This was caused by a "poisoned" thermal state (High Heat Loss + Low Effectiveness) persisting across restarts. Added enhanced corruption detection to catch this specific parameter combination and automatically reset to safe defaults.
 - **DHW Overshoot Prevention:** Fixed a critical issue where the system would jump to maximum temperature (e.g., 65°C) after a DHW cycle if the model predicted a high requirement. Integrated `GradualTemperatureControl` into the grace period logic to ensure temperature changes are clamped to safe limits (e.g., +2°C per cycle).
 - **Sunrise Temperature Drop:** Fixed a critical issue where the indoor temperature would drop significantly at sunrise. This was caused by the model over-reacting to initial solar gain and simultaneously over-predicting the heating effect of high outlet temperatures.

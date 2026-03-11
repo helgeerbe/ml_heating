@@ -58,11 +58,6 @@ class UnifiedPredictionContext:
             - tv_on: TV status
             - use_forecasts: Boolean indicating if forecasts were used
         """
-        context = {
-            "target_temp": target_temp,
-            "current_temp": current_temp,
-        }
-
         # Get cycle time from config
         cycle_minutes = config.CYCLE_INTERVAL_MINUTES
         cycle_hours = cycle_minutes / 60.0
@@ -96,7 +91,9 @@ class UnifiedPredictionContext:
             forecast_3h_pv = features.get('pv_forecast_3h', pv_power)
             forecast_4h_pv = features.get('pv_forecast_4h', pv_power)
 
+            # Include current conditions at t=0 for correct interpolation
             outdoor_forecast = [
+                outdoor_temp,
                 forecast_1h_outdoor,
                 forecast_2h_outdoor,
                 forecast_3h_outdoor,
@@ -104,6 +101,7 @@ class UnifiedPredictionContext:
             ]
 
             pv_forecast = [
+                pv_power,
                 forecast_1h_pv,
                 forecast_2h_pv,
                 forecast_3h_pv,
@@ -114,15 +112,22 @@ class UnifiedPredictionContext:
             if cycle_hours <= 1.0:
                 # 0-60min cycles: use average over the cycle
                 # Assuming linear interpolation between current and 1h forecast
-                # The average condition during the cycle is the value at the midpoint.
-                # For a 30 min cycle (0.5h), midpoint is 15 min (0.25h).
-                # Weight = midpoint / 1h = (cycle_hours / 2) / 1 = cycle_hours / 2
+                # The average condition during the cycle is the value at the
+                # midpoint. For a 30 min cycle (0.5h), midpoint is 15 min
+                # (0.25h).
+                # Weight = midpoint / 1h = (cycle_hours / 2) / 1
                 weight = cycle_hours / 2.0
 
                 avg_outdoor = (
                     outdoor_temp * (1 - weight) + forecast_1h_outdoor * weight
                 )
-                avg_pv = pv_power * (1 - weight) + forecast_1h_pv * weight
+                # FIX: For PV, use conservative step interpolation (zero-order
+                # hold) instead of linear interpolation to prevent "morning
+                # drop". If we are at t=0 (current), we assume current PV holds
+                # until we have evidence otherwise.
+                # Linear interpolation assumes immediate ramp-up which is false
+                # for sunrise.
+                avg_pv = pv_power
 
             elif cycle_hours <= 1.51:  # 60-90min cycles: use 1h forecast
                 avg_outdoor = forecast_1h_outdoor
@@ -151,8 +156,8 @@ class UnifiedPredictionContext:
             # No forecast data available, use current values
             avg_outdoor = outdoor_temp
             avg_pv = pv_power
-            outdoor_forecast = [outdoor_temp] * 4
-            pv_forecast = [pv_power] * 4
+            outdoor_forecast = [outdoor_temp] * 5
+            pv_forecast = [pv_power] * 5
             use_forecasts = False
 
             logging.debug(

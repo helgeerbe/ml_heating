@@ -57,6 +57,21 @@
     - The model now uses the base `outlet_effectiveness` consistently, regardless of the temperature differential.
 - **Result**: The model no longer over-predicts efficiency at high temperatures, ensuring it requests sufficient heat to reach the target.
 
+### 🎯 **MORNING DROP REGRESSION FIX - March 11, 2026**
+
+**CRITICAL FIX**: Resolved a regression where the "Morning Drop" reappeared due to incorrect forecast interpolation in the thermal model.
+
+#### ✅ **FORECAST INTERPOLATION CORRECTION**
+- **Context**: Despite previous fixes, the system was still reducing heating output too early in the morning.
+- **Diagnosis**:
+    - **Time Compression**: The `predict_thermal_trajectory` method in `src/thermal_equilibrium_model.py` was using `np.linspace(0, time_horizon_hours, source_len)` to generate time steps for forecast interpolation. When the optimization horizon was shorter than the forecast length (e.g., 2 hours vs 4 hours), this compressed the 4-hour forecast into the 2-hour window.
+    - **Premature Solar Gain**: This compression caused solar gain predicted for hour 3 or 4 to be applied at hour 1 or 2, leading the model to reduce heating output prematurely.
+- **Fix**:
+    - **Corrected Time Steps**: Changed `source_times` to use `np.arange(source_len) * 1.0`. This ensures that forecast data points are mapped to their correct physical times (0h, 1h, 2h...) regardless of the optimization horizon.
+    - **Step Interpolation**: Confirmed that PV data uses step-wise interpolation (zero-order hold) to prevent "ramping" solar gain before it actually occurs.
+- **Result**: The model now correctly aligns forecast data with simulation time. The "Morning Drop" in the reproduction script was reduced from ~5.12°C to 0.14°C.
+- **Verification**: Validated with `validation/reproduce_morning_drop_v3.py`.
+
 ### 🎯 **MORNING DROP FIX - March 10, 2026**
 
 **CRITICAL FIX**: Resolved a "Morning Drop" issue where indoor temperature fell despite rising outdoor temperature and PV.

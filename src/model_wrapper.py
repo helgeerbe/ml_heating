@@ -290,6 +290,12 @@ class EnhancedModelWrapper:
                 "learning_confidence": confidence,
                 "prediction_method": "thermal_equilibrium_single_prediction",
                 "cycle_count": self.cycle_count,
+                # Add optimization horizon if available (it's a local var in
+                # _calculate_required_outlet_temp, so we might need to store it
+                # or pass it back. For now, we'll check if it was stored)
+                "optimization_horizon": getattr(
+                    self, "_last_optimization_horizon", None
+                )
             }
 
             if optimal_outlet_temp is None:
@@ -611,9 +617,10 @@ class EnhancedModelWrapper:
                     logging.debug(
                         "   Dynamic Horizon: 1.0h (Aggressive Recovery)"
                     )
-                elif temp_diff > 0.1:
-                    # Cool (>0.1°C gap): Focus on next 2.0 hours for moderate
-                    # recovery
+                elif temp_diff > 0.0:
+                    # Cool (>0.0°C gap): Focus on next 2.0 hours for moderate
+                    # recovery. Any deficit should prioritize near-term target
+                    # achievement over long-term coasting.
                     optimization_horizon = 2.0
                     logging.debug(
                         "   Dynamic Horizon: 2.0h (Moderate Recovery)"
@@ -622,6 +629,9 @@ class EnhancedModelWrapper:
                     # Maintenance/Warm: Focus on 4.0h for maximum stability
                     optimization_horizon = 4.0
                     logging.debug("   Dynamic Horizon: 4.0h (Stability)")
+
+                # Store for metadata
+                self._last_optimization_horizon = optimization_horizon
 
                 # Pass full forecast arrays to thermal model for accurate
                 # trajectory. outdoor_forecast contains [1h, 2h, 3h, 4h]
@@ -1087,6 +1097,13 @@ class EnhancedModelWrapper:
             # Get trajectory prediction with forecast integration
             # Use the enhanced predict_thermal_trajectory which now supports
             # arrays
+
+            # Use PV history if available to respect solar lag, otherwise
+            # use current scalar
+            pv_history = thermal_features.get("pv_power_history")
+            if not pv_history:
+                pv_history = thermal_features.get("pv_power", 0.0)
+
             trajectory = self.thermal_model.predict_thermal_trajectory(
                 current_indoor=current_indoor,
                 target_indoor=target_indoor,
@@ -1094,7 +1111,8 @@ class EnhancedModelWrapper:
                 outdoor_temp=outdoor_forecast,  # Pass array directly
                 time_horizon_hours=config.TRAJECTORY_STEPS,
                 time_step_minutes=config.CYCLE_INTERVAL_MINUTES,
-                pv_power=pv_forecast,  # Pass array directly
+                pv_power=pv_history,  # Pass history or current scalar
+                pv_forecasts=pv_forecast,  # Pass forecast array
                 fireplace_on=fireplace_on,
                 tv_on=thermal_features.get("tv_on", 0.0),
                 fireplace_power_kw=fireplace_power_kw,

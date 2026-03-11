@@ -1371,20 +1371,25 @@ class ThermalEquilibriumModel:
         if isinstance(outdoor_temp, (list, np.ndarray)):
             # Interpolate array input to simulation steps
             source_len = len(outdoor_temp)
-            if source_len == num_steps:
-                outdoor_forecasts = list(outdoor_temp)
-            else:
-                # Interpolate to match simulation steps
-                indices = np.linspace(0, source_len - 1, num_steps)
-                outdoor_forecasts = np.interp(
-                    indices, np.arange(source_len), outdoor_temp
-                ).tolist()
+            # ASSUMPTION: Input arrays are hourly forecasts starting at t=0
+            # We use time-based interpolation instead of index-based to handle
+            # horizons shorter than the forecast array (e.g. 1h horizon
+            # with 4h forecast)
+            source_times = np.arange(source_len) * 1.0
+            target_times = np.linspace(0, time_horizon_hours, num_steps)
+
+            outdoor_forecasts = np.interp(
+                target_times, source_times, outdoor_temp
+            ).tolist()
         elif weather_forecasts:
             # Legacy support for separate argument
             source_len = len(weather_forecasts)
             # Assume weather_forecasts are hourly if not specified, map to
-            # steps. If we assume weather_forecasts matches the horizon hours:
-            source_times = np.linspace(0, time_horizon_hours, source_len)
+            # steps.
+            # FIX: Use actual time steps (0, 1, 2...) instead of scaling to
+            # horizon. This prevents time compression when horizon < forecast
+            # length.
+            source_times = np.arange(source_len) * 1.0
             target_times = np.linspace(0, time_horizon_hours, num_steps)
             outdoor_forecasts = np.interp(
                 target_times, source_times, weather_forecasts
@@ -1406,11 +1411,23 @@ class ThermalEquilibriumModel:
         # Prepare forecast source
         if pv_forecasts:
             source_len = len(pv_forecasts)
-            source_times = np.linspace(0, time_horizon_hours, source_len)
+            # ASSUMPTION: Input arrays are hourly forecasts starting at t=0
+            source_times = np.arange(source_len) * 1.0
             target_times = np.linspace(0, time_horizon_hours, num_steps)
-            pv_future_values = np.interp(
-                target_times, source_times, pv_forecasts
-            ).tolist()
+
+            # Use step interpolation (zero-order hold) for PV to be
+            # conservative. This prevents "morning drop" where linear
+            # interpolation would start ramping up solar gain immediately
+            # from t=0, causing the model to reduce heating before the sun
+            # actually provides warmth.
+            # NOTE: side='left' ensures that at exact hour boundaries
+            # (e.g. t=1.0), we still use the previous value, delaying the new
+            # forecast until we are strictly past the hour.
+            indices = np.searchsorted(
+                source_times, target_times, side='left'
+            ) - 1
+            indices = np.clip(indices, 0, source_len - 1)
+            pv_future_values = np.array(pv_forecasts)[indices].tolist()
         else:
             # If no forecast, assume persistence of last known value
             last_val = pv_buffer[-1] if pv_buffer else 0.0

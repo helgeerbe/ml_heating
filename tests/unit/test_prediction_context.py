@@ -23,8 +23,8 @@ def test_create_prediction_context_with_forecasts_short_cycle():
         # Outdoor = 8 * 0.75 + 10 * 0.25 = 6 + 2.5 = 8.5
         assert context['avg_outdoor'] == 8.5
         
-        # PV = 50 * 0.75 + 100 * 0.25 = 37.5 + 25 = 62.5
-        assert context['avg_pv'] == 62.5
+        # PV = 50 (Step interpolation / zero-order hold for conservative estimate)
+        assert context['avg_pv'] == 50
 
 
 def test_create_prediction_context_with_forecasts_long_cycle():
@@ -79,7 +79,8 @@ def test_prediction_context_manager(manager):
         assert manager.get_context() is not None
         # 8.5 as calculated in short_cycle test
         assert manager.get_thermal_model_params()['outdoor_temp'] == 8.5
-        assert manager.get_forecast_arrays()[0][0] == 10
+        # The forecast array now includes current temp at index 0
+        assert manager.get_forecast_arrays()[0][0] == 8
         assert manager.uses_forecasts() is True
 
 

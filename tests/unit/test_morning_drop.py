@@ -156,11 +156,11 @@ class TestMorningDropPrevention:
 
     def test_dynamic_horizon_lengthens_when_stable(self, wrapper):
         """
-        Test that the optimization horizon is 4.0h when the house is close to target.
+        Test that the optimization horizon is 4.0h when the house is at or above target.
         """
         # Setup stable scenario
-        current_indoor = 20.95
-        target_temp = 21.0 # Gap = 0.05°C (Stable)
+        current_indoor = 21.0
+        target_temp = 21.0 # Gap = 0.0°C (Stable)
         
         features = {
             "outdoor_temp": 5.0,
@@ -202,3 +202,46 @@ class TestMorningDropPrevention:
                 break
         
         assert found_correct_horizon, "Did not find any call with time_horizon_hours=4.0"
+
+    def test_dynamic_horizon_moderate_when_cool(self, wrapper):
+        """
+        Test that the optimization horizon is 2.0h when the house is slightly cool
+        (gap > 0.0 but <= 0.3).
+        """
+        # Setup cool scenario
+        current_indoor = 20.9
+        target_temp = 21.0 # Gap = 0.1°C (Cool)
+        
+        features = {
+            "outdoor_temp": 5.0,
+            "pv_power": 0.0,
+            "target_temp": target_temp,
+            "indoor_temp_lag_30m": current_indoor,
+            "pv_power_history": [0.0] * 10
+        }
+        
+        # Mock _get_forecast_conditions
+        wrapper._get_forecast_conditions = MagicMock(return_value=(
+            5.0, 0.0, [5.0]*4, [0.0]*4
+        ))
+        
+        # Ensure pre-check doesn't trigger early exit
+        wrapper.thermal_model.predict_equilibrium_temperature.side_effect = [
+            15.0, # min_prediction
+            30.0, # max_prediction
+        ] + [21.0] * 25
+
+        # Run calculation
+        wrapper.calculate_optimal_outlet_temp(features)
+        
+        # Verify predict_thermal_trajectory was called with time_horizon_hours=2.0
+        calls = wrapper.thermal_model.predict_thermal_trajectory.call_args_list
+        assert len(calls) > 0
+        
+        found_correct_horizon = False
+        for call in calls:
+            if call.kwargs.get("time_horizon_hours") == 2.0:
+                found_correct_horizon = True
+                break
+        
+        assert found_correct_horizon, "Did not find any call with time_horizon_hours=2.0"
