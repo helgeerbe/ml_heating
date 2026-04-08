@@ -177,6 +177,51 @@ class TestEnhancedModelWrapper:
         # The first call increments cycle_count from 0 to 1 and returns
         assert wrapper_instance.cycle_count == 1
 
+    def test_binary_search_precision_midpoint_trap(self, wrapper_instance, mocker):
+        """Test that binary search does not prematurely converge on the 45.0C midpoint."""
+        # Mock the thermal model to return a prediction that is just within the old 0.1C tolerance
+        # but outside a tighter tolerance, to simulate the midpoint trap.
+        
+        # Target is 21.2. Midpoint is 45.0.
+        # Let's say 45.0 produces 21.26 (error 0.06).
+        # With 0.1 tolerance, it converges immediately.
+        # With 0.01 tolerance, it should continue searching.
+        
+        def mock_predict(*args, **kwargs):
+            outlet_temp = kwargs.get('outlet_temp')
+            if outlet_temp == 45.0:
+                return {"trajectory": [21.26], "times": [0.5], "reaches_target_at": 0.5}
+            elif outlet_temp < 45.0:
+                return {"trajectory": [21.1], "times": [0.5], "reaches_target_at": 0.5}
+            else:
+                return {"trajectory": [21.4], "times": [0.5], "reaches_target_at": 0.5}
+                
+        mocker.patch.object(
+            wrapper_instance.thermal_model, 'predict_thermal_trajectory',
+            side_effect=mock_predict
+        )
+        
+        # Also mock predict_equilibrium_temperature for the pre-checks
+        mocker.patch.object(
+            wrapper_instance.thermal_model, 'predict_equilibrium_temperature',
+            return_value=21.26
+        )
+        
+        # Disable trajectory correction for this test to isolate binary search
+        mocker.patch('src.config.TRAJECTORY_PREDICTION_ENABLED', False)
+        
+        test_features = {
+            'indoor_temp_lag_30m': 21.1,
+            'target_temp': 21.2,
+            'outdoor_temp': 10.0,
+        }
+        
+        optimal_temp, _ = wrapper_instance.calculate_optimal_outlet_temp(test_features)
+        
+        # If it falls into the trap, it will return exactly 45.0
+        # If it continues searching, it will return something else
+        assert optimal_temp != 45.0, "Binary search prematurely converged on the 45.0C midpoint"
+
     def test_binary_search_heating(self, wrapper_instance):
         """Test the binary search for a heating scenario."""
         # This is an indirect test of _calculate_required_outlet_temp

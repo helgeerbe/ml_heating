@@ -301,18 +301,27 @@ class BlockingStateManager:
         else:
             state_dict = state.__dict__
 
-        grace_target = gradual_ctrl.apply_gradual_control(
-            grace_target,
-            actual_outlet_temp_start,
-            state_dict
+        # Use last_final_temp as the baseline for gradual control during
+        # grace period to prevent jumping to the current (potentially high)
+        # actual outlet temp
+        baseline_temp = (
+            float(state.last_final_temp)
+            if state.last_final_temp is not None
+            else float(actual_outlet_temp_start)
         )
+
+        grace_target = float(gradual_ctrl.apply_gradual_control(
+            grace_target,
+            baseline_temp,
+            state_dict
+        ))
             
-        delta0 = actual_outlet_temp_start - grace_target
+        delta0 = float(actual_outlet_temp_start) - grace_target
         if abs(delta0) < 1.0:
             logging.info(
                 "Actual outlet (%.1f°C) is close to the new intelligent "
                 "target (%.1f°C); no wait needed.",
-                actual_outlet_temp_start,
+                float(actual_outlet_temp_start),
                 grace_target,
             )
             return
@@ -325,25 +334,26 @@ class BlockingStateManager:
         # can happen if the model predicts a low required outlet temp (e.g.
         # 20C) but the system is currently running hotter (e.g. 35C) and the
         # house is cold. Waiting would cause a temperature drop.
-        try:
-            if wait_for_cooling and float(current_indoor) < float(
-                target_indoor
-            ):
+        if current_indoor is not None and target_indoor is not None:
+            try:
+                curr_in = float(current_indoor)
+                tgt_in = float(target_indoor)
+                if wait_for_cooling and curr_in < tgt_in:
+                    logging.warning(
+                        "Grace Period Safety: Underheating detected "
+                        "(%.1f°C < %.1f°C) but model requests cooling "
+                        "(%.1f°C -> %.1f°C). Skipping wait.",
+                        curr_in,
+                        tgt_in,
+                        float(actual_outlet_temp_start),
+                        grace_target,
+                    )
+                    return
+            except (ValueError, TypeError):
                 logging.warning(
-                    "Grace Period Safety: Underheating detected "
-                    "(%.1f°C < %.1f°C) but model requests cooling "
-                    "(%.1f°C -> %.1f°C). Skipping wait to prevent heat loss.",
-                    float(current_indoor),
-                    float(target_indoor),
-                    actual_outlet_temp_start,
-                    grace_target,
+                    "Could not compare indoor vs target temps for grace "
+                    "period safety check."
                 )
-                return
-        except (ValueError, TypeError):
-            logging.warning(
-                "Could not compare indoor vs target temps for grace period "
-                "safety check."
-            )
             
         logging.info(
             "Intelligent recovery: setting new outlet target to %.1f°C "

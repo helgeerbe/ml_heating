@@ -449,7 +449,7 @@ class EnhancedModelWrapper:
         # Iterative search to find outlet temp that produces target indoor
         # temp. This uses the learned thermal physics parameters from
         # calibration.
-        tolerance = 0.1  # °C
+        tolerance = 0.01  # °C
 
         # Use natural system bounds. Let binary search and physics model
         # handle optimal outlet temps.
@@ -539,9 +539,12 @@ class EnhancedModelWrapper:
                 is_heating_needed = temp_diff > 0.1   # Need to heat house
 
                 # Check if target is unreachable with system limits
-                if target_indoor < min_prediction - tolerance:
-                    # Target below minimum capability
-                    scenario = "cooling" if is_cooling_needed else "heating"
+                if (target_indoor < min_prediction - tolerance and
+                        not is_heating_needed):
+                    # Target below minimum capability, not trying to heat
+                    scenario = (
+                        "cooling" if is_cooling_needed else "maintenance"
+                    )
                     logging.warning(
                         f"🎯 {scenario.title()} pre-check: Target "
                         f"{target_indoor:.1f}°C unreachable "
@@ -550,9 +553,12 @@ class EnhancedModelWrapper:
                     )
                     return outlet_min
 
-                if target_indoor > max_prediction + tolerance:
-                    # Target above maximum capability
-                    scenario = "cooling" if is_cooling_needed else "heating"
+                if (target_indoor > max_prediction + tolerance and
+                        not is_cooling_needed):
+                    # Target above maximum capability, not trying to cool
+                    scenario = (
+                        "heating" if is_heating_needed else "maintenance"
+                    )
                     logging.warning(
                         f"🎯 {scenario.title()} pre-check: Target "
                         f"{target_indoor:.1f}°C unreachable "
