@@ -621,7 +621,7 @@ class EnhancedModelWrapper:
                     # system coasts on predicted solar gain despite being cold.
                     optimization_horizon = 1.0
                     logging.debug(
-                        "   Dynamic Horizon: 1.0h (Aggressive Recovery)"
+                        "   Dynamic Horizon: 1.0h (Aggressive Heating)"
                     )
                 elif temp_diff > 0.0:
                     # Cool (>0.0°C gap): Focus on next 2.0 hours for moderate
@@ -629,10 +629,18 @@ class EnhancedModelWrapper:
                     # achievement over long-term coasting.
                     optimization_horizon = 2.0
                     logging.debug(
-                        "   Dynamic Horizon: 2.0h (Moderate Recovery)"
+                        "   Dynamic Horizon: 2.0h (Moderate Heating)"
+                    )
+                elif temp_diff < -0.2:
+                    # Hot (<-0.2°C gap): Focus on next 1.0 hour for aggressive
+                    # cooling. This prevents the system from coasting on a 4h
+                    # horizon when it needs to actively cool down now.
+                    optimization_horizon = 1.0
+                    logging.debug(
+                        "   Dynamic Horizon: 1.0h (Aggressive Cooling)"
                     )
                 else:
-                    # Maintenance/Warm: Focus on 4.0h for maximum stability
+                    # Maintenance (Within -0.2 to 0.0): Focus on 4.0h for maximum stability
                     optimization_horizon = 4.0
                     logging.debug("   Dynamic Horizon: 4.0h (Stability)")
 

@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Grace Period Clamping**: Updated the grace period logic in `src/heating_controller.py` to use `state.last_final_temp` as the baseline for `apply_gradual_control` instead of `actual_outlet_temp_start`. This ensures that the rate of change is properly clamped relative to the previous setpoint, preventing sudden temperature spikes.
 
 - Fixed pre-check logic in `model_wrapper.py` to prevent short-circuiting to maximum heating when the room is already above the target temperature.
-- Fixed pre-check logic in `model_wrapper.py` to prevent short-circuiting to maximum heating when the room is already above the target temperature.
+- Fixed unexpected outlet temperature jumps (e.g., 14°C to 43°C) during active cooling by introducing a symmetrical dynamic optimization horizon. The system now uses a 1.0h "Aggressive Cooling" horizon when the room is significantly above the target temperature, prioritizing immediate temperature reduction over 4-hour stability.
 ## [0.2.1] - 2026-03-11
 
 ### Fixed
