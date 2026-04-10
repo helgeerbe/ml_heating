@@ -1326,15 +1326,21 @@ class EnhancedModelWrapper:
             min_violates = min_predicted_temp <= target_indoor - 0.1
             max_violates = max_predicted_temp >= target_indoor + 0.1
 
+            # BUGFIX: If the room is currently too warm (cooling scenario),
+            # we should not apply aggressive positive corrections based on
+            # future undershoots predicted at the end of a long horizon.
+            # The binary search already selected a low outlet temp to cool the room.
+            is_cooling_scenario = current_indoor > target_indoor + 0.1
+
             if min_violates and max_violates:
                 # Both boundaries violated - choose the more severe
                 min_severity = abs(min_predicted_temp - (target_indoor - 0.1))
                 max_severity = abs(max_predicted_temp - (target_indoor + 0.1))
-                if min_severity > max_severity:
+                if min_severity > max_severity and not is_cooling_scenario:
                     temp_error = target_indoor - min_predicted_temp
                 else:
                     temp_error = target_indoor - max_predicted_temp
-            elif min_violates:
+            elif min_violates and not is_cooling_scenario:
                 temp_error = target_indoor - min_predicted_temp
             elif max_violates:
                 temp_error = target_indoor - max_predicted_temp
@@ -1347,6 +1353,11 @@ class EnhancedModelWrapper:
                 ):
                     final_predicted_temp = trajectory_temps[-1]
                     temp_error = target_indoor - final_predicted_temp
+                    
+                    # If we are cooling and the final temp is below target,
+                    # don't treat it as a positive error (which would cause heating)
+                    if is_cooling_scenario and temp_error > 0:
+                        temp_error = 0.0
                 else:
                     temp_error = 0.0
 

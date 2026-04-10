@@ -254,6 +254,26 @@ class TestEnhancedModelWrapper:
         # Expect a low outlet temperature (close to minimum)
         assert optimal_temp < 30.0
 
+    def test_warm_room_no_heating_spike(self, wrapper_instance, mocker):
+        """Test that a warm room does not trigger a 65C heating spike due to horizon mismatch."""
+        # Enable trajectory correction to trigger the bug
+        mocker.patch('src.config.TRAJECTORY_PREDICTION_ENABLED', True)
+        
+        # Set up a scenario where the room is too warm
+        test_features = {
+            'indoor_temp_lag_30m': 22.5,
+            'target_temp': 21.0,  # Cooling needed
+            'outdoor_temp': 10.0,
+        }
+
+        optimal_temp, metadata = (
+            wrapper_instance.calculate_optimal_outlet_temp(test_features)
+        )
+
+        # The bug causes the outlet temp to spike to 65.0C (or max clamp)
+        # We expect it to be low (e.g., < 30.0C) because the room is already too warm
+        assert optimal_temp < 30.0, f"Expected low outlet temp for warm room, got {optimal_temp}"
+
     def test_predict_indoor_temp(self, wrapper_instance):
         """Test the predict_indoor_temp method for smart rounding."""
         predicted_indoor = wrapper_instance.predict_indoor_temp(

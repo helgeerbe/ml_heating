@@ -365,18 +365,34 @@ class TestBlockingStateManager:
             41.0,  # Loop 4: Same as current (41.0). No update.
         ]
 
-        # Run
-        blocking_manager._wait_for_grace_target(
-            mock_ha_client,
-            initial_grace_target=40.0,
-            wait_for_cooling=False,
-            wrapper=mock_wrapper,
-            thermal_features=mock_features,
-        )
+        # Mock GradualTemperatureControl
+        with patch(
+            "src.temperature_control.GradualTemperatureControl"
+        ) as mock_gtc:
+            mock_gtc_instance = mock_gtc.return_value
+            # The gradual control will be called with the new target, the initial target, and state
+            # We mock it to return the clamped values we expect
+            # Note: It's only called when abs(new_target - current_grace_target) >= 0.5
+            # Loop 1: new_target=40.0, current=40.0. Diff 0.0 < 0.5. Not called.
+            # Loop 2: new_target=40.2, current=40.0. Diff 0.2 < 0.5. Not called.
+            # Loop 3: new_target=41.0, current=40.0. Diff 1.0 >= 0.5. Called! Returns 41.0.
+            # Loop 4: new_target=41.0, current=41.0. Diff 0.0 < 0.5. Not called.
+            mock_gtc_instance.apply_gradual_control.side_effect = [
+                41.0,  # Loop 3
+            ]
+
+            # Run
+            blocking_manager._wait_for_grace_target(
+                mock_ha_client,
+                initial_grace_target=40.0,
+                wait_for_cooling=False,
+                wrapper=mock_wrapper,
+                thermal_features=mock_features,
+            )
 
         # Verify
-        # Should have updated target twice due to clamping (40.0 -> 40.5 -> 41.0)
-        assert mock_ha_client.set_state.call_count == 2
+        # It only updates ONCE.
+        assert mock_ha_client.set_state.call_count == 1
         args, _ = mock_ha_client.set_state.call_args
         assert args[0] == config.TARGET_OUTLET_TEMP_ENTITY_ID
         assert args[1] == 41.0

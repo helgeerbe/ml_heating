@@ -68,8 +68,9 @@ class GradualTemperatureControl:
         
         # Determine baseline temperature
         if last_final_temp is not None:
-            # Always use last_final_temp as the baseline to ensure gradual control
-            # resumes from the last known setpoint, even after DHW or other interruptions.
+            # Always use last_final_temp as the baseline to ensure gradual
+            # control resumes from the last known setpoint, even after DHW
+            # or other interruptions.
             baseline = last_final_temp
         else:
             baseline = actual_outlet_temp
@@ -88,7 +89,7 @@ class GradualTemperatureControl:
                 final_temp,
             )
             
-        return final_temp
+        return float(final_temp)
 
 
 class SmartRounding:

@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fixed pre-check logic in `model_wrapper.py` to prevent short-circuiting to maximum heating when the room is already above the target temperature.
 - Fixed unexpected outlet temperature jumps (e.g., 14°C to 43°C) during active cooling by introducing a symmetrical dynamic optimization horizon. The system now uses a 1.0h "Aggressive Cooling" horizon when the room is significantly above the target temperature, prioritizing immediate temperature reduction over 4-hour stability.
+- Fixed issue where the system would command extreme heating spikes (65°C) when the room was already too warm. The trajectory correction logic now correctly identifies cooling scenarios and prevents aggressive positive corrections based on predicted future undershoots.
 ## [0.2.1] - 2026-03-11
 
 ### Fixed

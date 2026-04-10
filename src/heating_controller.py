@@ -528,28 +528,27 @@ class BlockingStateManager:
                             # calculation to account for changing conditions,
                             # but cap it strictly.
                             
-                            # Calculate what the target would be if we just
-                            # clamped the delta from current
-                            delta = new_target - current_grace_target
-                            max_dynamic_change = 0.5
-                            clamped_delta = max(
-                                -max_dynamic_change,
-                                min(delta, max_dynamic_change)
+                            # FIX: Use GradualTemperatureControl to ensure
+                            # dynamic updates during the grace period respect
+                            # the same safety limits as the main loop.
+                            # We use the initial_grace_target as the baseline
+                            # to prevent runaway ramping over multiple loops.
+                            from .temperature_control import (
+                                GradualTemperatureControl
                             )
-                            proposed_target = (
-                                current_grace_target + clamped_delta
-                            )
+                            gradual_ctrl = GradualTemperatureControl()
                             
-                            # Now apply a global clamp relative to initial
-                            # grace target. Allow max +1.0C / -1.0C deviation
-                            # from the start of the grace period.
-                            max_deviation = 1.0
+                            # Create a minimal state dict with the initial
+                            # grace target as the baseline
+                            temp_control_state = {
+                                "last_final_temp": initial_grace_target
+                            }
                             
-                            final_target = max(
-                                initial_grace_target - max_deviation,
-                                min(
-                                    proposed_target,
-                                    initial_grace_target + max_deviation
+                            final_target = float(
+                                gradual_ctrl.apply_gradual_control(
+                                    new_target,
+                                    initial_grace_target,
+                                    temp_control_state
                                 )
                             )
 
