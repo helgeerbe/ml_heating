@@ -893,8 +893,11 @@ class ThermalEquilibriumModel:
                     damping_factor,
                     avg_outdoor,
                 )
+        # Scale down PV update because its gradient is massive
+        # (due to PV power being in Watts, 0-5000)
+        # A typical finite diff for PV is ~1000. For HLC it's ~10.
         pv_heat_weight_update = (
-            current_learning_rate * pv_heat_weight_gradient
+            current_learning_rate * pv_heat_weight_gradient * 0.001
         )
         tv_heat_weight_update = (
             current_learning_rate * tv_heat_weight_gradient

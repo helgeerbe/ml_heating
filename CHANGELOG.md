@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed pre-check logic in `model_wrapper.py` to prevent short-circuiting to maximum heating when the room is already above the target temperature.
 - Fixed unexpected outlet temperature jumps (e.g., 14°C to 43°C) during active cooling by introducing a symmetrical dynamic optimization horizon. The system now uses a 1.0h "Aggressive Cooling" horizon when the room is significantly above the target temperature, prioritizing immediate temperature reduction over 4-hour stability.
 - Fixed issue where the system would command extreme heating spikes (65°C) when the room was already too warm. The trajectory correction logic now correctly identifies cooling scenarios and prevents aggressive positive corrections based on predicted future undershoots.
+- **Adaptive Learning Saturation**: Fixed an issue where the `pv_heat_weight` parameter would get stuck at its lower bound, preventing the model from correcting persistent under-prediction bias.
+    - **Relaxed Bounds**: Lowered the minimum bound for `pv_heat_weight` from `0.0001` to `0.0` in `src/thermal_config.py` to allow the model to fully discount PV heating if necessary.
+    - **Gradient Scaling**: Implemented dynamic gradient scaling for `pv_heat_weight` in `src/thermal_equilibrium_model.py` to account for the large magnitude of PV power inputs (Watts) compared to other features, preventing erratic parameter jumps and saturation.
 ## [0.2.1] - 2026-03-11
 
 ### Fixed

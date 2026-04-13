@@ -55,7 +55,7 @@ class ThermalParameterConfig:
         'thermal_time_constant': (3.0, 100.0),     # Hours
         'equilibrium_ratio': (0.1, 0.9),         # dimensionless
         'total_conductance': (0.1, 0.8),         # 1/hour
-        'pv_heat_weight': (0.0001, 0.005),       # W/°C
+        'pv_heat_weight': (0.0, 0.01),           # W/°C
         'fireplace_heat_weight': (0.01, 6.0),    # 1/°C
         'tv_heat_weight': (0.05, 1.5),           # W/°C
         'adaptive_learning_rate': (0.001, 0.1),
