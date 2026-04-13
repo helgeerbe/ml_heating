@@ -235,9 +235,12 @@ class OnlineLearning:
             last_run_features, actual_applied_temp
         )
         
+        # Get the predicted indoor temperature from the previous cycle
+        last_predicted_indoor = state.get("last_predicted_indoor")
+        
         # Perform online learning
         self._perform_online_learning(
-            learning_features, actual_applied_temp, actual_indoor_change, current_indoor
+            learning_features, actual_applied_temp, actual_indoor_change, current_indoor, last_predicted_indoor
         )
         
         # Log shadow mode comparison if applicable
@@ -286,6 +289,7 @@ class OnlineLearning:
         actual_applied_temp: float,
         actual_indoor_change: float,
         current_indoor: float,
+        last_predicted_indoor: Optional[float] = None,
     ) -> None:
         """Perform the actual online learning"""
         try:
@@ -334,21 +338,24 @@ class OnlineLearning:
                     'tv_on': learning_features.get('tv_on', 0.0)
                 }
                 
-                # Calculate what the model predicted vs actual result
-                predicted_change = 0.0  # Model's prediction for indoor temp change
+                # Use the actual predicted indoor temperature from the previous cycle
+                # If not available, fall back to assuming no change (previous indoor temp)
+                previous_indoor = current_indoor - actual_indoor_change
+                predicted_temp = last_predicted_indoor if last_predicted_indoor is not None else previous_indoor
                 
                 # Call the learning feedback method
                 wrapper.learn_from_prediction_feedback(
-                    predicted_temp=current_indoor - actual_indoor_change + predicted_change,
+                    predicted_temp=predicted_temp,
                     actual_temp=current_indoor,
                     prediction_context=prediction_context,
                     timestamp=datetime.now().isoformat()
                 )
                 
                 logging.debug(
-                    "✅ Active mode learning: ml_outlet=%.1f°C, actual_change=%.3f°C, cycle=%d",
+                    "✅ Active mode learning: ml_outlet=%.1f°C, predicted_indoor=%.2f°C, actual_indoor=%.2f°C, cycle=%d",
                     actual_applied_temp,
-                    actual_indoor_change,
+                    predicted_temp,
+                    current_indoor,
                     wrapper.cycle_count,
                 )
             
@@ -553,5 +560,22 @@ class TemperatureControlManager:
             final_temp,
             target_indoor_temp,
         )
+        
+        # Step 4: Store the predicted indoor temperature for the next cycle's learning
+        try:
+            wrapper = get_enhanced_model_wrapper()
+            thermal_params = wrapper.cycle_aligned_forecast
+            predicted_indoor = wrapper.predict_indoor_temp(
+                outlet_temp=smart_rounded_temp,
+                **thermal_params
+            )
+            if predicted_indoor is not None:
+                state["last_predicted_indoor"] = predicted_indoor
+                logging.debug(
+                    "Stored predicted indoor temp %.2f°C for next cycle learning",
+                    predicted_indoor
+                )
+        except Exception as e:
+            logging.warning("Failed to store predicted indoor temp: %s", e)
         
         return final_temp, confidence, metadata, smart_rounded_temp

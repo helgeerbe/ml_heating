@@ -28,6 +28,8 @@ class ThermalEquilibriumModel:
     A physics-based thermal model that predicts indoor temperature equilibrium
     and adapts its parameters based on real-world feedback.
     """
+    
+    _load_warning_logged = False
 
     def __init__(self):
         # Initialize default attributes to ensure existence
@@ -53,15 +55,19 @@ class ThermalEquilibriumModel:
                 from unified_thermal_state import get_thermal_state_manager
 
             state_manager = get_thermal_state_manager()
+            # Only log the warning if the file actually exists but failed
+            # to load or if we haven't logged it recently to avoid spamming
             if not state_manager.load_state():
-                logging.warning(
-                    "⚠️ Failed to load thermal state. System is running with "
-                    "DEFAULT parameters (HLC=%.2f). Check logs for load "
-                    "errors.",
-                    state_manager.state["baseline_parameters"][
-                        "heat_loss_coefficient"
-                    ]
-                )
+                if not ThermalEquilibriumModel._load_warning_logged:
+                    logging.warning(
+                        "⚠️ Failed to load thermal state. System is "
+                        "running with DEFAULT parameters (HLC=%.2f). "
+                        "Check logs for load errors.",
+                        state_manager.state["baseline_parameters"][
+                            "heat_loss_coefficient"
+                        ]
+                    )
+                    ThermalEquilibriumModel._load_warning_logged = True
 
             thermal_state = state_manager.get_current_parameters()
 
