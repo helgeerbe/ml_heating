@@ -459,7 +459,14 @@ class EnhancedModelWrapper:
         # floor of 25°C to prevent the model from suggesting "cooling"
         # temperatures (e.g. 14°C) just because of high PV or other gains.
         if target_indoor > current_indoor:
-            outlet_min = max(outlet_min, 25.0)
+            # Context-aware minimum floor: If the room is cold, we must not
+            # completely shut off the heat (dropping to 25.0°C) just because
+            # the sun is shining. We enforce a dynamic minimum that scales
+            # with the temperature deficit.
+            temp_deficit = target_indoor - current_indoor
+            dynamic_min = 25.0 + (temp_deficit * 5.0)  # 1°C deficit = 30°C min
+            # Cap dynamic min at 35°C
+            outlet_min = max(outlet_min, min(dynamic_min, 35.0))
 
         logging.debug(
             f"🔧 Using natural bounds: outlet_min={outlet_min:.1f}°C, "
@@ -1361,32 +1368,45 @@ class EnhancedModelWrapper:
                 else:
                     temp_error = 0.0
 
-            # USER FEEDBACK: Implement exponential correction based on
-            # deviation from target. This ensures a strong pull towards the
-            # target when the temperature is far away, and a gentler approach
-            # as it gets closer.
-
-            # k controls the aggression of the exponential curve. A higher
-            # value means a more aggressive response to temperature deviations.
-            # REDUCED: Lowered k from 1.5 to 0.5 to prevent massive overshoot
-            # during startup when deviation is large (>1.5°C).
-            k = 0.5
-            raw_aggression = np.exp(k * initial_deviation)
-
-            # Clamp aggression to prevent runaway correction
-            aggression_factor = min(raw_aggression, 3.0)
+            # ADAPTIVE TRAJECTORY CORRECTION:
+            # Implement non-linear scaling based on temperature deviation to
+            # stabilize the control loop and prevent high-amplitude
+            # oscillations.
+            
+            if initial_deviation < 0.5:
+                # Small Deviation: Strong dampening to prevent oscillation
+                aggression_factor = 0.2
+                logging.info(
+                    "   Small deviation (<0.5°C): Applying strong dampening "
+                    "(0.2x)"
+                )
+            elif initial_deviation < 1.5:
+                # Medium Deviation: Linear transition from dampened to normal
+                # Maps 0.5°C -> 0.2x, 1.5°C -> 1.0x
+                aggression_factor = 0.2 + (initial_deviation - 0.5) * 0.8
+                logging.info(
+                    "   Medium deviation: Applying transition scaling "
+                    f"({aggression_factor:.2f}x)"
+                )
+            else:
+                # Large Deviation: Aggressive correction for fast recovery
+                # Maps 1.5°C -> 1.5x, capped at 3.0x
+                aggression_factor = min(
+                    1.5 + (initial_deviation - 1.5) * 1.0, 3.0
+                )
+                logging.info(
+                    "   Large deviation (>1.5°C): Applying aggressive scaling "
+                    f"({aggression_factor:.2f}x)"
+                )
 
             # Physics-based scaling using house thermal characteristics.
             if self.thermal_model.outlet_effectiveness > 0.01:
-                # REVERTED: Reduced base scale multiplier from 0.5 back to 0.3
-                # and added hard clamp to prevent explosion when effectiveness
-                # is very low (e.g. < 0.05).
                 raw_scale = (
                     1.0 / self.thermal_model.outlet_effectiveness
                 ) * 0.3
                 base_scale = min(raw_scale, 10.0)
             else:
-                base_scale = 10.0  # Fallback (reduced from 25.0)
+                base_scale = 10.0
 
             physics_scale = base_scale
 
@@ -1396,24 +1416,20 @@ class EnhancedModelWrapper:
             )
             urgency_multiplier = 1.0 + 2.0 * (time_pressure ** 2)
 
-            # Calculate the final correction, applying aggression only when
-            # undershooting.
+            # Calculate the final correction
             if temp_error > 0:
-                # Apply exponential aggression when we are below target.
+                # Undershoot: Apply the adaptive aggression factor
                 correction = (
                     temp_error
                     * physics_scale
                     * urgency_multiplier
                     * aggression_factor
                 )
-                logging.info(
-                    "   Exponential Correction for undershoot: "
-                    f"aggression_factor={aggression_factor:.2f}x"
-                )
             else:
-                # When overshooting, apply a gentle, non-exponential correction
-                # to prevent the system from pulling back too hard.
-                overshoot_dampening = 0.4
+                # Overshoot: Apply a gentle correction, further dampened by the
+                # adaptive factor if we are close to the target, to prevent
+                # swinging back too hard.
+                overshoot_dampening = 0.4 * min(aggression_factor, 1.0)
                 correction = (
                     temp_error
                     * physics_scale
@@ -1426,16 +1442,25 @@ class EnhancedModelWrapper:
                 )
 
             # Clamp the correction to a reasonable maximum to prevent extreme
-            # values.
-            # REDUCED: Cap max correction to 15.0°C (was 20.0°C) to prevent
-            # startup overshoot.
-            max_correction = 15.0
-            correction = max(-max_correction, min(max_correction, correction))
+            # values. Cap max positive correction to 10.0°C to prevent massive
+            # spikes, but allow larger negative corrections (-15.0°C) to shed
+            # heat quickly if needed.
+            correction = max(-15.0, min(10.0, correction))
 
             # Final outlet temperature.
             corrected_outlet = outlet_temp + correction
+            
+            # Context-Aware Minimum Floor: Ensure the trajectory correction
+            # doesn't push the temperature below the dynamic safety floor if
+            # the room is cold.
+            outlet_min = config.CLAMP_MIN_ABS
+            if target_indoor > current_indoor:
+                temp_deficit = target_indoor - current_indoor
+                dynamic_min = 25.0 + (temp_deficit * 5.0)
+                outlet_min = max(outlet_min, min(dynamic_min, 35.0))
+                
             corrected_outlet = max(
-                config.CLAMP_MIN_ABS,
+                outlet_min,
                 min(config.CLAMP_MAX_ABS, corrected_outlet),
             )
 

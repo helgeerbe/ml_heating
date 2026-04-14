@@ -142,6 +142,11 @@ class PhysicsConstants:
     # °C - maximum equilibrium outlet temp
     EQUILIBRIUM_OUTLET_MAX = 65.0
 
+    # Solar gain limits (Phase 3.2 addition)
+    # °C - maximum effective temperature rise from solar gain
+    # Increased to 3.0°C to account for high radiation (>9kW) heating the roof
+    MAX_SOLAR_CONTRIBUTION = 3.0
+
     # Significant change thresholds for logging (Phase 3.2 addition)
     # Hours - log thermal time constant changes
     SIGNIFICANT_THERMAL_CHANGE = 0.01

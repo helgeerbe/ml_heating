@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Adaptive Trajectory Correction**: Implemented non-linear scaling based on temperature deviation in `src/model_wrapper.py` to stabilize the control loop and prevent high-amplitude oscillations.
+    - **Small Deviations (<0.5°C)**: Strongly dampened (0.2x) to prevent oscillation near the target.
+    - **Large Deviations (>1.5°C)**: Aggressively scaled (up to 3.0x) for fast recovery (e.g., returning from vacation).
+    - **Global Safety Floor**: Enforced the context-aware minimum heating floor globally across all correction phases to prevent the trajectory correction from overriding the safety floor.
+- **Solar Gain Overestimation**: Fixed an issue where high PV generation (>4kW) caused the model to overestimate solar heating, resulting in the system prematurely dropping the commanded outlet temperature to the 25.0°C safety floor and leaving the room slightly below target.
+    - **Non-Linear Solar Saturation**: Replaced the unbounded linear solar calculation in `src/thermal_equilibrium_model.py` with a `tanh` saturation curve, capped at 3.0°C equivalent heating, to physically constrain the maximum possible solar contribution.
+    - **Context-Aware Minimum Floor**: Updated `src/model_wrapper.py` to enforce a dynamic minimum outlet temperature when the room is below target (e.g., 1°C deficit = 30°C minimum floor), ensuring the heat pump is never completely shut off just because the sun is shining.
 - **Binary Search Precision**: Tightened the tolerance in `src/model_wrapper.py` from `0.1` to `0.01` to prevent premature convergence on the 45.0°C midpoint during optimal outlet temperature calculation.
 - **Grace Period Clamping**: Updated the grace period logic in `src/heating_controller.py` to use `state.last_final_temp` as the baseline for `apply_gradual_control` instead of `actual_outlet_temp_start`. This ensures that the rate of change is properly clamped relative to the previous setpoint, preventing sudden temperature spikes.
 

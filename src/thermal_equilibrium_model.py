@@ -508,9 +508,18 @@ class ThermalEquilibriumModel:
         """
         # Calculate effective solar power with lag
         effective_pv = self._calculate_effective_solar(pv_power)
-        heat_from_pv = effective_pv * self.external_source_weights.get(
+        raw_heat_from_pv = effective_pv * self.external_source_weights.get(
             "pv", 0.0
         )
+        
+        # Apply non-linear saturation to solar gain to prevent overestimation
+        # Cap the maximum effective solar contribution to prevent shutting off
+        import math
+        max_solar = PhysicsConstants.MAX_SOLAR_CONTRIBUTION
+        if raw_heat_from_pv > 0:
+            heat_from_pv = max_solar * math.tanh(raw_heat_from_pv / max_solar)
+        else:
+            heat_from_pv = 0.0
 
         if fireplace_power_kw is not None:
             heat_from_fireplace = fireplace_power_kw
