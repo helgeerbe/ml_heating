@@ -352,7 +352,7 @@ DELTA_CALIBRATION_MAX_OFFSET: float = float(
 )
 
 # Absolute clamp values for outlet temperature
-CLAMP_MIN_ABS: float = float(os.getenv("CLAMP_MIN_ABS", "25.0"))
+CLAMP_MIN_ABS: float = float(os.getenv("CLAMP_MIN_ABS", "20.0"))
 CLAMP_MAX_ABS: float = float(os.getenv("CLAMP_MAX_ABS", "55.0"))
 
 # Thermal Model Parameters

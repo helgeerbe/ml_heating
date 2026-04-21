@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Hardware Boundary Enforcement**: Enforced a strict 20.0°C hardware minimum boundary for the outlet temperature in the model to prevent learning discrepancies.
+- Fixed `test_adaptive_learning_with_large_errors` integration test to accommodate the new 20.0°C minimum boundary.
 - **Adaptive Trajectory Correction**: Implemented non-linear scaling based on temperature deviation in `src/model_wrapper.py` to stabilize the control loop and prevent high-amplitude oscillations.
     - **Small Deviations (<0.5°C)**: Strongly dampened (0.2x) to prevent oscillation near the target.
     - **Large Deviations (>1.5°C)**: Aggressively scaled (up to 3.0x) for fast recovery (e.g., returning from vacation).
@@ -18,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Binary Search Precision**: Tightened the tolerance in `src/model_wrapper.py` from `0.1` to `0.01` to prevent premature convergence on the 45.0°C midpoint during optimal outlet temperature calculation.
 - **Grace Period Clamping**: Updated the grace period logic in `src/heating_controller.py` to use `state.last_final_temp` as the baseline for `apply_gradual_control` instead of `actual_outlet_temp_start`. This ensures that the rate of change is properly clamped relative to the previous setpoint, preventing sudden temperature spikes.
 
+- **Predictive Pre-heating Spikes**: Fixed sudden, short-duration spikes in commanded outlet temperature (e.g., jumping from 23°C to 33°C and back) caused by the model's Dynamic Horizon predicting a future temperature deficit as outdoor temperatures drop.
+    - **Warm Room Ceiling**: Implemented a dynamic ceiling in `src/model_wrapper.py` to cap the maximum allowed outlet temperature when the room is currently above the target, preventing massive heat injections while the room is still warm.
+- **Dynamic Floor Optimization**: Improved the Continuous Dynamic Floor logic in `src/model_wrapper.py` to allow the heating to turn off completely when the room is warm.
+    - **Exponential Decay**: Replaced the linear drop with an exponential decay curve when the room is above target. This smoothly and rapidly lowers the minimum outlet temperature boundary towards `CLAMP_MIN_ABS` (e.g., 15.0°C) as the surplus increases, preventing short-cycling while allowing the system to idle.
+    - **Configuration Integration**: Replaced hardcoded minimum temperature values (15.0°C, 20.0°C) with the `config.CLAMP_MIN_ABS` setting to ensure the dynamic floor respects user-configured safety limits.
 - Fixed pre-check logic in `model_wrapper.py` to prevent short-circuiting to maximum heating when the room is already above the target temperature.
 - Fixed unexpected outlet temperature jumps (e.g., 14°C to 43°C) during active cooling by introducing a symmetrical dynamic optimization horizon. The system now uses a 1.0h "Aggressive Cooling" horizon when the room is significantly above the target temperature, prioritizing immediate temperature reduction over 4-hour stability.
 - Fixed issue where the system would command extreme heating spikes (65°C) when the room was already too warm. The trajectory correction logic now correctly identifies cooling scenarios and prevents aggressive positive corrections based on predicted future undershoots.

@@ -456,18 +456,61 @@ class EnhancedModelWrapper:
         outlet_min, outlet_max = config.CLAMP_MIN_ABS, config.CLAMP_MAX_ABS
 
         # CONTINUOUS DYNAMIC FLOOR: Prevent control loop oscillations caused by
-        # asymmetric boundaries (cliffs). We calculate a continuous minimum floor
-        # based on the temperature deficit.
-        # - Base floor is 25.0°C when exactly at target.
-        # - Increases by 5°C per 1°C deficit (e.g., 0.5°C cold -> 27.5°C)
-        # - Decreases by 5°C per 1°C surplus (e.g., 0.5°C warm -> 22.5°C)
+        # asymmetric boundaries (cliffs). We calculate a continuous minimum
+        # floor based on the temperature deficit.
         temp_deficit = target_indoor - current_indoor
-        dynamic_min = 25.0 + (temp_deficit * 5.0)
+        
+        if temp_deficit >= 0:
+            # Cold (Deficit): Linear increase.
+            # - Base floor is 25.0°C when exactly at target.
+            # - Increases by 5°C per 1°C deficit (e.g., 0.5°C cold -> 27.5°C)
+            dynamic_min = 25.0 + (temp_deficit * 5.0)
+        else:
+            # Warm (Surplus): Exponential decay curve.
+            # Drops quickly at first to shed heat, then smoothly tapers off
+            # towards the absolute minimum to prevent short-cycling cliffs.
+            # At +0.1°C surplus -> ~21.3°C
+            # At +0.25°C surplus -> ~18.2°C
+            # At +0.5°C surplus -> ~16.0°C
+            surplus = abs(temp_deficit)
+            dynamic_min = config.CLAMP_MIN_ABS + (
+                (25.0 - config.CLAMP_MIN_ABS) * np.exp(-4.6 * surplus)
+            )
         
         # Absolute bounds for the dynamic floor:
-        # Never drop below 20.0°C to prevent freezing the floor slab (which causes
-        # massive rebound heating later). Never exceed 35.0°C for the floor minimum.
-        outlet_min = max(outlet_min, min(max(dynamic_min, 20.0), 35.0))
+        # Allow dropping to CLAMP_MIN_ABS when the room is warm to allow
+        # heating to turn off completely, but never exceed 35.0°C.
+        outlet_min = max(
+            outlet_min, min(max(dynamic_min, config.CLAMP_MIN_ABS), 35.0)
+        )
+
+        # WARM ROOM CEILING: Prevent predictive pre-heating spikes when the room
+        # is currently warm. If the room is above target, we should not allow
+        # the system to command massive heat injections just because the outdoor
+        # temperature is dropping and a future deficit is predicted.
+        surplus = current_indoor - target_indoor
+        if surplus > 0.05:
+            # Room is warm. Cap the maximum outlet temperature.
+            # The warmer the room, the lower the ceiling.
+            # At +0.1°C surplus, ceiling is ~33°C
+            # At +0.3°C surplus, ceiling is ~29°C
+            # At +0.5°C surplus, ceiling is ~25°C
+            dynamic_max = 35.0 - (surplus * 20.0)
+            
+            # Absolute bounds for the dynamic ceiling:
+            # Never drop below 25.0°C (to allow maintenance).
+            dynamic_max = max(25.0, min(dynamic_max, config.CLAMP_MAX_ABS))
+            
+            # Apply the ceiling
+            outlet_max = min(outlet_max, dynamic_max)
+            
+            # Ensure min doesn't exceed max
+            outlet_min = min(outlet_min, outlet_max)
+            
+            logging.debug(
+                f"🌡️ Warm Room Ceiling applied: surplus={surplus:.2f}°C, "
+                f"capping outlet_max at {outlet_max:.1f}°C"
+            )
 
         logging.debug(
             f"🔧 Using natural bounds: outlet_min={outlet_min:.1f}°C, "
@@ -1451,13 +1494,23 @@ class EnhancedModelWrapper:
             # Final outlet temperature.
             corrected_outlet = outlet_temp + correction
             
-            # CONTINUOUS DYNAMIC FLOOR: Ensure the trajectory correction respects
-            # the same continuous minimum floor to prevent floor slab freezing
-            # and subsequent rebound oscillations.
+            # CONTINUOUS DYNAMIC FLOOR: Ensure the trajectory correction
+            # respects the same continuous minimum floor to prevent floor
+            # slab freezing and subsequent rebound oscillations.
             outlet_min = config.CLAMP_MIN_ABS
             temp_deficit = target_indoor - current_indoor
-            dynamic_min = 25.0 + (temp_deficit * 5.0)
-            outlet_min = max(outlet_min, min(max(dynamic_min, 20.0), 35.0))
+            
+            if temp_deficit >= 0:
+                dynamic_min = 25.0 + (temp_deficit * 5.0)
+            else:
+                surplus = abs(temp_deficit)
+                dynamic_min = config.CLAMP_MIN_ABS + (
+                    (25.0 - config.CLAMP_MIN_ABS) * np.exp(-4.6 * surplus)
+                )
+                
+            outlet_min = max(
+                outlet_min, min(max(dynamic_min, config.CLAMP_MIN_ABS), 35.0)
+            )
                 
             corrected_outlet = max(
                 outlet_min,

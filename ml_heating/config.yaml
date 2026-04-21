@@ -88,7 +88,7 @@ options:
   # The minimum safe indoor temperature allowed by the system
   safety_min_temp: 18.0
   # Absolute minimum allowed outlet temperature (in °C)
-  clamp_min_abs: 14.0
+  clamp_min_abs: 20.0
   # Absolute maximum allowed outlet temperature (in °C)
   clamp_max_abs: 65.0
   
@@ -296,7 +296,7 @@ schema:
   # Safety Configuration - Float types with safety ranges
   safety_max_temp: "float(18.0,30.0)"
   safety_min_temp: "float(15.0,25.0)"
-  clamp_min_abs: "float(10.0,20.0)"
+  clamp_min_abs: "float(20.0,25.0)"
   clamp_max_abs: "float(50.0,80.0)"
   # InfluxDB Configuration - String and port types
   influxdb_host: "str"

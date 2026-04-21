@@ -42,8 +42,8 @@ def test_adaptive_learning_with_large_errors():
 
     for i in range(10):  # Corrective learning
         model.update_prediction_feedback(
-            22.0,
             20.0,
+            22.0,
             {
                 'outlet_temp': 50.0 - i,
                 'outdoor_temp': 5.0,
