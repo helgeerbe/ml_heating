@@ -480,6 +480,33 @@ except Exception as e:
 - **Code 6**: HEATING_OFF - Climate not in heat/auto mode
 - **Code 7**: MODEL_ERROR - Exception during prediction
 
+### Trust Gate & Control Modes (T0.7 + OE-recalibration)
+
+The `sensor.ml_heating_state` **value** answers *"is ML actually commanding the heat pump this cycle?"* (`1`=active, `0`=not). The `ml_control_mode` attribute disambiguates the cases:
+
+| `ml_control_mode` | state | meaning |
+|-------------------|-------|---------|
+| `"active"` | 1 | trusted by the self-calibration gate; ML drives the outlet |
+| `"passthrough"` | 0 | learning / recovering accuracy; heat-curve-anchored outlet |
+| `"shadow"` | 0 | shadow mode (heat curve drives); ML observes only |
+| `"unknown"` | 0/1 | rare fallback when the trust gate itself could not be evaluated |
+
+**Trust gates** (both must pass for `active`):
+- `confidence >= config.CONFIDENCE_THRESHOLD` (code default 0.2; `.env` override 2.0)
+- `total_predictions >= MIN_PREDICTIONS_FOR_TRUST` (default 50; `.env` override 5 for post-reset re-engagement). Effective count = `len(prediction_metrics.predictions)`.
+- `_is_model_calibrated()` additionally requires `baseline_source == "calibrated"` for the *aggressive* outlet path — this is a separate, stricter cap from the trust gate, so `config`-baseline deployments stay conservatively capped even when the trust threshold is lowered.
+
+**Passthrough safety cap**: the passthrough guard caps the outlet at `config.PASSTHROUGH_MAX_SAFE_OUTLET` (default 50.0 °C) instead of `_MAX_OUTLET_TEMP` (65 °C). This rejects heat-curve feedback-loop contamination (the 53 °C incident) and keeps a hard safety margin between passthrough and the absolute model ceiling.
+
+### Outlet-Effectiveness (OE) Gradient Learning
+
+OE self-corrects from two gradient signals, combined in the main OE update:
+
+1. **Trajectory gradient** (`_calculate_outlet_effectiveness_gradient` → `_calculate_parameter_gradient`) — uses the 30-minute prediction error. **Weak** at long time constants: with τ≈29 h and 30-min cycles the approach factor is `1 - exp(-0.5/29) ≈ 0.017`, so a 4 °C equilibrium error yields only ~0.07 °C trajectory error → gradient ~0.0003/cycle → 40+ day recovery. This is the *fine-tuning* signal.
+2. **Equilibrium-based gradient** (`_calculate_equilibrium_based_oe_gradient`) — fires when the room is thermally stable (indoor gradient < 0.15 °C/cycle). When stable, the actual indoor temperature *is* the equilibrium, so the method computes the predicted equilibrium directly and uses `actual − predicted equilibrium` as the error. **~50× stronger** than the trajectory gradient; this is the *convergence* signal that lets OE recover in hours/days rather than weeks.
+
+> **Cold-weather damping is symmetric**: all OE updates are damped equally during cold weather (no asymmetric ratchet), preventing the 1.107→0.358 seasonal drift that caused the 53 °C incident. See `docs/BUGFIX_OE_DRIFT_AND_PASSTHROUGH_CAP.md`.
+
 ### Performance Monitoring
 
 **Real-time Metrics**:

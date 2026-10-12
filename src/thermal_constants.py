@@ -31,6 +31,13 @@ class PhysicsConstants:
     # Heat pump bounds (°C)
     MIN_OUTLET_TEMP = 25.0     # Minimum heat pump outlet temperature
     MAX_OUTLET_TEMP = 70.0     # Maximum safe heat pump outlet temperature
+    # NOTE (T0.4): This is the ABSOLUTE hardware safety limit, intentionally
+    # distinct from the model soft-max (ThermalParameterConfig.outlet_temp_max
+    # = 65.0 °C, used by ThermalEquilibriumModel) and the control-layer clamp
+    # (config.CLAMP_MAX_ABS = 55.0 °C, applied by the binary search). These
+    # three form a deliberate hierarchy of increasing permissiveness:
+    # control clamp (55) ≤ model soft-max (65) ≤ hardware limit (70). Do not
+    # collapse them into one value.
     
     # Physics bounds
     ABSOLUTE_ZERO_CELSIUS = -273.15  # Absolute zero in Celsius

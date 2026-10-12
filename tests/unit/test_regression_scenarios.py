@@ -54,7 +54,10 @@ class TestRegressionScenarios(unittest.TestCase):
         # Setup State Manager Mock
         mock_state_manager = MagicMock()
         mock_state_manager.get_learning_metrics.return_value = {
-            "current_cycle_count": 10
+            "current_cycle_count": 10,
+            "baseline_source": "calibrated",
+            "accuracy_state": "accurate",
+            "total_predictions": 100,
         }
         # Simulate no saved state
         mock_state_manager.load_state.return_value = False

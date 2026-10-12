@@ -1264,6 +1264,74 @@ class InfluxService:
         except Exception as e:
             logging.exception("Failed to write thermodynamic metrics: %s", e)
 
+    def write_trust_state(
+        self,
+        trust_state: dict,
+        bucket: Optional[str] = None,
+        org: Optional[str] = None,
+        timestamp: Optional[datetime] = None,
+    ) -> None:
+        """T0.7: Write the self-calibration trust state + gate signals to
+        InfluxDB so the promotion/demotion thresholds can be tuned from
+        production telemetry.
+
+        Exports one point per cycle with: is_trusted, promotion_progress,
+        mae_24h, mean_error_24h, good_control_pct, total_predictions and the
+        stage/reason/outlet_source as tags.
+        """
+        if not trust_state:
+            return
+
+        write_bucket = (
+            bucket
+            or getattr(config, "INFLUX_FEATURES_BUCKET", None)
+            or "ml_heating_features"
+        )
+        write_org = org or getattr(config, "INFLUX_ORG", None)
+
+        try:
+            point_time = timestamp if timestamp else datetime.now(timezone.utc)
+            p = (
+                Point("ml_trust_state")
+                .tag("source", "ml_heating")
+                .tag("stage", str(trust_state.get("stage", "unknown")))
+                .tag("trust_reason",
+                     str(trust_state.get("trust_reason", "unknown")))
+                .tag("outlet_source",
+                     str(trust_state.get("outlet_source", "unknown")))
+                .tag("calibration_method",
+                     str(trust_state.get("calibration_method", "config")))
+                .time(point_time)
+            )
+
+            p = p.field(
+                "is_trusted", int(bool(trust_state.get("is_trusted", False)))
+            )
+            p = p.field(
+                "promotion_progress",
+                float(trust_state.get("promotion_progress", 0.0)),
+            )
+            p = p.field(
+                "total_predictions",
+                int(trust_state.get("total_predictions", 0)),
+            )
+            # 24h accuracy signals (may be absent on early cycles).
+            mae_24h = trust_state.get("mae_24h")
+            if mae_24h is not None:
+                p = p.field("mae_24h", float(mae_24h))
+            mean_error_24h = trust_state.get("mean_error_24h")
+            if mean_error_24h is not None:
+                p = p.field("mean_error_24h", float(mean_error_24h))
+            good_control_pct = trust_state.get("good_control_pct")
+            if good_control_pct is not None:
+                p = p.field("good_control_pct", float(good_control_pct))
+
+            self.write_api.write(bucket=write_bucket, org=write_org, record=p)
+            logging.debug("Wrote trust state to InfluxDB")
+        except Exception as e:
+            logging.exception("Failed to write trust state: %s", e)
+
+
 
 def create_influx_service():
     """

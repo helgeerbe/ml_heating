@@ -205,6 +205,70 @@ FIREPLACE_STATUS_ENTITY_ID: str = os.getenv(
 #   abrupt changes and is required as the heatpump only accepts full degrees.
 DEBUG: bool = os.getenv("DEBUG", "0") == "1"
 CONFIDENCE_THRESHOLD: float = float(os.getenv("CONFIDENCE_THRESHOLD", "0.2"))
+
+# --- T0.7: Self-Calibration Trust Gate ---
+# The ML heating system is always enabled. While the thermal model is not yet
+# trusted, it commands the heat-pump's own curve (passthrough) and learns in the
+# background. Each cycle it evaluates a compound gate; when all criteria are met
+# it auto-promotes itself to "calibrated" and starts commanding the ML-predicted
+# outlet. If accuracy later degrades it auto-demotes back to passthrough.
+# These thresholds are conservative defaults — calibrate them from one cold
+# season of production telemetry (logged every cycle as promotion_progress).
+AUTO_CAL_MIN_PREDICTIONS: int = int(
+    os.getenv("AUTO_CAL_MIN_PREDICTIONS", "200")
+)
+AUTO_CAL_MAE_THRESHOLD: float = float(
+    os.getenv("AUTO_CAL_MAE_THRESHOLD", "1.0")
+)
+AUTO_CAL_BIAS_THRESHOLD: float = float(
+    os.getenv("AUTO_CAL_BIAS_THRESHOLD", "0.5")
+)
+AUTO_CAL_GOOD_CONTROL_PCT: float = float(
+    os.getenv("AUTO_CAL_GOOD_CONTROL_PCT", "80.0")
+)
+# Max std/range of a learned parameter (fraction of its allowed bounds) over
+# the last AUTO_CAL_PARAM_STABILITY_WINDOW history records for the model to be
+# considered "converged". Blocks promotion when parameters are still drifting
+# (the key inversion-safety guard: a model that looks accurate but has not
+# converged can invert dangerously).
+AUTO_CAL_PARAM_STABILITY_FRAC: float = float(
+    os.getenv("AUTO_CAL_PARAM_STABILITY_FRAC", "0.05")
+)
+AUTO_CAL_PARAM_STABILITY_WINDOW: int = int(
+    os.getenv("AUTO_CAL_PARAM_STABILITY_WINDOW", "20")
+)
+# A trusted model is demoted to passthrough when accuracy breaches the
+# promotion thresholds multiplied by this factor (sustained). It re-promotes
+# when accuracy recovers below the promotion thresholds again.
+DEMOTION_FACTOR: float = float(os.getenv("DEMOTION_FACTOR", "1.5"))
+# Number of consecutive cycles the demotion condition must hold before
+# demoting, to avoid reacting to transient spikes.
+DEMOTION_SUSTAINED_CYCLES: int = int(
+    os.getenv("DEMOTION_SUSTAINED_CYCLES", "6")
+)
+# Conservative fallback outlet (°C) used in passthrough when the heat-curve
+# sensor reading is unavailable. Lower than the old 45°C ceiling to avoid
+# overheating from an untrained model.
+CONSERVATIVE_FALLBACK_TEMP: float = float(
+    os.getenv("CONSERVATIVE_FALLBACK_TEMP", "35.0")
+)
+# Minimum plausible heat-curve outlet (°C). Values below this in passthrough
+# are treated as sensor garbage and replaced with the conservative fallback.
+# Set low enough to accept legitimate mild-weather curves (≈20°C) but high
+# enough to reject zero/negative readings from a stale or offline sensor.
+AUTO_CAL_PASSTHROUGH_MIN_OUTLET: float = float(
+    os.getenv("AUTO_CAL_PASSTHROUGH_MIN_OUTLET", "15.0")
+)
+# Maximum safe heat-curve outlet (°C) for passthrough. Values above this
+# are treated as non-physical / feedback-loop contamination and replaced
+# with the conservative fallback. Set high enough for genuine cold-weather
+# curves (up to ~55 °C at -15 °C outdoor) but low enough to reject the
+# 53 °C spike that occurs when the ML system feeds back into the heat-curve
+# entity. Default 50 °C; tune via env var if needed.
+PASSTHROUGH_MAX_SAFE_OUTLET: float = float(
+    os.getenv("PASSTHROUGH_MAX_SAFE_OUTLET", "50.0")
+)
+
 TRAJECTORY_STEPS: int = int(os.getenv("TRAJECTORY_STEPS", "4"))
 CYCLE_INTERVAL_MINUTES: int = int(os.getenv("CYCLE_INTERVAL_MINUTES", "10"))
 MAX_TEMP_CHANGE_PER_CYCLE: int = int(

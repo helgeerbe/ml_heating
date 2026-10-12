@@ -231,6 +231,18 @@ HASS_TOKEN = os.getenv("HASS_TOKEN", "").strip()
 CYCLE_INTERVAL_MINUTES = int(os.getenv("CYCLE_INTERVAL_MINUTES", "30"))
 ```
 
+**Trust / Re-engagement Thresholds** (all env-configurable, code defaults shown):
+```python
+# config.py — confidence gate for ML control authority
+CONFIDENCE_THRESHOLD      = float(os.getenv("CONFIDENCE_THRESHOLD", "0.2"))      # .env override: 2.0
+AUTO_CAL_MIN_PREDICTIONS   = int(os.getenv("AUTO_CAL_MIN_PREDICTIONS", "200"))   # auto-promotion gate
+PASSTHROUGH_MAX_SAFE_OUTLET = float(os.getenv("PASSTHROUGH_MAX_SAFE_OUTLET", "50.0"))  # passthrough ceiling (was _MAX_OUTLET_TEMP 65°C)
+
+# model_wrapper.py — minimum predictions before the ML inversion is trusted
+MIN_PREDICTIONS_FOR_TRUST = int(os.getenv("MIN_PREDICTIONS_FOR_TRUST", "50"))    # .env override: 5 (post-reset re-engagement)
+```
+> **Note**: `MIN_PREDICTIONS_FOR_TRUST` is read as a class attribute on `EnhancedModelWrapper` at import time. The effective `total_predictions` is computed live from `len(prediction_metrics.predictions)` (`model_wrapper.py:2306`), **not** the state-file counter — clearing `prediction_history` resets the effective count. Regression tests in `test_untrained_model_guard.py` pin this to 50 so they stay deterministic under env overrides.
+
 **Entity ID Mapping**:
 ```python
 # Flexible entity mapping for different HA setups

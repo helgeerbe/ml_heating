@@ -75,6 +75,8 @@ class ThermalStateManager:
                 "tv_heat_weight":
                 ThermalParameterConfig.get_default('tv_heat_weight'),
             "source": "config",
+            "calibration_method": "config",  # config|manual|auto
+            "accuracy_state": "unknown",     # unknown|accurate|inaccurate
             "calibration_date": None,
             "calibration_cycles": 0
             },
@@ -339,6 +341,8 @@ class ThermalStateManager:
 
         # Update metadata
         baseline["source"] = "calibrated"
+        baseline["calibration_method"] = "manual"
+        baseline["accuracy_state"] = "accurate"
         baseline["calibration_date"] = datetime.now().isoformat()
         baseline["calibration_cycles"] = calibration_cycles
 
@@ -353,6 +357,65 @@ class ThermalStateManager:
         logging.info("🎯 Set calibrated baseline parameters (cycles: %s)",
                      calibration_cycles)
         self.save_state()
+
+    def auto_promote_baseline(self, parameters: Dict[str, float],
+                               calibration_cycles: int = 0) -> None:
+        """T0.7: Promote the model from passthrough to trusted ML prediction.
+
+        Sets the calibrated baseline from the currently-learned parameters and
+        marks the model as accurate so `get_trust_state()` returns Active. The
+        parameters come straight from online gradient learning — no offline
+        calibration step is needed. This is called automatically each cycle by
+        `EnhancedModelWrapper._check_auto_promotion()` when all gate criteria
+        are met.
+        """
+        # Reuse the manual path for the actual parameter copy.
+        self.set_calibrated_baseline(parameters, calibration_cycles)
+        baseline = self.state["baseline_parameters"]
+        baseline["calibration_method"] = "auto"
+        baseline["accuracy_state"] = "accurate"
+        self.save_state()
+        logging.info(
+            "🏆 AUTO-PROMOTION: model is now trusted (ML outlet commands "
+            "enabled). baseline_source=calibrated (auto)."
+        )
+
+    def mark_inaccurate(self) -> None:
+        """T0.7: Mark the model as inaccurate → demote to passthrough.
+
+        The calibrated baseline is *kept* so the model can re-promote once
+        accuracy recovers. Only the accuracy flag flips so the outlet path
+        switches to heat-curve passthrough.
+        """
+        baseline = self.state["baseline_parameters"]
+        if baseline.get("accuracy_state") == "inaccurate":
+            return  # idempotent
+        baseline["accuracy_state"] = "inaccurate"
+        self.save_state()
+        logging.warning(
+            "⬇️ AUTO-DEMOTION: model accuracy degraded → passthrough. "
+            "Calibrated baseline kept for re-promotion."
+        )
+
+    def mark_accurate(self) -> None:
+        """T0.7: Mark the model as accurate again → re-promote to ML prediction.
+
+        Called when a previously-demoted model's accuracy recovers. Requires
+        an existing calibrated baseline (auto or manual).
+        """
+        baseline = self.state["baseline_parameters"]
+        if baseline.get("source") != "calibrated":
+            # Cannot re-promote a never-calibrated model; promotion must go
+            # through auto_promote_baseline instead.
+            return
+        if baseline.get("accuracy_state") == "accurate":
+            return  # idempotent
+        baseline["accuracy_state"] = "accurate"
+        self.save_state()
+        logging.info(
+            "✅ AUTO-RE-PROMOTION: accuracy recovered → ML outlet commands "
+            "re-enabled."
+        )
 
     def get_current_parameters(self) -> Dict[str, Any]:
         """Get complete thermal state structure."""
@@ -452,6 +515,8 @@ class ThermalStateManager:
 
         return {
             "baseline_source": baseline["source"],
+            "calibration_method": baseline.get("calibration_method", "config"),
+            "accuracy_state": baseline.get("accuracy_state", "unknown"),
             "calibration_date": baseline["calibration_date"],
             "calibration_cycles": baseline["calibration_cycles"],
             "current_cycle_count": learning_state["cycle_count"],

@@ -1,5 +1,108 @@
 # Active Context - Current Work & Decision State
 
+### 🎯 **OE RECALIBRATION + EQUILIBRIUM GRADIENT + PASSTHROUGH CAP (Oct 12, 2026)**
+
+**CRITICAL FIX**: Resolved a miscalibrated ML heating model that commanded dangerously high outlet temperatures (53°C vs needed ~32°C). Root cause chain: asymmetric cold-weather OE damping ratchet → `outlet_effectiveness` drifted 1.107→0.358 over 15K cycles → equilibrium math says 32°C outlet gives only 17.9°C room → model demanded 53°C to compensate → 53°C fed back into heat curve entity → passthrough also commanded 53°C → no safety margin anywhere.
+
+#### ✅ **CHANGES (all complete & syntax-verified)**
+1. **Reset OE** — `outlet_effectiveness_delta` → 0.0 in `unified_thermal_state.json`; runtime OE back to baseline 1.107 (equilibrium ~22.5°C at 32°C outlet). Also reset HLC delta→0, cleared stale `prediction_history`/`parameter_history` from corrupted-OE era, restored `total_predictions`→50.
+2. **Symmetric cold-weather OE damping** — `thermal_equilibrium_model.py`: removed asymmetric ratchet; all OE updates damped equally during cold weather.
+3. **Equilibrium-based OE gradient** — new `_calculate_equilibrium_based_oe_gradient()` (~line 1253) uses direct equilibrium error (actual vs predicted equilibrium) when room is thermally stable (indoor gradient < 0.15°C/cycle). ~50× stronger signal than trajectory-only gradient. Wired into main gradient calc at ~line 851. (Trajectory gradient alone was ~0.0003/cycle → 40+ day recovery given τ≈29h, 30-min cycles.)
+4. **Passthrough safety cap** — `config.py` `PASSTHROUGH_MAX_SAFE_OUTLET=50.0` (env-configurable); `model_wrapper.py` passthrough guard caps at 50°C instead of `_MAX_OUTLET_TEMP` (65°C), rejecting 53°C feedback-loop contamination.
+5. **Re-engagement config** — `.env`: `CONFIDENCE_THRESHOLD=2.0` (was 5.0), `MIN_PREDICTIONS_FOR_TRUST=5` (env-configurable, default 50). `model_wrapper.py`: `import os` added, `MIN_PREDICTIONS_FOR_TRUST` reads env.
+
+#### ✅ **VERIFICATION**
+- Service restarted; **ML control ACTIVE** at cycle 9290: `is_trusted: True`, `ml_control_mode: 'active'`, `outlet_source: 'ml_predicted'`, `Suggested: 28.7°C | Applied: 28.0°C` (down from 53°C), OE=1.107 stable, prediction error 0.207°C, confidence 4.83.
+- **Test suite**: 309 unit tests pass (was 310; +pin in `test_untrained_model_guard.py` fixture to keep regression tests deterministic vs env-overridable `MIN_PREDICTIONS_FOR_TRUST`).
+
+#### 🔑 **KEY LEARNINGS**
+- `total_predictions` is computed live from `len(prediction_metrics.predictions)` (model_wrapper.py:2306), NOT the state-file counter — state-file counter is a side cache incremented in `add_prediction_record`. Clearing `prediction_history` resets the effective count.
+- Actual OE bounds are `(0.2, 2.0)` from `thermal_config.py` (`ThermalParameterConfig`), NOT `(0.01, 1.0)` from `PhysicsConstants`. OE=1.107 is within bounds.
+- `MIN_PREDICTIONS_FOR_TRUST` gates BOTH the trust gate (`is_trusted`/`ml_control_mode`) AND the calibration cap (`_is_model_calibrated`). Our `baseline_source` is `"config"` (not `"calibrated"`), so the uncalibrated cap stays active regardless of the lowered threshold.
+
+#### 📋 **NEXT STEPS**
+1. Monitor first 3–5 cycles in ML control: outlet 28–35°C, OE stable ~1.107, errors <1°C.
+2. Confirm equilibrium-based gradient fires when room stable (debug log "🔬 Equilibrium-based OE gradient").
+3. Confirm passthrough cap warning format if heat curve reads >50°C.
+4. Persist `learning_confidence` and `_demotion_streak` across restarts (carried over from prior session, not yet addressed).
+5. After a few days of stable ML control, consider reverting `CONFIDENCE_THRESHOLD`→5.0 and `MIN_PREDICTIONS_FOR_TRUST`→50.
+
+---
+
+### 🎯 **T0.7+ SENSOR UPDATES IN ALL MODES (Oct 12, 2026)**
+
+**Change**: `sensor.ml_heating_state` is now updated in **every** mode (active, passthrough, shadow). The previous `if not config.SHADOW_MODE:` guard that skipped the sensor write in shadow mode has been removed — dashboards/automations stay live while the model learns.
+
+**New state semantic** — the value answers *"is ML actually commanding the heat pump this cycle?"*:
+- `1` = **active**: not shadow mode AND trusted by the self-calibration gate (ML drives the outlet).
+- `0` = **not commanding**: shadow mode (heat curve drives), OR active-but-passthrough (learning / recovering accuracy).
+
+**New `ml_control_mode` attribute** disambiguates the cases: `"active"` | `"passthrough"` | `"shadow"` | `"unknown"` (the latter only in the rare fallback when the trust gate itself could not be evaluated).
+
+#### ✅ **FILES MODIFIED**
+- `src/main.py` — Added pure helper `determine_ml_heating_state(effective_shadow_mode, is_trusted, confidence, confidence_threshold) -> (state_value, ml_control_mode)`; the state-export block now calls it in both the trust-available and fallback branches; the `if not config.SHADOW_MODE:` guard and the `else: logging.debug("Skipping ML state sensor updates")` branch were removed. The block was de-indented one level and the rich trust attributes (`stage`, `promotion_progress`, `outlet_source`, `ml_control_mode`, …) are now written in shadow mode too.
+- `tests/unit/test_ml_heating_state_sensor.py` — New file, 7 tests covering: active+trusted→(1,"active"), active+passthrough→(0,"passthrough"), shadow+trusted→(0,"shadow"), shadow+untrusted→(0,"shadow"), fallback-shadow→(0,"shadow"), fallback-active-low-conf→(1,"unknown"), fallback-active-ok-conf→(0,"unknown").
+
+#### ✅ **TEST RESULTS**
+- **Full suite**: 310 passed, 0 failed (was 296; +7 new sensor tests, plus pre-existing growth).
+- **Syntax check**: `src/main.py` compiles cleanly.
+
+#### 🔑 **NOTES**
+- `input_boolean.ml_heating` already carries "ML control enabled"; the sensor **value** now carries the more useful "is ML actually driving the heat pump this cycle" — combine both in automations (e.g. enable ML control AND state==1).
+- The legacy fallback (when `get_trust_state()` raises / wrapper missing) preserves the prior confidence-threshold heuristic in active mode and forces state 0 in shadow.
+- Behaviour for active mode is unchanged (trusted→1, untrusted→0), so existing automations keyed on the state value are unaffected; only shadow mode newly emits updates (always 0).
+
+---
+
+
+### 🎯 **T0.7: SELF-CALIBRATING TRUST GATE COMPLETE (March 12, 2026)**
+
+
+**CRITICAL MILESTONE**: Replaced the manual `ML_ACCURACY_GATE_ENABLED` flag with a self-calibrating trust gate that auto-promotes/demotes model authority based on 5 calibration criteria. The ML heating system is now **always enabled** — it learns in the background in "passthrough" mode and auto-promotes itself to commanding the ML-predicted outlet once it converges.
+
+#### ✅ **TRUST GATE IMPLEMENTATION**
+- **5 Criteria Gate** (all must be met to promote):
+  1. `sufficient_predictions` — total_predictions ≥ `AUTO_CAL_MIN_PREDICTIONS` (200)
+  2. `mae_ok` — 24h MAE ≤ `AUTO_CAL_MAE_THRESHOLD` (1.0°C)
+  3. `bias_ok` — 24h mean error ≤ `AUTO_CAL_BIAS_THRESHOLD` (0.5°C)
+  4. `good_control_ok` — 24h good-control % ≥ `AUTO_CAL_GOOD_CONTROL_PCT` (80%)
+  5. `params_stable` — parameter drift (std/range as fraction of bounds) over last `AUTO_CAL_PARAM_STABILITY_WINDOW` (20) records ≤ `AUTO_CAL_PARAM_STABILITY_FRAC` (0.05). This is the **inversion-safety backstop** from the 65°C incident.
+
+- **Auto-Promotion**: `_check_auto_promotion()` runs each feedback cycle. When all 5 criteria are met, calls `state_manager.auto_promote_baseline()` → sets `baseline_parameters.source=calibrated`, `calibration_method=auto`, `accuracy_state=accurate`.
+
+- **Auto-Demotion**: `_check_accuracy_demotion()` uses `DEMOTION_FACTOR` (1.5) scaled thresholds sustained over `DEMOTION_SUSTAINED_CYCLES` (6). Calls `state_manager.mark_inaccurate()` → flips `accuracy_state=inaccurate` (keeps calibrated baseline for re-promotion).
+
+- **Re-Promotion**: On recovery below original thresholds (sustained), `state_manager.mark_accurate()` re-enables ML outlet commands.
+
+- **Passthrough Guard**: While untrusted, commands the heat-pump's own curve (`heat_curve_temp`) directly with **no +3 margin** (the +3 was the original incident risk). Rejects garbage readings below `AUTO_CAL_PASSTHROUGH_MIN_OUTLET` (15°C). Falls back to `CONSERVATIVE_FALLBACK_TEMP` (35°C) when no heat-curve sensor reading available.
+
+#### ✅ **FILES MODIFIED**
+- `src/config.py` — Added `AUTO_CAL_*` thresholds, `DEMOTION_FACTOR`, `DEMOTION_SUSTAINED_CYCLES`, `AUTO_CAL_PASSTHROUGH_MIN_OUTLET`
+- `src/model_wrapper.py` — Added `_evaluate_parameter_stability()`, `_evaluate_calibration_gate()`, `_check_auto_promotion()`, `_check_accuracy_demotion()`, `get_trust_state()`; hooked promotion/demotion into `learn_from_prediction_feedback`; passthrough logic in `calculate_optimal_outlet_temp`
+- `src/unified_thermal_state.py` — Added `auto_promote_baseline()`, `mark_inaccurate()`, `mark_accurate()`
+- `src/main.py` — Rewrote state-export block: `sensor.ml_heating_state` now driven by `get_trust_state()` (active/passthrough/inaccurate stages, gate signals, 24h metrics)
+- `src/influx_service.py` — Added `write_trust_state()`, wired into `_export_metrics_to_influxdb`
+- `tests/unit/test_trust_gate_lifecycle.py` — 3 test classes: `TestCalibrationGate`, `TestDemotionRePromotion`, `TestTrustState`
+- `tests/unit/test_untrained_model_guard.py` — Updated passthrough tests (exact heat-curve, no +3 margin; garbage-rejection test)
+- `tests/unit/test_model_wrapper.py` — Added `trusted_wrapper_instance` fixture for ML-prediction-path tests
+- `tests/unit/test_regression_scenarios.py` — Fixed mock to mark model as trusted for startup-overshoot test
+
+#### ✅ **TEST RESULTS**
+- **Full suite**: 296 passed, 0 failed
+- **Trust gate tests**: 26 passed (test_trust_gate_lifecycle + test_untrained_model_guard)
+- **Syntax check**: All 5 edited source files compile cleanly
+
+#### 🔑 **KEY DECISIONS**
+- **State structure keys**: `baseline_parameters` (with `source`, `accuracy_state`, `calibration_method`, `calibration_cycles`), `prediction_metrics.total_predictions` (NOT `learning_state.total_predictions`)
+- `get_trust_state()` returns safe passthrough on ANY exception (never crashes the heating cycle)
+- Tests use `EnhancedModelWrapper.__new__()` with mocked thermal model + prediction metrics + real `ThermalStateManager` with temp state file
+- ML-prediction-path tests (cooling, overshoot) use `trusted_wrapper_instance` fixture; passthrough tests use default uncalibrated wrapper
+
+---
+
+
+# Active Context - Current Work & Decision State
+
 ### 🎯 **RELEASE PREPARATION - March 8, 2026**
 
 **CRITICAL MILESTONE**: The system has reached a stable state with all critical bugs resolved. We are now preparing for the v0.2.1 release.

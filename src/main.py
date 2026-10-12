@@ -44,6 +44,62 @@ from .heating_controller import (
 from .sensor_buffer import SensorBuffer
 
 
+def determine_ml_heating_state(
+    effective_shadow_mode,
+    is_trusted=None,
+    confidence=None,
+    confidence_threshold=None,
+):
+    """Decide the ``sensor.ml_heating_state`` value and ``ml_control_mode``.
+
+    The state value answers one question: *is the ML model actually
+    commanding the heat pump this cycle?*
+
+    * ``1`` (active)  - ML is trusted and we are not in shadow mode, so ML is
+      driving the outlet temperature.
+    * ``0``            - ML is not driving: either shadow mode (heat curve is in
+      control), or active-but-passthrough while the model learns / recovers.
+
+    The ``ml_control_mode`` attribute disambiguates the three non-network
+    cases: ``"active"`` | ``"passthrough"`` | ``"shadow"`` | ``"unknown"``.
+
+    Parameters
+    ----------
+    effective_shadow_mode:
+        True when the heat curve (not ML) is driving the heat pump this cycle.
+    is_trusted:
+        Result of the self-calibration trust gate, or ``None`` when the gate
+        could not be evaluated (wrapper missing / raised).
+    confidence, confidence_threshold:
+        Only used in the ``is_trusted is None`` fallback path.
+
+    Returns
+    -------
+    tuple[int, str]
+        ``(state_value, ml_control_mode)``
+    """
+    if is_trusted is None:
+        # Trust gate could not be evaluated - keep the sensor live but
+        # conservative. In shadow mode ML is definitely not driving; in
+        # active mode fall back to the legacy confidence heuristic.
+        if effective_shadow_mode:
+            return 0, "shadow"
+        state_value = (
+            1
+            if confidence is not None
+            and confidence_threshold is not None
+            and confidence >= confidence_threshold
+            else 0
+        )
+        return state_value, "unknown"
+
+    if effective_shadow_mode:
+        return 0, "shadow"
+    if is_trusted:
+        return 1, "active"
+    return 0, "passthrough"
+
+
 def main():
     """
     The main function that orchestrates the heating control logic.
@@ -928,6 +984,28 @@ def main():
             features, outlet_history = build_physics_features(
                 ha_client, influx_service, sensor_buffer
             )
+
+            # T0.2: Inject the heat-curve target outlet into the features so an
+            # uncalibrated model can anchor its conservative ceiling on the
+            # heat-pump's own curve instead of pegging to the binary-search
+            # ceiling (untrained-model incident guard).
+            try:
+                _heat_curve_temp = ha_client.get_state(
+                    config.ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID, all_states
+                )
+            except Exception:
+                _heat_curve_temp = None
+            if _heat_curve_temp is not None and features is not None:
+                try:
+                    _hc = float(_heat_curve_temp)
+                    if isinstance(features, pd.DataFrame):
+                        features = features.copy()
+                        features["heat_curve_temp"] = _hc
+                    elif isinstance(features, dict):
+                        features["heat_curve_temp"] = _hc
+                except (TypeError, ValueError):
+                    pass
+
             # Handle both DataFrame and dict features properly
             if isinstance(features, pd.DataFrame):
                 # Convert DataFrame to dict for safe access
@@ -1219,23 +1297,81 @@ def main():
                 logging.warning("Failed to log thermodynamic metrics: %s", e)
 
             # --- Update ML State sensor ---
-            # Skip ML state sensor updates in shadow mode
-            if not config.SHADOW_MODE:
-                try:
-                    # Get thermal model trust metrics from
-                    # ThermalEquilibriumModel
-                    thermal_trust_metrics = metadata.get(
-                        "thermal_trust_metrics", {}
-                    )
+            # The sensor is updated in ALL modes (active, passthrough, shadow)
+            # so dashboards/automations stay live while the model learns.
+            # State value semantics:
+            #   1 = ML is actually commanding the heat pump this cycle
+            #       (active mode AND trusted by the self-calibration gate)
+            #   0 = ML is not commanding (shadow mode, or active-but-passthrough
+            #       while learning / recovering from degraded accuracy).
+            # The `ml_control_mode` attribute distinguishes the cases:
+            #   "active" | "passthrough" | "shadow" | "unknown".
+            try:
+                # T0.7: Drive the state indicator from the self-calibration
+                # trust gate.
+                trust = None
+                if "wrapper" in locals() and wrapper is not None:
+                    try:
+                        trust = wrapper.get_trust_state(
+                            ml_predicted_outlet=metadata.get("ml_outlet_temp"),
+                            heat_curve_outlet=(
+                                features_dict.get("heat_curve_temp")
+                                if isinstance(features_dict, dict)
+                                else None
+                            ),
+                        )
+                    except Exception:
+                        trust = None
 
-                    attributes_state = get_sensor_attributes(
-                        "sensor.ml_heating_state"
+                attributes_state = get_sensor_attributes(
+                    "sensor.ml_heating_state"
+                )
+                if trust is not None:
+                    stage = trust["stage"]
+                    state_description = {
+                        "active": "Active - ML prediction",
+                        "learning": "Passthrough - learning",
+                        "inaccurate": "Passthrough - inaccurate",
+                    }.get(stage, stage)
+                    # ml_control_mode / state value: ML is "active" only when
+                    # not shadow AND trusted by the self-calibration gate.
+                    ml_state_value, ml_control_mode = determine_ml_heating_state(
+                        effective_shadow_mode, is_trusted=trust["is_trusted"]
                     )
+                    try:
+                        _w24 = wrapper.prediction_metrics.get_metrics().get(
+                            "24h", {}
+                        )
+                        _mae_24h = float(_w24.get("mae", 0.0))
+                        _mean_err_24h = float(_w24.get("mean_error", 0.0))
+                    except Exception:
+                        _mae_24h, _mean_err_24h = 0.0, 0.0
                     attributes_state.update(
                         {
-                            "state_description": "Confidence - Too Low"
-                            if confidence < config.CONFIDENCE_THRESHOLD
-                            else "OK - Prediction done",
+                            "state_description": state_description,
+                            "is_trusted": bool(trust["is_trusted"]),
+                            "stage": stage,
+                            "trust_reason": trust["trust_reason"],
+                            "promotion_progress": round(
+                                float(trust["promotion_progress"]), 4
+                            ),
+                            "calibration_method":
+                                trust["calibration_method"],
+                            "outlet_source": trust["outlet_source"],
+                            "ml_control_mode": ml_control_mode,
+                            "ml_predicted_outlet": (
+                                round(float(trust["ml_predicted_outlet"]), 2)
+                                if trust["ml_predicted_outlet"] is not None
+                                else None
+                            ),
+                            "heat_curve_outlet": (
+                                round(float(trust["heat_curve_outlet"]), 2)
+                                if trust["heat_curve_outlet"] is not None
+                                else None
+                            ),
+                            "mae_24h": round(_mae_24h, 3),
+                            "mean_error_24h": round(_mean_err_24h, 3),
+                            "total_predictions": trust["total_predictions"],
                             "confidence": round(confidence, 4),
                             "suggested_temp": round(suggested_temp, 2),
                             "final_temp": round(final_temp, 2),
@@ -1246,24 +1382,61 @@ def main():
                             "temperature_error": round(
                                 abs(error_target_vs_actual), 3
                             ),
-                            # Note: ThermalEquilibriumModel trust metrics
-                            # moved to sensor.ml_heating_learning to
-                            # eliminate redundancy
+                            "model_calibrated": bool(trust["is_trusted"]),
+                            "uncalibrated_capped": metadata.get(
+                                "uncalibrated_capped", False
+                            ),
                         }
                     )
                     ha_client.set_state(
                         "sensor.ml_heating_state",
-                        1 if confidence < config.CONFIDENCE_THRESHOLD else 0,
+                        ml_state_value,
                         attributes_state,
                         round_digits=None,
                     )
-                except Exception:
-                    logging.debug(
-                        "Failed to write ML state to HA.", exc_info=True
+                else:
+                    # Trust gate could not be evaluated (wrapper missing or
+                    # raised). Fall back to confidence-only attributes.
+                    ml_state_value, ml_control_mode = determine_ml_heating_state(
+                        effective_shadow_mode,
+                        is_trusted=None,
+                        confidence=confidence,
+                        confidence_threshold=config.CONFIDENCE_THRESHOLD,
                     )
-            else:
+                    attributes_state.update(
+                        {
+                            "state_description":
+                                "Confidence - Too Low"
+                                if confidence < config.CONFIDENCE_THRESHOLD
+                                else "OK - Prediction done",
+                            "ml_control_mode": ml_control_mode,
+                            "confidence": round(confidence, 4),
+                            "suggested_temp": round(suggested_temp, 2),
+                            "final_temp": round(final_temp, 2),
+                            "predicted_indoor": round(predicted_indoor, 2),
+                            "last_prediction_time": (
+                                datetime.now(timezone.utc).isoformat()
+                            ),
+                            "temperature_error": round(
+                                abs(error_target_vs_actual), 3
+                            ),
+                            "model_calibrated": metadata.get(
+                                "model_calibrated", True
+                            ),
+                            "uncalibrated_capped": metadata.get(
+                                "uncalibrated_capped", False
+                            ),
+                        }
+                    )
+                    ha_client.set_state(
+                        "sensor.ml_heating_state",
+                        ml_state_value,
+                        attributes_state,
+                        round_digits=None,
+                    )
+            except Exception:
                 logging.debug(
-                    "🔍 SHADOW MODE: Skipping ML state sensor updates"
+                    "Failed to write ML state to HA.", exc_info=True
                 )
 
             # --- Shadow Mode Status Logging ---

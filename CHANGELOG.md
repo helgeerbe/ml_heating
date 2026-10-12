@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Outlet-Effectiveness Drift & Passthrough Safety Cap**: Fixed a miscalibrated model that commanded ~53 °C when only ~32 °C was needed. Root cause: an asymmetric cold-weather OE damping ratchet in `src/thermal_equilibrium_model.py` drove `outlet_effectiveness` 1.107→0.358 over ~15K cycles; the collapsed equilibrium forced extreme outlet demands, and the 53 °C command fed back into the heat-curve entity so the passthrough fallback echoed it with no safety margin.
+    - **State reset**: `unified_thermal_state.json` — reset `outlet_effectiveness_delta`→0.0, HLC delta→0.0, cleared stale `prediction_history`/`parameter_history`, restored `total_predictions`. Runtime OE back to baseline 1.107.
+    - **Symmetric cold-weather damping**: removed the asymmetric ratchet so OE can no longer drift one-directionally across a season.
+    - **Equilibrium-based OE gradient**: new `_calculate_equilibrium_based_oe_gradient()` in `src/thermal_equilibrium_model.py` uses direct equilibrium error (actual vs predicted) when the room is thermally stable (indoor gradient < 0.15 °C/cycle) — ~50× stronger than the trajectory-only gradient, which at τ≈29 h / 30-min cycles was only ~0.0003/cycle (40+ day recovery). Wired in at ~line 851.
+    - **Passthrough cap**: added `PASSTHROUGH_MAX_SAFE_OUTLET` (default 50.0 °C, env-configurable) in `src/config.py`; `src/model_wrapper.py` passthrough guard now caps at this value instead of `_MAX_OUTLET_TEMP` (65 °C), rejecting feedback-loop contamination.
+    - **Re-engagement config**: `.env` `CONFIDENCE_THRESHOLD=2.0`, `MIN_PREDICTIONS_FOR_TRUST=5`; `MIN_PREDICTIONS_FOR_TRUST` is now env-configurable in `src/model_wrapper.py` (default 50) for faster re-engagement after a verified parameter reset.
+    - **Deterministic regression tests**: `tests/unit/test_untrained_model_guard.py` fixture pins `MIN_PREDICTIONS_FOR_TRUST=50` so the untrained-model guard tests stay deterministic under env overrides.
+    - **Verified live**: ML control active at cycle 9290 — Suggested 28.7 °C / Applied 28.0 °C (down from 53 °C), OE=1.107 stable, error 0.207 °C. 309 unit tests pass.
 - **Hardware Boundary Enforcement**: Enforced a strict 20.0°C hardware minimum boundary for the outlet temperature in the model to prevent learning discrepancies.
 - Fixed `test_adaptive_learning_with_large_errors` integration test to accommodate the new 20.0°C minimum boundary.
 - **Adaptive Trajectory Correction**: Implemented non-linear scaling based on temperature deviation in `src/model_wrapper.py` to stabilize the control loop and prevent high-amplitude oscillations.

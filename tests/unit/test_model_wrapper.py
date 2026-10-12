@@ -46,6 +46,23 @@ def wrapper_instance(clean_state):
     return get_enhanced_model_wrapper()
 
 
+@pytest.fixture
+def trusted_wrapper_instance(clean_state):
+    """Fixture for a trusted (calibrated) wrapper — used by tests that
+    exercise the ML prediction path (binary search, cooling, etc.).
+    The default wrapper is uncalibrated → passthrough; this fixture marks
+    the baseline as calibrated with enough predictions to be trusted."""
+    wrapper = get_enhanced_model_wrapper()
+    sm = wrapper.state_manager
+    sm.state["baseline_parameters"]["source"] = "calibrated"
+    sm.state["baseline_parameters"]["accuracy_state"] = "accurate"
+    sm.state["baseline_parameters"]["calibration_method"] = "auto"
+    sm.state["prediction_metrics"]["total_predictions"] = 100
+    sm.save_state()
+    return wrapper
+
+
+
 class TestEnhancedModelWrapper:
     """Consolidated tests for the EnhancedModelWrapper."""
 
@@ -238,7 +255,7 @@ class TestEnhancedModelWrapper:
         # Expect a relatively high outlet temperature
         assert optimal_temp > 30.0
 
-    def test_binary_search_cooling(self, wrapper_instance):
+    def test_binary_search_cooling(self, trusted_wrapper_instance):
         """Test the binary search for a cooling scenario."""
         # This is an indirect test of _calculate_required_outlet_temp
         test_features = {
@@ -248,17 +265,17 @@ class TestEnhancedModelWrapper:
         }
 
         optimal_temp, _ = (
-            wrapper_instance.calculate_optimal_outlet_temp(test_features)
+            trusted_wrapper_instance.calculate_optimal_outlet_temp(test_features)
         )
 
         # Expect a low outlet temperature (close to minimum)
         assert optimal_temp < 30.0
 
-    def test_warm_room_no_heating_spike(self, wrapper_instance, mocker):
+    def test_warm_room_no_heating_spike(self, trusted_wrapper_instance, mocker):
         """Test that a warm room does not trigger a 65C heating spike due to horizon mismatch."""
         # Enable trajectory correction to trigger the bug
         mocker.patch('src.config.TRAJECTORY_PREDICTION_ENABLED', True)
-        
+
         # Set up a scenario where the room is too warm
         test_features = {
             'indoor_temp_lag_30m': 22.5,
@@ -267,7 +284,7 @@ class TestEnhancedModelWrapper:
         }
 
         optimal_temp, metadata = (
-            wrapper_instance.calculate_optimal_outlet_temp(test_features)
+            trusted_wrapper_instance.calculate_optimal_outlet_temp(test_features)
         )
 
         # The bug causes the outlet temp to spike to 65.0C (or max clamp)

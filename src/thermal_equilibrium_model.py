@@ -15,11 +15,13 @@ from typing import Dict, List, Optional
 try:
     from .thermal_parameters import thermal_params  # type: ignore
     from .thermal_constants import PhysicsConstants  # type: ignore
+    from .thermal_config import ThermalParameterConfig  # type: ignore
     from . import config  # type: ignore
 except ImportError:
     # Direct import fallback for notebooks and standalone tests
     from thermal_parameters import thermal_params  # type: ignore
     from thermal_constants import PhysicsConstants  # type: ignore
+    from thermal_config import ThermalParameterConfig  # type: ignore
     import config  # type: ignore
 
 
@@ -30,6 +32,22 @@ class ThermalEquilibriumModel:
     """
     
     _load_warning_logged = False
+
+    # T0.4: Single source of truth for the MODEL's maximum outlet temperature.
+    # Both the direct-calculation and equilibrium-fallback paths previously
+    # hardcoded their own values (70.0 and 65.0), causing silent, inconsistent
+    # ceiling-clamping — the root cause of the "model pegs to 65°C" incident.
+    # Source: ThermalParameterConfig.outlet_temp_max (default 65.0 °C).
+    #
+    # LAYERING NOTE: This is the *model soft-max*. It is intentionally distinct
+    # from the control-layer clamp config.CLAMP_MAX_ABS (55.0 °C, the actual
+    # commanded cap applied by the binary search) and the absolute hardware
+    # safety limit PhysicsConstants.MAX_OUTLET_TEMP (70.0 °C). These three are
+    # a deliberate hierarchy, not duplicates.
+    try:
+        _MAX_OUTLET_TEMP = ThermalParameterConfig.get_default('outlet_temp_max')
+    except Exception:
+        _MAX_OUTLET_TEMP = 65.0
 
     def __init__(self):
         # Initialize default attributes to ensure existence
@@ -830,6 +848,16 @@ class ThermalEquilibriumModel:
         outlet_effectiveness_gradient = (
             self._calculate_outlet_effectiveness_gradient(recent_predictions)
         )
+        # Equilibrium-based OE gradient supplement (T0.5 fix).
+        # The trajectory gradient is too weak in stable rooms (approach factor
+        # ~0.017 at 30 min with τ≈29 h). This supplement uses the direct
+        # equilibrium error (actual vs predicted equilibrium), which is ~50×
+        # stronger and lets the model self-correct OE in hours instead of
+        # weeks. Only fires when the room is stable; returns 0.0 otherwise.
+        equilibrium_oe_gradient = (
+            self._calculate_equilibrium_based_oe_gradient(recent_predictions)
+        )
+        outlet_effectiveness_gradient += equilibrium_oe_gradient
         pv_heat_weight_gradient = (
             self._calculate_pv_heat_weight_gradient(recent_predictions)
         )
@@ -892,15 +920,26 @@ class ThermalEquilibriumModel:
                     avg_outdoor,
                 )
 
-            # 2. Protect OE (prevent increase)
-            # update < 0 means we subtract a negative, so OE goes up
-            if outlet_effectiveness_update < 0:
+            # 2. Protect OE — SYMMETRIC damping (T0.5 fix).
+            # Previously only OE *increases* were damped here, creating an
+            # asymmetric one-way ratchet: OE decreases (over-prediction
+            # episodes, common when thermal mass keeps the house warm) hit
+            # OE at full strength, while OE increases (under-prediction
+            # episodes) were crushed to 1-10%. Over thousands of cycles this
+            # ratcheted outlet_effectiveness from 1.1 → 0.36, corrupting the
+            # equilibrium calculation so badly that the model commanded 53°C
+            # outlets where 32°C sufficed.
+            # Fix: damp BOTH directions equally during cold weather. This
+            # preserves the original intent (be cautious during transient
+            # cold-weather events) while preventing the one-way drift.
+            if outlet_effectiveness_update != 0:
                 outlet_effectiveness_update *= damping_factor
                 logging.debug(
-                    "❄️ Cold weather protection: Dampening OE increase by "
-                    "%.2f (outdoor=%.1f°C)",
+                    "❄️ Cold weather protection: Dampening OE update by "
+                    "%.2f (outdoor=%.1f°C, update=%.5f)",
                     damping_factor,
                     avg_outdoor,
+                    outlet_effectiveness_update,
                 )
         # Scale down PV update because its gradient is massive
         # (due to PV power being in Watts, 0-5000)
@@ -1198,13 +1237,127 @@ class ThermalEquilibriumModel:
         self, recent_predictions: List[Dict]
     ) -> float:
         """
-        Calculate outlet effectiveness gradient.
+        Calculate outlet effectiveness gradient using trajectory prediction.
+
+        Combined with the equilibrium-based supplement below (see
+        ``_calculate_equilibrium_based_oe_gradient``) to provide a strong
+        calibration signal that the trajectory-only gradient is too weak to
+        deliver on its own.
         """
         return self._calculate_parameter_gradient(
             "outlet_effectiveness",
             PhysicsConstants.OUTLET_EFFECTIVENESS_EPSILON,
             recent_predictions,
         )
+
+    def _calculate_equilibrium_based_oe_gradient(
+        self, recent_predictions: List[Dict]
+    ) -> float:
+        """
+        Calculate OE gradient from direct equilibrium error (T0.5 fix).
+
+        PROBLEM: The trajectory-based gradient uses a 30-minute prediction
+        horizon. With a thermal time constant of ~29 hours, the approach
+        factor at 30 min is only ``1 - exp(-0.5/29) ≈ 0.017``. A 4 °C
+        equilibrium error therefore produces only a ~0.07 °C trajectory
+        error, yielding a microscopic gradient. The model cannot "see" the
+        equilibrium error through the short-horizon trajectory, so OE never
+        self-corrects (estimated recovery time: 40+ days).
+
+        SOLUTION: When the room is thermally stable (indoor temp barely
+        changing), the actual indoor temperature *is* the equilibrium. We
+        compute the predicted equilibrium directly and use the difference
+        between actual and predicted equilibrium as the error signal. This
+        gives a strong, direct gradient (~50× stronger than the trajectory
+        signal) that drives OE to its correct value in hours rather than
+        weeks.
+
+        Safety: the equilibrium error is clipped to ±5 °C and the per-cycle
+        OE change is clipped to ``MAX_OUTLET_EFFECTIVENESS_CHANGE`` (0.02)
+        downstream, so even a large equilibrium error cannot cause a
+        destabilising jump.
+        """
+        gradient_sum = 0.0
+        count = 0
+        epsilon = PhysicsConstants.OUTLET_EFFECTIVENESS_EPSILON
+        original_oe = self.outlet_effectiveness
+        # Room must be stable: |indoor gradient| below this → actual ≈ equilibrium
+        stability_threshold = 0.15  # °C per cycle
+
+        for pred in recent_predictions:
+            context = pred.get("context", {})
+            actual_temp = pred.get("actual")
+
+            if actual_temp is None:
+                continue
+
+            if not all(
+                key in context
+                for key in ["outlet_temp", "outdoor_temp", "current_indoor"]
+            ):
+                continue
+
+            # Only use equilibrium signal when room is thermally stable
+            indoor_gradient = abs(context.get("indoor_temp_gradient", 999))
+            if indoor_gradient >= stability_threshold:
+                continue
+
+            outlet_temp = context["outlet_temp"]
+            outdoor_temp = context["outdoor_temp"]
+            current_indoor = context["current_indoor"]
+            pv_power = context.get("pv_power", 0)
+            fireplace_on = context.get("fireplace_on", 0)
+            tv_on = context.get("tv_on", 0)
+            thermal_power = context.get("thermal_power")
+
+            eq_kwargs = dict(
+                outlet_temp=outlet_temp,
+                outdoor_temp=outdoor_temp,
+                current_indoor=current_indoor,
+                pv_power=pv_power,
+                fireplace_on=fireplace_on,
+                tv_on=tv_on,
+                thermal_power=thermal_power,
+                _suppress_logging=True,
+            )
+
+            # Predicted equilibrium at the current (original) OE
+            eq_base = self.predict_equilibrium_temperature(**eq_kwargs)
+
+            # Perturb OE up
+            self.outlet_effectiveness = original_oe + epsilon
+            eq_plus = self.predict_equilibrium_temperature(**eq_kwargs)
+
+            # Perturb OE down
+            self.outlet_effectiveness = original_oe - epsilon
+            eq_minus = self.predict_equilibrium_temperature(**eq_kwargs)
+
+            # Restore original OE
+            self.outlet_effectiveness = original_oe
+
+            # Finite difference: d(equilibrium) / d(OE)
+            finite_diff = (eq_plus - eq_minus) / (2 * epsilon)
+
+            # Equilibrium error (same sign convention as prediction_error:
+            # actual - predicted; positive = under-prediction)
+            equilibrium_error = float(np.clip(actual_temp - eq_base, -5.0, 5.0))
+
+            gradient = -finite_diff * equilibrium_error
+            gradient_sum += gradient
+            count += 1
+
+        if count == 0:
+            return 0.0
+
+        avg_gradient = gradient_sum / count
+        logging.debug(
+            "🔬 Equilibrium-based OE gradient: %.5f (from %d stable samples, "
+            "error=%.3f°C)",
+            avg_gradient,
+            count,
+            equilibrium_error,
+        )
+        return avg_gradient
 
     def _calculate_pv_heat_weight_gradient(
         self, recent_predictions: List[Dict]
@@ -1605,11 +1758,24 @@ class ThermalEquilibriumModel:
         required_equilibrium = target_indoor
 
         min_outlet = max(outdoor_temp + 5, 25.0)
-        max_outlet = 70.0
+        max_outlet = self._MAX_OUTLET_TEMP
 
         optimal_outlet_bounded = max(
             min_outlet, min(optimal_outlet, max_outlet)
         )
+
+        # T0.1: surface when the raw inversion demanded an outlet above the
+        # model's soft-max. Silent ceiling-pegging is the untrained-model
+        # incident signature; flag it so the control layer / HA can alert.
+        if optimal_outlet > max_outlet:
+            self.outlet_clamped_to_max = True
+            logging.warning(
+                "⚠️ Direct-calc outlet clamped to model max %.1f°C "
+                "(raw calc %.1f°C) — possible untrained/degraded parameters.",
+                max_outlet, optimal_outlet,
+            )
+        else:
+            self.outlet_clamped_to_max = False
 
         if optimal_outlet_bounded < outdoor_temp:
             fallback_outlet = self._calculate_equilibrium_outlet_temperature(
@@ -1647,8 +1813,39 @@ class ThermalEquilibriumModel:
             + tv_on * self.external_source_weights["tv"]
         )
 
-        if self.outlet_effectiveness <= 0:
+        # T0.3: Sanity guard on outlet effectiveness / HLC:OE ratio. An
+        # untrained or degraded model can have a tiny outlet_effectiveness
+        # (or a huge heat_loss_coefficient), which makes the equilibrium
+        # inversion explode to the ceiling — the 65°C incident root cause.
+        # When the parameters are physically implausible, fall back to a
+        # conservative, heat-curve-anchored outlet instead of trusting the
+        # inversion.
+        OE_SAFE_MIN = 0.05
+        HLC_OE_RATIO_MAX = 5.0
+        oe = self.outlet_effectiveness
+        hlc = self.heat_loss_coefficient
+
+        if oe <= 0:
+            self.outlet_clamped_to_max = False
             return 35.0
+
+        if oe < OE_SAFE_MIN or (hlc / oe) > HLC_OE_RATIO_MAX:
+            self.outlet_clamped_to_max = False
+            # Conservative heat-curve-anchored outlet: the target plus a
+            # bounded lift proportional to the indoor/outdoor delta, never
+            # extreme and always below the model soft-max.
+            lift = max(0.0, target_temp - outdoor_temp) * 0.7
+            conservative_outlet = max(
+                max(outdoor_temp + 5, 25.0),
+                min(self._MAX_OUTLET_TEMP - 5.0, target_temp + lift),
+            )
+            logging.warning(
+                "⚠️ Untrustworthy thermal params (OE=%.4f, HLC=%.4f, "
+                "HLC/OE=%.1f) — using conservative heat-curve-anchored "
+                "outlet %.1f°C instead of equilibrium inversion.",
+                oe, hlc, hlc / oe, conservative_outlet,
+            )
+            return conservative_outlet
 
         total_conductance = (
             self.heat_loss_coefficient + self.outlet_effectiveness
@@ -1660,9 +1857,23 @@ class ThermalEquilibriumModel:
         ) / self.outlet_effectiveness
 
         min_outlet = max(outdoor_temp + 5, 25.0)
-        max_outlet = 65.0
+        max_outlet = self._MAX_OUTLET_TEMP
 
-        return max(min_outlet, min(equilibrium_outlet, max_outlet))
+        clamped_outlet = max(min_outlet, min(equilibrium_outlet, max_outlet))
+
+        # T0.1: flag/warn when the equilibrium outlet is clamped to the
+        # model soft-max.
+        if equilibrium_outlet > max_outlet:
+            self.outlet_clamped_to_max = True
+            logging.warning(
+                "⚠️ Equilibrium outlet clamped to model max %.1f°C "
+                "(raw %.1f°C) — possible untrained/degraded parameters.",
+                max_outlet, equilibrium_outlet,
+            )
+        else:
+            self.outlet_clamped_to_max = False
+
+        return clamped_outlet
 
     def calculate_physics_aware_thresholds(self, *args, **kwargs):
         """Keep original threshold calculation method unchanged"""

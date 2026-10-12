@@ -13,6 +13,7 @@ Key features:
 """
 
 import logging
+import os
 from typing import Dict, Optional, Tuple
 from datetime import datetime
 
@@ -24,6 +25,7 @@ from src.thermal_equilibrium_model import ThermalEquilibriumModel
 from src.unified_thermal_state import get_thermal_state_manager
 from src.influx_service import create_influx_service
 from src.prediction_metrics import PredictionMetrics
+from src.thermal_config import ThermalParameterConfig
 from src import config
 from src.ha_client import create_ha_client
 from src.adaptive_fireplace_learning import AdaptiveFireplaceLearning
@@ -45,6 +47,19 @@ class EnhancedModelWrapper:
     Implements singleton pattern to prevent multiple instantiation per service
     restart.
     """
+
+    # T0.2: Minimum number of predictions before the ML inversion is trusted
+    # to command aggressive outlets. Below this, an uncalibrated model is
+    # capped to a conservative heat-curve-anchored ceiling to prevent the
+    # outlet-pegging incident (untrained model pegging to the binary-search
+    # ceiling).
+    # Configurable via env so deployments with a known-good calibrated
+    # baseline can re-engage faster after a parameter reset. Default 50
+    # for new deployments; set lower (e.g. 10) when the baseline is
+    # verified correct and the RECENT_ERRORS_WINDOW aligns.
+    MIN_PREDICTIONS_FOR_TRUST = int(
+        os.getenv("MIN_PREDICTIONS_FOR_TRUST", "50")
+    )
 
     def __init__(self):
         self.thermal_model = ThermalEquilibriumModel()
@@ -68,6 +83,11 @@ class EnhancedModelWrapper:
         # UNIFIED FORECAST: Store cycle-aligned forecast conditions for smart
         # rounding
         self.cycle_aligned_forecast = {}
+
+        # T0.7: Self-calibration trust gate state. Counts consecutive cycles
+        # the demotion condition has held so we only demote on *sustained*
+        # degradation, not transient spikes.
+        self._demotion_streak = 0
 
         logging.info(
             "🎯 Model Wrapper initialized with ThermalEquilibriumModel"
@@ -239,6 +259,333 @@ class EnhancedModelWrapper:
             # Safe fallback - assume minimal heating effect
             return outdoor_temp + 10.0 if outdoor_temp is not None else 21.0
 
+    def _is_model_calibrated(self) -> bool:
+        """Return True only when the model has a calibrated baseline AND
+        enough prediction history to be trusted for aggressive outlet
+        commands.
+
+        Guards against the untrained-model incident: a model with default
+        (uncalibrated) parameters pegs the binary-search outlet to the
+        ceiling. Until calibration has run and accumulated predictions, the
+        caller must cap the outlet to a conservative, heat-curve-anchored
+        ceiling.
+        """
+        try:
+            metrics = self.state_manager.get_learning_metrics()
+            baseline_source = metrics.get("baseline_source", "config")
+            total_predictions = metrics.get("total_predictions", 0)
+            return (
+                baseline_source == "calibrated"
+                and total_predictions >= self.MIN_PREDICTIONS_FOR_TRUST
+            )
+        except Exception as e:
+            logging.warning(
+                "Calibration check failed: %s — treating as uncalibrated", e
+            )
+            return False
+
+    # === T0.7: Self-Calibrating Trust Gate ===
+
+    def _evaluate_parameter_stability(self) -> bool:
+        """Return True if the key learned parameters have converged (low drift
+        relative to their allowed bounds) over the recent history window.
+
+        This is the inversion-safety guard: a model that *looks* accurate but
+        whose parameters are still drifting can invert dangerously (the 65°C
+        incident). We require stable heat_loss_coefficient and
+        outlet_effectiveness — the two parameters that drive the equilibrium
+        inversion.
+        """
+        history = getattr(self.thermal_model, "parameter_history", [])
+        window = config.AUTO_CAL_PARAM_STABILITY_WINDOW
+        if len(history) < window:
+            return False
+        recent = history[-window:]
+        for param in ("heat_loss_coefficient", "outlet_effectiveness"):
+            values = [r.get(param) for r in recent
+                      if r.get(param) is not None]
+            if len(values) < max(5, window // 2):
+                return False
+            lo, hi = ThermalParameterConfig.get_bounds(param)
+            bound_range = hi - lo
+            if bound_range <= 0:
+                continue
+            std = float(np.std(values))
+            if std / bound_range > config.AUTO_CAL_PARAM_STABILITY_FRAC:
+                return False
+        return True
+
+    def _evaluate_calibration_gate(self) -> Dict:
+        """Evaluate the 5-criteria auto-promotion gate.
+
+        Returns a dict with each criterion's pass/fail, the raw signals, the
+        fraction of criteria met (for `promotion_progress` telemetry) and a
+        boolean `all_met`.
+        """
+        metrics = self.state_manager.get_learning_metrics()
+        total_predictions = metrics.get("total_predictions", 0)
+
+        pred_metrics = self.prediction_metrics.get_metrics(refresh_cache=True)
+        window_24h = pred_metrics.get("24h", {})
+        mae_24h = float(window_24h.get("mae", 0.0))
+        mean_error_24h = float(window_24h.get("mean_error", 0.0))
+        good_control_pct = float(
+            self.prediction_metrics.get_24h_good_control_percentage()
+        )
+        params_stable = self._evaluate_parameter_stability()
+
+        criteria = {
+            "sufficient_predictions":
+                total_predictions >= config.AUTO_CAL_MIN_PREDICTIONS,
+            "mae_ok": mae_24h <= config.AUTO_CAL_MAE_THRESHOLD,
+            "bias_ok": abs(mean_error_24h) <= config.AUTO_CAL_BIAS_THRESHOLD,
+            "good_control_ok": good_control_pct >= config.AUTO_CAL_GOOD_CONTROL_PCT,
+            "params_stable": params_stable,
+        }
+
+        all_met = all(criteria.values())
+        progress = sum(criteria.values()) / len(criteria)
+
+        return {
+            "criteria": criteria,
+            "all_met": all_met,
+            "promotion_progress": float(progress),
+            "signals": {
+                "total_predictions": total_predictions,
+                "mae_24h": mae_24h,
+                "mean_error_24h": mean_error_24h,
+                "good_control_pct": good_control_pct,
+                "params_stable": params_stable,
+            },
+        }
+
+
+    def _check_auto_promotion(self) -> bool:
+        """Evaluate the promotion gate and auto-promote if all criteria met.
+
+        Only promotes a not-yet-calibrated model. Returns True if a promotion
+        happened this cycle.
+        """
+        try:
+            metrics = self.state_manager.get_learning_metrics()
+            baseline_source = metrics.get("baseline_source", "config")
+            if baseline_source == "calibrated":
+                # Already calibrated; promotion is a no-op. Re-promotion of a
+                # demoted model is handled by the demotion logic on recovery.
+                return False
+
+            gate = self._evaluate_calibration_gate()
+            if not gate["all_met"]:
+                logging.debug(
+                    "Self-cal not ready: %d/5 criteria met "
+                    "(predictions=%s, mae_24h=%.2f, bias_24h=%.2f, "
+                    "good_ctrl=%.1f%%, params_stable=%s).",
+                    sum(gate["criteria"].values()),
+                    gate["signals"]["total_predictions"],
+                    gate["signals"]["mae_24h"],
+                    gate["signals"]["mean_error_24h"],
+                    gate["signals"]["good_control_pct"],
+                    gate["signals"]["params_stable"],
+                )
+                return False
+
+            # Promote using the current learned parameters.
+            params = {
+                "thermal_time_constant":
+                    self.thermal_model.thermal_time_constant,
+                "heat_loss_coefficient":
+                    self.thermal_model.heat_loss_coefficient,
+                "outlet_effectiveness":
+                    self.thermal_model.outlet_effectiveness,
+                "pv_heat_weight": self.thermal_model.external_source_weights
+                                  .get("pv", 0.0),
+                "fireplace_heat_weight":
+                    self.thermal_model.external_source_weights
+                    .get("fireplace", 0.0),
+                "tv_heat_weight": self.thermal_model.external_source_weights
+                                  .get("tv", 0.0),
+            }
+            self.state_manager.auto_promote_baseline(
+                params, calibration_cycles=self.cycle_count
+            )
+            return True
+        except Exception as e:
+            logging.error("Auto-promotion check failed: %s", e, exc_info=True)
+            return False
+
+
+
+    def _check_accuracy_demotion(self) -> None:
+        """Evaluate the demotion/re-promotion gate for an already-calibrated
+        model.
+
+        Demotes to passthrough when accuracy degrades beyond the promotion
+        thresholds scaled by DEMOTION_FACTOR, sustained for
+        DEMOTION_SUSTAINED_CYCLES cycles. Re-promotes when accuracy recovers
+        below the promotion thresholds.
+        """
+        try:
+            metrics = self.state_manager.get_learning_metrics()
+            if metrics.get("baseline_source") != "calibrated":
+                return  # only applies to a calibrated model
+
+            pred_metrics = self.prediction_metrics.get_metrics(
+                refresh_cache=True
+            )
+            window_24h = pred_metrics.get("24h", {})
+            mae_24h = float(window_24h.get("mae", 0.0))
+            mean_error_24h = float(window_24h.get("mean_error", 0.0))
+            good_control_pct = float(
+                self.prediction_metrics.get_24h_good_control_percentage()
+            )
+
+            demoted = (
+                mae_24h > config.AUTO_CAL_MAE_THRESHOLD * config.DEMOTION_FACTOR
+                or abs(mean_error_24h)
+                > config.AUTO_CAL_BIAS_THRESHOLD * config.DEMOTION_FACTOR
+                or good_control_pct < config.AUTO_CAL_GOOD_CONTROL_PCT
+                / config.DEMOTION_FACTOR
+            )
+            recovered = (
+                mae_24h <= config.AUTO_CAL_MAE_THRESHOLD
+                and abs(mean_error_24h) <= config.AUTO_CAL_BIAS_THRESHOLD
+                and good_control_pct >= config.AUTO_CAL_GOOD_CONTROL_PCT
+            )
+
+            accuracy_state = metrics.get("accuracy_state", "unknown")
+
+            # Treat "unknown" (e.g. a config-promoted baseline that was never
+            # explicitly marked accurate) the same as "accurate" so it CAN be
+            # demoted. Previously "unknown" fell into a dead zone where the
+            # demotion/re-promotion logic never ran, leaving a poor model
+            # permanently trusted.
+            if accuracy_state != "inaccurate":
+                if demoted:
+                    self._demotion_streak += 1
+                    if self._demotion_streak >= config.DEMOTION_SUSTAINED_CYCLES:
+                        self.state_manager.mark_inaccurate()
+                        self._demotion_streak = 0
+                else:
+                    self._demotion_streak = 0
+            elif accuracy_state == "inaccurate":
+                # Demoted: wait for sustained recovery before re-promoting.
+                if recovered:
+                    self._demotion_streak += 1
+                    if self._demotion_streak >= config.DEMOTION_SUSTAINED_CYCLES:
+                        self.state_manager.mark_accurate()
+                        self._demotion_streak = 0
+                else:
+                    self._demotion_streak = 0
+        except Exception as e:
+            logging.error("Accuracy demotion check failed: %s", e,
+                          exc_info=True)
+
+    def get_trust_state(self, ml_predicted_outlet: Optional[float] = None,
+                        heat_curve_outlet: Optional[float] = None) -> Dict:
+        """Return the current self-calibration trust state.
+
+        Single source of truth for whether the model may command the
+        ML-predicted outlet (Active / state 1) or must defer to the heat-pump's
+        own curve (Passthrough / state 0).
+        """
+        try:
+            metrics = self.state_manager.get_learning_metrics()
+            baseline_source = metrics.get("baseline_source", "config")
+            accuracy_state = metrics.get("accuracy_state", "unknown")
+            total_predictions = metrics.get("total_predictions", 0)
+
+            is_calibrated = (
+                baseline_source == "calibrated"
+                and total_predictions >= self.MIN_PREDICTIONS_FOR_TRUST
+            )
+            is_accurate = accuracy_state != "inaccurate"
+            # Honor CONFIDENCE_THRESHOLD (configured in .env). Even a
+            # calibrated, accurate model must NOT command the outlet when its
+            # learning confidence has collapsed below the configured floor.
+            # `learning_confidence` is on the same 0.1-5.0 scale as the
+            # threshold (see .env: "Model Confidence" / CONFIDENCE_THRESHOLD).
+            learning_confidence = float(
+                getattr(self.thermal_model, "learning_confidence", 0.0)
+            )
+            is_confident = (
+                learning_confidence >= config.CONFIDENCE_THRESHOLD
+            )
+
+            if not is_calibrated:
+                if baseline_source != "calibrated":
+                    reason = "learning_uncalibrated"
+                else:
+                    reason = "learning_insufficient_predictions"
+                stage = "learning"
+                progress = self._evaluate_calibration_gate()[
+                    "promotion_progress"
+                ]
+            elif not is_accurate:
+                reason = "inaccurate"
+                stage = "inaccurate"
+                progress = 0.0
+            elif not is_confident:
+                reason = "low_confidence"
+                stage = "low_confidence"
+                progress = (
+                    min(
+                        1.0,
+                        learning_confidence / config.CONFIDENCE_THRESHOLD,
+                    )
+                    if config.CONFIDENCE_THRESHOLD > 0
+                    else 1.0
+                )
+            else:
+                reason = "active"
+                stage = "active"
+                progress = 1.0
+
+            is_trusted = is_calibrated and is_accurate and is_confident
+
+            heat_curve_val = None
+            if heat_curve_outlet is not None:
+                try:
+                    heat_curve_val = float(heat_curve_outlet)
+                except (TypeError, ValueError):
+                    heat_curve_val = None
+
+            return {
+                "is_trusted": is_trusted,
+                "is_calibrated": is_calibrated,
+                "is_accurate": is_accurate,
+                "is_confident": is_confident,
+                "confidence": learning_confidence,
+                "stage": stage,
+                "trust_reason": reason,
+                "promotion_progress": float(progress),
+                "ml_predicted_outlet": ml_predicted_outlet,
+                "heat_curve_outlet": heat_curve_val,
+                "outlet_source": "ml_predicted" if is_trusted
+                                 else "heat_curve_passthrough",
+                "calibration_method":
+                    metrics.get("calibration_method", "config"),
+                "total_predictions": total_predictions,
+            }
+        except Exception as e:
+            logging.warning(
+                "get_trust_state failed: %s — returning safe passthrough", e
+            )
+            return {
+                "is_trusted": False,
+                "is_calibrated": False,
+                "is_accurate": False,
+                "is_confident": False,
+                "confidence": 0.0,
+                "stage": "learning",
+                "trust_reason": "evaluation_error",
+                "promotion_progress": 0.0,
+                "ml_predicted_outlet": ml_predicted_outlet,
+                "heat_curve_outlet": None,
+                "outlet_source": "heat_curve_passthrough",
+                "calibration_method": "config",
+                "total_predictions": 0,
+            }
+
     def calculate_optimal_outlet_temp(
         self, features: Dict
     ) -> Tuple[float, Dict]:
@@ -303,6 +650,77 @@ class EnhancedModelWrapper:
                     "Failed to calculate optimal outlet temperature"
                 )
                 optimal_outlet_temp = 35.0  # Safe fallback
+
+            # T0.2b: Self-calibrating trust gate. While the model is not trusted
+            # (uncalibrated baseline / too few predictions / demoted), it must
+            # NOT command the raw binary-search inversion. Instead it operates
+            # in "passthrough": command the heat-pump's own curve directly, with
+            # no +3 margin (the +3 was the original incident risk). The ML value
+            # is kept in metadata so the delta can still be logged in shadow
+            # mode for tuning. When no heat-curve reading is available, fall
+            # back to a conservative fixed outlet (CONSERVATIVE_FALLBACK_TEMP).
+            trust_state = self.get_trust_state(
+                ml_predicted_outlet=optimal_outlet_temp,
+                heat_curve_outlet=features.get("heat_curve_temp"),
+            )
+            is_trusted = trust_state["is_trusted"]
+            prediction_metadata["model_calibrated"] = is_trusted
+            prediction_metadata["trust_state"] = trust_state["stage"]
+            prediction_metadata["ml_outlet_temp"] = optimal_outlet_temp
+
+            if not is_trusted:
+                heat_curve_temp = features.get("heat_curve_temp")
+                if heat_curve_temp is not None:
+                    try:
+                        heat_curve_temp = float(heat_curve_temp)
+                    except (TypeError, ValueError):
+                        heat_curve_temp = None
+
+                passthrough_outlet = (
+                    heat_curve_temp
+                    if heat_curve_temp is not None
+                    else config.CONSERVATIVE_FALLBACK_TEMP
+                )
+
+                # Guard the passthrough value against non-physical outliers
+                # (stale/zero/negative or absurdly high sensor readings).
+                # Valid mild-weather curves (down to ~20°C) pass through
+                # unchanged. The upper bound is PASSTHROUGH_MAX_SAFE_OUTLET
+                # (default 50°C) rather than _MAX_OUTLET_TEMP (65°C) to reject
+                # feedback-loop contamination where the ML system's own high
+                # commands echo back through the heat-curve entity (observed
+                # 53°C spike that made passthrough as dangerous as the ML).
+                passthrough_max = config.PASSTHROUGH_MAX_SAFE_OUTLET
+                if not (config.AUTO_CAL_PASSTHROUGH_MIN_OUTLET
+                        <= passthrough_outlet
+                        <= passthrough_max):
+                    logging.warning(
+                        "⚠️ Passthrough outlet %.1f°C out of safe range "
+                        "[%.1f, %.1f] — using fallback %.1f°C.",
+                        passthrough_outlet,
+                        config.AUTO_CAL_PASSTHROUGH_MIN_OUTLET,
+                        passthrough_max,
+                        config.CONSERVATIVE_FALLBACK_TEMP,
+                    )
+                    passthrough_outlet = config.CONSERVATIVE_FALLBACK_TEMP
+
+                logging.info(
+                    "🔁 Passthrough (not trusted, %s): commanding heat-curve "
+                    "outlet %.1f°C instead of ML %.1f°C (fallback=%.1f°C).",
+                    trust_state["trust_reason"],
+                    passthrough_outlet,
+                    optimal_outlet_temp,
+                    config.CONSERVATIVE_FALLBACK_TEMP,
+                )
+                optimal_outlet_temp = passthrough_outlet
+                prediction_metadata["uncalibrated_capped"] = True
+                prediction_metadata["outlet_source"] = "heat_curve_passthrough"
+                prediction_metadata["conservative_ceiling"] = (
+                    passthrough_outlet
+                )
+            else:
+                prediction_metadata["uncalibrated_capped"] = False
+                prediction_metadata["outlet_source"] = "ml_predicted"
 
             return optimal_outlet_temp, prediction_metadata
 
@@ -1651,6 +2069,17 @@ class EnhancedModelWrapper:
             # monitoring
             self.export_metrics_to_ha()
 
+            # T0.7: Evaluate the self-calibration trust gate every cycle.
+            # A not-yet-calibrated model may auto-promote once it meets all 5
+            # criteria; a calibrated model may auto-demote if accuracy degrades
+            # (or re-promote if it recovers). This is the always-on accuracy
+            # gate that replaces the old ML_ACCURACY_GATE_ENABLED flag.
+            try:
+                self._check_auto_promotion()
+                self._check_accuracy_demotion()
+            except Exception as gate_e:
+                logging.error("Trust gate evaluation failed: %s", gate_e)
+
             # Log learning cycle completion
             if prediction_error is not None:
                 logging.info(
@@ -1900,6 +2329,26 @@ class EnhancedModelWrapper:
             if prediction_metrics:
                 influx_service.write_prediction_metrics(prediction_metrics)
                 logging.debug("✅ Exported prediction metrics to InfluxDB")
+
+            # T0.7: Export the self-calibration trust state + gate signals so
+            # the promotion/demotion thresholds can be tuned from production
+            # telemetry.
+            try:
+                gate = self._evaluate_calibration_gate()
+                trust_payload = self.get_trust_state()
+                trust_payload["mae_24h"] = gate["signals"]["mae_24h"]
+                trust_payload["mean_error_24h"] = gate["signals"][
+                    "mean_error_24h"
+                ]
+                trust_payload["good_control_pct"] = gate["signals"][
+                    "good_control_pct"
+                ]
+                influx_service.write_trust_state(trust_payload)
+                logging.debug("✅ Exported trust state to InfluxDB")
+            except Exception as trust_e:
+                logging.debug(
+                    "Trust state export skipped: %s", trust_e
+                )
 
             # Export thermal learning metrics
             if hasattr(self.thermal_model, "get_adaptive_learning_metrics"):

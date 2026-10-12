@@ -1,6 +1,31 @@
 # ML Heating System - Current Progress
 
-## 🎯 CURRENT STATUS - March 10, 2026
+## 🎯 CURRENT STATUS - October 12, 2026
+
+### ✅ **OE RECALIBRATION + EQUILIBRIUM GRADIENT + PASSTHROUGH CAP (Oct 12, 2026)**
+
+**System Status**: **OPERATIONAL — ML CONTROL ACTIVE** — Fixed miscalibrated model commanding 53°C (needed ~32°C). Root cause: asymmetric cold-weather OE damping ratchet drove `outlet_effectiveness` 1.107→0.358 over 15K cycles, forcing the model to demand extreme outlets; 53°C fed back into the heat curve entity, so passthrough also commanded 53°C with no safety margin.
+
+**Fix (4 parts, all complete):**
+1. Reset `outlet_effectiveness_delta`→0.0 (runtime OE back to baseline 1.107; equilibrium ~22.5°C at 32°C outlet). Also cleared stale histories, reset HLC delta.
+2. Symmetric cold-weather OE damping in `thermal_equilibrium_model.py` (no more asymmetric ratchet).
+3. New `_calculate_equilibrium_based_oe_gradient()` — uses direct equilibrium error when room is thermally stable; ~50× stronger than the (near-zero) trajectory gradient. Wired in at line ~851.
+4. `PASSTHROUGH_MAX_SAFE_OUTLET=50.0` cap in `config.py`/`model_wrapper.py` (was 65°C) — rejects feedback-loop contamination.
+5. Re-engagement: `.env` `CONFIDENCE_THRESHOLD=2.0`, `MIN_PREDICTIONS_FOR_TRUST=5` (env-configurable).
+
+**Test Suite Health**: **EXCELLENT** — 309 unit tests passing, 0 failures. `test_untrained_model_guard.py` fixture pinned `MIN_PREDICTIONS_FOR_TRUST=50` so regression tests stay deterministic under env overrides.
+
+**Live Verification**: Cycle 9290 — `is_trusted: True`, `ml_control_mode: 'active'`, `outlet_source: 'ml_predicted'`, Suggested 28.7°C / Applied 28.0°C, OE=1.107 stable, error 0.207°C, confidence 4.83.
+
+**Key Files**: `src/thermal_equilibrium_model.py`, `src/model_wrapper.py`, `src/config.py`, `.env`, `unified_thermal_state.json`, `tests/unit/test_untrained_model_guard.py`
+
+### ✅ **T0.7: SELF-CALIBRATING TRUST GATE COMPLETE (March 12, 2026)**
+
+**System Status**: **OPERATIONAL & STABLE** — Replaced manual `ML_ACCURACY_GATE_ENABLED` flag with a self-calibrating trust gate. The ML heating system is now always enabled; it learns in background passthrough mode and auto-promotes to commanding the ML outlet once 5 calibration criteria are met (sufficient predictions, low MAE, low bias, good control %, parameter stability). Auto-demotes on sustained accuracy degradation and re-promotes on recovery.
+
+**Test Suite Health**: **EXCELLENT** — 296 unit tests passing, 0 failures. All 5 edited source files compile cleanly. Trust gate lifecycle tests (26) cover calibration gate, demotion/re-promotion, trust state, and untrained-model guards.
+
+**Key Files**: `src/model_wrapper.py`, `src/unified_thermal_state.py`, `src/config.py`, `src/main.py`, `src/influx_service.py`
 
 ### ✅ **MORNING DROP REGRESSION FIX COMPLETE (March 11, 2026)**
 
