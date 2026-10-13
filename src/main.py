@@ -782,7 +782,7 @@ def main():
                             predicted_temp=model_predicted_temp,
                             actual_temp=current_indoor,
                             prediction_context=enhanced_prediction_context,
-                            timestamp=datetime.now().isoformat(),
+                            timestamp=datetime.now(timezone.utc).isoformat(),
                             is_blocking_active=is_blocking,
                         )
 

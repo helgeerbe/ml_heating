@@ -21,3 +21,13 @@ dependencies = {file = ["requirements.txt"]}
 where = ["."]
 include = ["src*"]
 namespaces = false
+
+[tool.pytest.ini_options]
+# reactivex (rxpy) still calls the deprecated datetime.utcfromtimestamp() in
+# its own internals (reactivex/internal/constants.py: UTC_ZERO = ...). We
+# cannot fix third-party source, so suppress only that specific, noisy
+# DeprecationWarning to keep test output clean. Our own datetime usage is
+# timezone-aware UTC (see the Pass B UTC audit).
+filterwarnings = [
+    "ignore:.*utcfromtimestamp.*:DeprecationWarning:reactivex.*",
+]

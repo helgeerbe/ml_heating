@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import numpy as np
 from src.adaptive_fireplace_learning import (
     AdaptiveFireplaceLearning,
@@ -33,7 +33,7 @@ def test_load_non_existent_state(tmp_path):
 @patch("src.adaptive_fireplace_learning.datetime")
 def test_observe_fireplace_session_start(mock_dt, afl_instance):
     """Test that a new fireplace session is started correctly."""
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     mock_dt.now.return_value = now
     result = afl_instance.observe_fireplace_state(22.0, 20.0, 5.0, True)
     assert result["session_update"]["status"] == "session_started"
@@ -44,8 +44,8 @@ def test_observe_fireplace_session_start(mock_dt, afl_instance):
 @patch("src.adaptive_fireplace_learning.datetime")
 def test_observe_fireplace_session_end(mock_dt, afl_instance):
     """Test that a fireplace session ends and an observation is created."""
-    start_time = datetime.now() - timedelta(minutes=12)
-    end_time = datetime.now()
+    start_time = datetime.now(timezone.utc) - timedelta(minutes=12)
+    end_time = datetime.now(timezone.utc)
 
     afl_instance.current_session = {
         "start_time": start_time,
@@ -68,8 +68,8 @@ def test_save_and_load_state(afl_instance, tmp_path):
     """Test that the state is saved and loaded correctly."""
     # Create an observation
     with patch("src.adaptive_fireplace_learning.datetime") as mock_dt:
-        start_time = datetime.now() - timedelta(minutes=15)
-        end_time = datetime.now()
+        start_time = datetime.now(timezone.utc) - timedelta(minutes=15)
+        end_time = datetime.now(timezone.utc)
         mock_dt.now.side_effect = [start_time, end_time, end_time]
         afl_instance.observe_fireplace_state(22.0, 20.0, 5.0, True)  # Start
         afl_instance.observe_fireplace_state(21.0, 20.0, 5.0, False)  # End
@@ -92,7 +92,7 @@ def test_update_learning_coefficients(
     """Test that the learning coefficients are updated correctly."""
     mock_mean.return_value = 2.0
     mock_corrcoef.return_value = np.array([[1.0, 0.5], [0.5, 1.0]])
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     mock_dt.now.return_value = now
 
     observations = []

@@ -6,7 +6,7 @@ Simple health check endpoint for ML Heating Add-on
 import os
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -18,7 +18,7 @@ class HealthHandler(BaseHTTPRequestHandler):
             
             health_status = {
                 'status': 'healthy',
-                'timestamp': datetime.now().isoformat(),
+                'timestamp': datetime.now(timezone.utc).isoformat(),
                 'services': {
                     'dashboard': 'running',
                     'ml_system': self.check_ml_system(),
@@ -36,8 +36,8 @@ class HealthHandler(BaseHTTPRequestHandler):
         if os.path.exists('/data/logs/ml_heating.log'):
             try:
                 stat = os.stat('/data/logs/ml_heating.log')
-                last_modified = datetime.fromtimestamp(stat.st_mtime)
-                time_diff = datetime.now() - last_modified
+                last_modified = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                time_diff = datetime.now(timezone.utc) - last_modified
                 
                 if time_diff.seconds < 300:  # 5 minutes
                     return 'active'

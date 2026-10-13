@@ -8,7 +8,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import sys
@@ -39,7 +39,7 @@ def get_model_files():
                 'name': file_path.name,
                 'path': str(file_path),
                 'size': stat.st_size,
-                'modified': datetime.fromtimestamp(stat.st_mtime),
+                'modified': datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
                 'type': 'model'
             })
     
@@ -52,7 +52,7 @@ def get_model_files():
                 'name': file_path.name,
                 'path': str(file_path),
                 'size': stat.st_size,
-                'modified': datetime.fromtimestamp(stat.st_mtime),
+                'modified': datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
                 'type': 'log'
             })
     
@@ -66,7 +66,7 @@ def get_model_files():
                     'name': file_path.name,
                     'path': str(file_path),
                     'size': stat.st_size,
-                    'modified': datetime.fromtimestamp(stat.st_mtime),
+                    'modified': datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
                     'type': 'config'
                 })
     
@@ -94,9 +94,9 @@ def get_existing_backups():
             timestamp_str = ''
         
         try:
-            timestamp = datetime.strptime(timestamp_str, '%Y%m%d_%H%M%S')
+            timestamp = datetime.strptime(timestamp_str, '%Y%m%d_%H%M%S').replace(tzinfo=timezone.utc)
         except ValueError:
-            timestamp = datetime.fromtimestamp(stat.st_mtime)
+            timestamp = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
         
         # Calculate MD5 hash for integrity checking
         md5_hash = hashlib.md5()
@@ -109,7 +109,7 @@ def get_existing_backups():
             'path': str(backup_file),
             'size': stat.st_size,
             'created': timestamp,
-            'modified': datetime.fromtimestamp(stat.st_mtime),
+            'modified': datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
             'md5': md5_hash.hexdigest(),
             'type': backup_type
         })
@@ -120,7 +120,7 @@ def create_backup_from_upload(state_file=None, upload_name=None):
     """Create a backup from uploaded unified state file"""
     try:
         if not upload_name:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
             upload_name = f'uploaded_{timestamp}'
         
         backup_dir = Path('/data/backups')
@@ -135,7 +135,7 @@ def create_backup_from_upload(state_file=None, upload_name=None):
             
             # Create upload manifest
             manifest = {
-                'created': datetime.now().isoformat(),
+                'created': datetime.now(timezone.utc).isoformat(),
                 'backup_name': upload_name,
                 'backup_type': 'uploaded_model',
                 'has_state': state_file is not None,
@@ -157,7 +157,7 @@ def create_backup(backup_name=None, include_logs=True, include_analytics=True):
     """Create a comprehensive backup of ML system state"""
     try:
         if not backup_name:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
             backup_name = f'ml_backup_{timestamp}'
         
         backup_dir = Path('/data/backups')
@@ -197,7 +197,7 @@ def create_backup(backup_name=None, include_logs=True, include_analytics=True):
             
             # Create backup manifest
             manifest = {
-                'created': datetime.now().isoformat(),
+                'created': datetime.now(timezone.utc).isoformat(),
                 'backup_name': backup_name,
                 'include_logs': include_logs,
                 'include_analytics': include_analytics,
@@ -234,7 +234,7 @@ def restore_backup(backup_path, restore_models=True, restore_config=True, restor
             return False, "Backup file not found"
         
         # Create restoration timestamp
-        restore_time = datetime.now().strftime('%Y%m%d_%H%M%S')
+        restore_time = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
         
         # Backup current state before restoration
         current_backup_name = f'pre_restore_{restore_time}'
@@ -311,12 +311,12 @@ def export_model_data():
         export_dir = Path('/data/exports')
         export_dir.mkdir(exist_ok=True)
         
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
         export_path = export_dir / f'ml_export_{timestamp}.json'
         
         export_data = {
             'export_info': {
-                'created': datetime.now().isoformat(),
+                'created': datetime.now(timezone.utc).isoformat(),
                 'addon_version': '1.0',
                 'export_type': 'model_data'
             },
@@ -420,7 +420,7 @@ def render_backup_overview():
         st.metric("Total Backup Size", f"{total_backup_size:.1f} MB")
     with col4:
         if backups:
-            days_since_backup = (datetime.now() - backups[0]['created']).days
+            days_since_backup = (datetime.now(timezone.utc) - backups[0]['created']).days
             st.metric("Last Backup", f"{days_since_backup} days ago")
         else:
             st.metric("Last Backup", "Never")
@@ -468,7 +468,7 @@ def render_model_upload():
                 if st.button("📥 Upload & Restore", type="primary"):
                     with st.spinner("Processing backup restore..."):
                         # Save uploaded backup temporarily
-                        temp_backup_path = Path('/tmp') / f'temp_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.zip'
+                        temp_backup_path = Path('/tmp') / f'temp_backup_{datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")}.zip'
                         with open(temp_backup_path, 'wb') as f:
                             f.write(backup_file.getvalue())
                         
@@ -524,7 +524,7 @@ def render_current_model_download():
         
         elif download_type == "Complete Backup":
             if st.button("📥 Create & Download Backup", type="primary"):
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
                 backup_name = f'complete_download_{timestamp}'
                 
                 with st.spinner("Creating complete backup..."):
@@ -547,7 +547,7 @@ def render_current_model_download():
             state_stat = state_path.stat()
             st.write(f"✅ **State File:** {state_path.name}")
             st.write(f"📊 **Size:** {state_stat.st_size / 1024:.1f} KB")
-            st.write(f"🕒 **Modified:** {datetime.fromtimestamp(state_stat.st_mtime).strftime('%Y-%m-%d %H:%M')}")
+            st.write(f"🕒 **Modified:** {datetime.fromtimestamp(state_stat.st_mtime, tz=timezone.utc).strftime('%Y-%m-%d %H:%M')}")
         else:
             st.write("❌ **State File:** Not found")
 
@@ -614,7 +614,7 @@ def activate_backup_as_current(backup_path):
     """Activate a backup as the current model"""
     try:
         # Safety backup current state
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
         safety_backup_name = f'pre_activation_{timestamp}'
         success, _, _ = create_backup(safety_backup_name, include_logs=False, include_analytics=False)
         
@@ -937,7 +937,7 @@ def render_backup_analytics():
         st.metric("Size Growth", f"{growth_rate:+.1f} MB/backup")
     
     with col3:
-        backup_frequency = len(backups) / max(1, (datetime.now() - backup_df['created'].min()).days)
+        backup_frequency = len(backups) / max(1, (datetime.now(timezone.utc) - backup_df['created'].min()).days)
         st.metric("Backup Frequency", f"{backup_frequency:.1f}/day")
 
 

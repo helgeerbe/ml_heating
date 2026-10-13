@@ -1464,11 +1464,11 @@ def backup_existing_calibration():
     logging.info("Creating backup of existing thermal calibration...")
 
     try:
-        from datetime import datetime
+        from datetime import datetime, timezone
 
         state_manager = get_thermal_state_manager()
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         backup_name = f"pre_calibration_{timestamp}.json"
 
         success, result = state_manager.create_backup(backup_name)

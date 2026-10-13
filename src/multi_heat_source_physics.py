@@ -378,7 +378,7 @@ class MultiHeatSourcePhysics:
             Dict with comprehensive multi-source heat analysis
         """
         # Get current time for PV effectiveness calculation
-        current_time = datetime.now()
+        current_time = datetime.now().astimezone()
         current_hour = current_time.hour
         
         # Calculate individual heat source contributions

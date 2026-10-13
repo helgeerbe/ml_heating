@@ -7,7 +7,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import sys
@@ -85,7 +85,7 @@ def get_recent_log_data():
         pass
     
     # Fallback demo data
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     demo_data = []
     for i in range(24):
         demo_data.append({
@@ -256,7 +256,7 @@ def render_system_status():
         if os.path.exists('/data/models/unified_thermal_state.json'):
             stat = os.stat('/data/models/unified_thermal_state.json')
             state_size = stat.st_size / 1024  # KB
-            last_updated = datetime.fromtimestamp(stat.st_mtime)
+            last_updated = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
             st.success(f"💾 State: {state_size:.1f}KB")
             st.caption(f"Updated: {last_updated.strftime('%Y-%m-%d %H:%M')}")
         else:

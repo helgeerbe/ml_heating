@@ -15,7 +15,7 @@ Key features:
 import logging
 import os
 from typing import Dict, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -2061,7 +2061,7 @@ class EnhancedModelWrapper:
                 predicted_temp=predicted_temp,
                 actual_temp=actual_temp,
                 prediction_context=prediction_context,
-                timestamp=timestamp or datetime.now().isoformat(),
+                timestamp=timestamp or datetime.now(timezone.utc).isoformat(),
                 is_blocking_active=is_blocking_active,
             )
 
@@ -2095,7 +2095,7 @@ class EnhancedModelWrapper:
 
             # Add prediction record to unified state
             prediction_record = {
-                "timestamp": timestamp or datetime.now().isoformat(),
+                "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
                 "predicted": predicted_temp,
                 "actual": actual_temp,
                 "error": actual_temp - predicted_temp,
@@ -2356,7 +2356,7 @@ class EnhancedModelWrapper:
                 # Total predictions tracked
                 "total_predictions": len(self.prediction_metrics.predictions),
                 # Timestamp
-                "last_updated": datetime.now().isoformat(),
+                "last_updated": datetime.now(timezone.utc).isoformat(),
             }
 
             return ha_metrics
@@ -2366,7 +2366,7 @@ class EnhancedModelWrapper:
             return {
                 "error": str(e),
                 "cycle_count": self.cycle_count,
-                "last_updated": datetime.now().isoformat(),
+                "last_updated": datetime.now(timezone.utc).isoformat(),
             }
 
     def _export_metrics_to_influxdb(self):

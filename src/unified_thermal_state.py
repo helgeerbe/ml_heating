@@ -17,7 +17,7 @@ import os
 import logging
 import fcntl
 from typing import Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import numpy as np
 
 # Import centralized thermal configuration
@@ -54,8 +54,8 @@ class ThermalStateManager:
             "metadata": {
                 "version": "1.0",
                 "format": "unified_thermal_state",
-                "created": datetime.now().isoformat(),
-                "last_updated": datetime.now().isoformat()
+                "created": datetime.now(timezone.utc).isoformat(),
+                "last_updated": datetime.now(timezone.utc).isoformat()
             },
             "baseline_parameters": {
                 "thermal_time_constant":
@@ -152,8 +152,8 @@ class ThermalStateManager:
             # Validate the merged state to ensure data integrity
             # This will raise ThermalStateValidationError if invalid, triggering recovery
             ThermalStateValidator.validate_thermal_state_data(self.state)
-            
-            self.state["metadata"]["last_updated"] = datetime.now().isoformat()
+
+            self.state["metadata"]["last_updated"] = datetime.now(timezone.utc).isoformat()
 
             logging.info("✅ Loaded unified thermal state from %s", self.state_file)
             return True
@@ -177,7 +177,7 @@ class ThermalStateManager:
 
                         self.state = self._merge_with_defaults(loaded_state)
                         self.state["metadata"]["last_updated"] = \
-                            datetime.now().isoformat()
+                            datetime.now(timezone.utc).isoformat()
 
                         # We successfully loaded from backup.
                         # Repair the main file to prevent future errors
@@ -216,7 +216,7 @@ class ThermalStateManager:
         """Save thermal state to JSON file using atomic write and locking."""
         try:
             # Update metadata
-            self.state["metadata"]["last_updated"] = datetime.now().isoformat()
+            self.state["metadata"]["last_updated"] = datetime.now(timezone.utc).isoformat()
 
             # Convert numpy types to native Python for JSON serialization
             serializable_state = self._convert_numpy_types(self.state)
@@ -336,7 +336,7 @@ class ThermalStateManager:
         baseline["source"] = "calibrated"
         baseline["calibration_method"] = "manual"
         baseline["accuracy_state"] = "accurate"
-        baseline["calibration_date"] = datetime.now().isoformat()
+        baseline["calibration_date"] = datetime.now(timezone.utc).isoformat()
         baseline["calibration_cycles"] = calibration_cycles
 
         # Reset learning adjustments when new baseline is set
@@ -481,7 +481,7 @@ class ThermalStateManager:
             if key in operational:
                 operational[key] = value
 
-        operational["last_run_time"] = datetime.now().isoformat()
+        operational["last_run_time"] = datetime.now(timezone.utc).isoformat()
 
     def get_operational_state(self) -> Dict[str, Any]:
         """Get current operational state."""
@@ -543,7 +543,7 @@ class ThermalStateManager:
         """Create a backup of the current thermal state."""
         try:
             if not backup_name:
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
                 backup_name = f'thermal_state_backup_{timestamp}'
 
             # Ensure backup has .json extension
@@ -572,7 +572,7 @@ class ThermalStateManager:
 
             # Create safety backup before restore
             safety_backup_name = \
-                f'pre_restore_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
+                f'pre_restore_{datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")}'
             self.create_backup(safety_backup_name)
 
             # Copy backup to current state file
@@ -608,7 +608,7 @@ class ThermalStateManager:
                         'name': file,
                         'path': file_path,
                         'size': stat.st_size,
-                        'created': datetime.fromtimestamp(stat.st_mtime),
+                        'created': datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
                         'type': 'thermal_state_backup'
                     })
 

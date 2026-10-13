@@ -14,7 +14,7 @@ noted for the broader suite).
 import json
 import runpy
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -64,7 +64,7 @@ class SaveRaisingStateManager(FakeStateManager):
 def _record(predicted, actual, timestamp=None):
     """Build a unified-state prediction record (with 'error' only)."""
     return {
-        "timestamp": timestamp or datetime.now().isoformat(),
+        "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
         "predicted": predicted,
         "actual": actual,
         "error": actual - predicted,
@@ -102,7 +102,7 @@ def test_load_from_state_exception_falls_back_to_in_memory_deque():
 
 def test_load_from_state_records_already_having_abs_error_are_kept():
     history = [
-        {"timestamp": datetime.now().isoformat(),
+        {"timestamp": datetime.now(timezone.utc).isoformat(),
          "predicted": 20.0, "actual": 20.3,
          "error": 0.3, "abs_error": 0.3, "squared_error": 0.09, "context": {}}
     ]
@@ -149,7 +149,7 @@ def test_save_to_state_exception_is_swallowed():
 def test_add_prediction_creates_record_and_invalidates_cache():
     sm = FakeStateManager()
     metrics = PredictionMetrics(state_manager=sm)
-    metrics._cache_timestamp = datetime.now()
+    metrics._cache_timestamp = datetime.now(timezone.utc)
 
     metrics.add_prediction(20.0, 20.5, context={"outlet_temp": 45.0})
 
@@ -420,7 +420,7 @@ def test_good_control_percentage():
 
 
 def _add_with_offset(metrics, hours_ago, error):
-    ts = (datetime.now() - timedelta(hours=hours_ago)).isoformat()
+    ts = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()
     metrics.add_prediction(20.0, 20.0 + error, timestamp=ts)
 
 

@@ -8,7 +8,7 @@ import json
 import os
 import subprocess
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 import sys
 
 # Add app directory to Python path
@@ -64,7 +64,7 @@ def trigger_model_recalibration():
         # This would send a signal to the ML system to recalibrate
         # For now, we'll restart with a flag file
         with open('/data/config/recalibrate_flag', 'w') as f:
-            f.write(datetime.now().isoformat())
+            f.write(datetime.now(timezone.utc).isoformat())
         
         success, output = restart_ml_system()
         return success, "Recalibration triggered. " + output

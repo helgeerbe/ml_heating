@@ -1,6 +1,12 @@
 # ML Heating System - Current Progress
 
-### 🎯 CURRENT STATUS - October 13, 2026 (Pass A: vestigial schema removal)
+### 🎯 CURRENT STATUS - October 13, 2026 (Pass B: timezone-aware UTC conversion)
+
+**Approved Act-mode pass completed: converted all naive `datetime.now()` → `datetime.now(timezone.utc)` across the entire codebase (20 files), normalized all naive parse sites (`fromtimestamp`/`strptime`/`fromisoformat`) to tz-aware UTC, and suppressed the third-party `reactivex` `utcfromtimestamp` DeprecationWarning via `pyproject.toml` `filterwarnings`.** Three categories: persist/emit/arithmetic → `datetime.now(timezone.utc)`; ML-feature local-hour → `datetime.now().astimezone()`; pure debug-log `strftime` → left naive (main.py 318/1705). `prediction_metrics.py` 24h-window replaced the `replace(tzinfo=None)` strip with naive→UTC re-tagging (the old strip would have raised `TypeError` against the new aware `cutoff_time`). Test fixtures (`test_prediction_metrics.py`, `test_adaptive_fireplace_learning.py`) converted to aware datetimes (the `_cache_timestamp` and mock `now` values are compared against production's aware `datetime.now(timezone.utc)`). Full `tests/` suite **379 passed** (2.15s); `reactivex` warning suppressed in normal mode. No `utcfromtimestamp`/`utcnow` remain in our own code. **Next**: Pass C1/C2/C3 (god-class refactors).
+
+---
+
+### 🎯 PRIOR — Pass A: vestigial schema removal (Oct 13, 2026)
 
 **Approved Act-mode pass completed: removed vestigial `equilibrium_ratio`/`total_conductance` from the state schema, config, and HA display.** Confirmed vestigial: never `self.*` model attributes (grep 0 matches), never adapted (the 6 gradient methods target only the 6 real params), never emitted to HA (`get_adaptive_learning_metrics().current_parameters` has 3 params → `ha_client` always fell back to static `0.3`/`0.5`), deltas pinned `0.0` over 9380 live cycles. The `total_conductance` *physics local var* (`HLC+OE`) in `thermal_equilibrium_model.py` is real and left untouched. 12 deletions across `unified_thermal_state.py` (6, incl. repopulating `parameter_bounds` with the real adapted params), `thermal_config.py` (4 dicts), `ha_client.py` (2 dead display attrs, per user OK), `test_thermal_config_values.py` (1 assertion). Migration is strip-on-load (no manual edit to the live file). Full `tests/` suite **379 passed**; spot-check confirms keys absent from fresh saved JSON and legacy files still load. **Next**: Pass B (timezone-aware UTC audit) → Pass C1/C2/C3 (god-class refactors).
 

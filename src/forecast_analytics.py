@@ -184,7 +184,7 @@ def get_forecast_fallback_strategy(
         fallback_forecasts['fallback_reason'] = 'low_availability'  
         # Use simple seasonal trend (gradual cooling at night)
         current_temp = current_conditions.get('outdoor_temp', 10.0)
-        current_hour = datetime.now().hour
+        current_hour = datetime.now().astimezone().hour
         
         # Simple night cooling model
         for i in range(1, 5):
@@ -196,7 +196,7 @@ def get_forecast_fallback_strategy(
             fallback_forecasts[f'temp_forecast_{i}h'] = current_temp + temp_adjustment
     
     # PV fallback: assume zero during night, maintain current during day
-    current_hour = datetime.now().hour
+    current_hour = datetime.now().astimezone().hour
     current_pv = current_conditions.get('pv_now', 0.0)
     
     for i in range(1, 5):

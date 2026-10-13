@@ -13,12 +13,24 @@ import logging
 import math
 import numpy as np
 from typing import Dict, Optional, List, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 import json
 import os
 
 logger = logging.getLogger(__name__)
+
+
+def _to_utc_datetime(dt: datetime) -> datetime:
+    """Normalize a parsed datetime to timezone-aware UTC.
+
+    Legacy persisted state (pre-Pass-B) stored naive datetimes produced by
+    ``datetime.now()``. This deployment runs in UTC, so a naive timestamp is
+    re-tagged as UTC. Already-aware datetimes are converted to UTC unchanged.
+    """
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 @dataclass
@@ -105,14 +117,15 @@ class AdaptiveFireplaceLearning:
                 # Convert timestamp strings back to datetime objects
                 observations = []
                 for obs_data in data.get('observations', []):
-                    obs_data['timestamp'] = datetime.fromisoformat(obs_data['timestamp'])
+                    parsed_ts = datetime.fromisoformat(obs_data['timestamp'])
+                    obs_data['timestamp'] = _to_utc_datetime(parsed_ts)
                     observations.append(FireplaceObservation(**obs_data))
                 
                 state = FireplaceLearningState(
                     observations=observations,
                     learned_coefficients=data.get('learned_coefficients', {}),
                     learning_stats=data.get('learning_stats', {}),
-                    last_update=datetime.fromisoformat(data['last_update']) if data.get('last_update') else None
+                    last_update=_to_utc_datetime(datetime.fromisoformat(data['last_update'])) if data.get('last_update') else None
                 )
                 
                 logger.info(f"Loaded fireplace learning state with {len(observations)} observations")
@@ -139,7 +152,7 @@ class AdaptiveFireplaceLearning:
                 'observations': observations_data,
                 'learned_coefficients': self.learning_state.learned_coefficients,
                 'learning_stats': self.learning_state.learning_stats,
-                'last_update': datetime.now().isoformat()
+                'last_update': datetime.now(timezone.utc).isoformat()
             }
             
             with open(self.state_file, 'w') as f:
@@ -164,7 +177,7 @@ class AdaptiveFireplaceLearning:
         Returns:
             Dict with learning insights and current analysis
         """
-        current_time = datetime.now()
+        current_time = datetime.now(timezone.utc)
         temp_differential = living_room_temp - other_rooms_temp
         
         # Track fireplace sessions for learning
@@ -366,13 +379,13 @@ class AdaptiveFireplaceLearning:
         # Update learning stats
         self.learning_state.learning_stats.update({
             'total_observations': len(observations),
-            'recent_observations': len([obs for obs in observations if (datetime.now() - obs.timestamp).days < 30]),
+            'recent_observations': len([obs for obs in observations if (datetime.now(timezone.utc) - obs.timestamp).days < 30]),
             'avg_peak_differential': np.mean([obs.peak_differential for obs in observations]) if observations else 0.0,
             'avg_duration_minutes': np.mean([obs.duration_minutes for obs in observations]) if observations else 0.0,
             'confidence_level': coeffs['learning_confidence']
         })
         
-        self.learning_state.last_update = datetime.now()
+        self.learning_state.last_update = datetime.now(timezone.utc)
         self._save_state()
         
         return {
@@ -415,7 +428,7 @@ class AdaptiveFireplaceLearning:
             # Learning state features
             'fireplace_observations_count': len(self.learning_state.observations),
             'fireplace_recent_usage': len([obs for obs in self.learning_state.observations 
-                                          if (datetime.now() - obs.timestamp).days < 7]),
+                                          if (datetime.now(timezone.utc) - obs.timestamp).days < 7]),
             
             # Adaptive coefficients as features
             'fireplace_learned_efficiency': self.learning_state.learned_coefficients['thermal_efficiency'],

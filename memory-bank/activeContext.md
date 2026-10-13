@@ -1,5 +1,44 @@
 # Active Context - Current Work & Decision State
 
+### 🎯 **PASS B — TIMEZONE-AWARE UTC CONVERSION (Oct 13, 2026)**
+
+**STATUS**: Completed Act-mode pass. Converted all naive `datetime.now()` calls to timezone-aware UTC across the entire codebase, normalized naive parse sites (`fromtimestamp`/`strptime`/`fromisoformat`) to tz-aware UTC, and suppressed the third-party `reactivex` `utcfromtimestamp` DeprecationWarning via `pyproject.toml` `filterwarnings`.
+
+**Three conversion categories** (decision framework):
+1. **Persist/emit/arithmetic** → `datetime.now(timezone.utc)` (and `fromtimestamp(..., tz=timezone.utc)`).
+2. **ML-feature local-hour** → `datetime.now().astimezone().hour` / `.astimezone()` (deployment runs in UTC, so this yields UTC hour matching training data — no `timezone` import needed since `.astimezone()` is an instance method).
+3. **Pure log-label `strftime`** → left naive (display-only, zero correctness impact).
+
+**Files edited (20)**:
+- `pyproject.toml` — added `[tool.pytest.ini_options]` `filterwarnings` suppressing `reactivex` `utcfromtimestamp` DeprecationWarning.
+- `src/unified_thermal_state.py` — import + 9 `datetime.now()` + `fromtimestamp(..., tz=)`.
+- `src/model_wrapper.py` — import + 4 sites.
+- `src/temperature_control.py` — import + 3 sites.
+- `src/main.py` — 1 emit site (line 785); 2 debug-log `strftime` sites (318/1705) intentionally left naive.
+- `src/adaptive_fireplace_learning.py` — import + `_to_utc_datetime()` canonical normalization helper + 5 `datetime.now()` + 2 parse-site normalizations.
+- `src/prediction_metrics.py` — import + 4 sites + 24h-window naive→UTC normalization (replaced `replace(tzinfo=None)` strip with `if tzinfo is None: replace(tzinfo=timezone.utc)`).
+- `src/physics_calibration.py` — local import + 1 site.
+- `src/forecast_analytics.py` — 2 `.astimezone()` local-hour sites.
+- `src/multi_heat_source_physics.py` — 1 `.astimezone()` local-hour site.
+- `src/physics_features.py` — forecast timestamp naive→UTC normalization (uses existing local `from datetime import timezone` import in same scope).
+- `dashboard/components/backup.py` — import + 11 `datetime.now()` + 5 `fromtimestamp(..., tz=)` + 1 `strptime(...).replace(tzinfo=timezone.utc)` (the `created` field flows into arithmetic at lines 423/940, so parse sites made aware too).
+- `dashboard/components/control.py` — import + 1 site.
+- `dashboard/components/performance.py` — import + 4 sites.
+- `dashboard/components/overview.py` — import + 1 site + 1 `fromtimestamp(..., tz=)`.
+- `dashboard/health.py` — import + 2 sites + 1 `fromtimestamp(..., tz=)`.
+- `config_adapter.py` — import + 2 sites.
+- `validation/reproduce_persistence_failure.py` — import + 2 sites.
+- `tests/unit/test_prediction_metrics.py` — import + 4 sites (incl. `_cache_timestamp` which is critical: compared against aware `now` in `get_metrics`).
+- `tests/unit/test_adaptive_fireplace_learning.py` — import + 6 sites (mock tests use `datetime.now(timezone.utc)` so mock return values are aware, matching production's aware comparisons).
+
+**Validation**: full `tests/` suite **379 passed** (2.15s). `reactivex` warning suppressed in normal mode (no warnings summary; confirmed with `-W error::DeprecationWarning` that the only collection error is the third-party `reactivex/internal/constants.py:4: UTC_ZERO = datetime.utcfromtimestamp(0)`). No `utcfromtimestamp`/`utcnow` remain in our own code. All `fromtimestamp` calls now have `tz=timezone.utc`. All 19 modified files pass `ast.parse`.
+
+**Key correctness note**: `prediction_metrics.py` 24h-window now compares aware `now`/`cutoff_time` against `pred_time` that is either already aware or re-tagged as UTC (was previously stripped to naive — the strip would have raised `TypeError` against the new aware `cutoff_time`).
+
+**Next passes** (recommended order): Pass C1 (extract `ParameterOptimizer` from `thermal_equilibrium_model.py`) → Pass C2 (extract `TrustGate`/`OutletCalculator`) → Pass C3 (decompose `main()`).
+
+---
+
 ### 🎯 **PASS A — VESTIGIAL `equilibrium_ratio`/`total_conductance` SCHEMA REMOVAL (Oct 13, 2026)**
 
 **STATUS**: Completed Act-mode pass. Removed two vestigial keys from the state schema, config, and HA display surface.

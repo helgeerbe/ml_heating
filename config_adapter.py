@@ -10,7 +10,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 import shutil
 
 def log_info(message):
@@ -228,7 +228,7 @@ def import_existing_model(source_path):
         # Backup existing state if present
         target_path = '/data/models/unified_thermal_state.json'
         if os.path.exists(target_path):
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
             backup_name = f"pre_import_{timestamp}.json"
             backup_path = f"/data/backups/{backup_name}"
             shutil.copy(target_path, backup_path)
@@ -293,7 +293,7 @@ def save_config_backup(config):
     """Save configuration backup for troubleshooting"""
     try:
         config_backup = {
-            'timestamp': datetime.now().isoformat(),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
             'addon_version': '1.0.0',
             'config': config
         }

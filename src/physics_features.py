@@ -227,8 +227,13 @@ def build_physics_features(
                 forecast_dict = {}
                 for ts_str, watts in watts_data.items():
                     try:
-                        # Parse ISO timestamp (handles timezone offsets)
+                        # Parse ISO timestamp (handles timezone offsets).
+                        # Naive forecast timestamps are re-tagged as UTC
+                        # (forecast APIs emit UTC) so the pandas index is
+                        # tz-aware, matching `now` below for range slicing.
                         ts = datetime.fromisoformat(ts_str)
+                        if ts.tzinfo is None:
+                            ts = ts.replace(tzinfo=timezone.utc)
                         forecast_dict[pd.Timestamp(ts)] = float(watts)
                     except Exception as e_parse:
                         logging.debug(
@@ -337,8 +342,10 @@ def build_physics_features(
         logging.debug(f"Could not fetch temperature forecasts: {e}")
         temp_forecasts = [outdoor_temp_f] * 4
     
-    # Get current time for cyclical encoding
-    now = datetime.now()
+    # Get current time for cyclical encoding (local wall-clock: the
+    # hour/month features are local-time by design, so use astimezone() to
+    # stay timezone-aware without shifting the hour away from local).
+    now = datetime.now().astimezone()
     current_hour = now.hour
     current_month = now.month
     

@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Add src to path
 sys.path.append(os.path.join(os.getcwd(), "src"))
@@ -20,7 +20,7 @@ def create_corrupted_state():
     state = {
         "metadata": {
             "version": "1.0",
-            "last_updated": datetime.now().isoformat()
+            "last_updated": datetime.now(timezone.utc).isoformat()
         },
         "baseline_parameters": {
             "thermal_time_constant": 4.0,
@@ -32,7 +32,7 @@ def create_corrupted_state():
             "fireplace_heat_weight": 5.0,
             "tv_heat_weight": 0.2,
             "source": "calibrated",        # Mark as calibrated so it loads
-            "calibration_date": datetime.now().isoformat(),
+            "calibration_date": datetime.now(timezone.utc).isoformat(),
             "calibration_cycles": 10
         },
         "learning_state": {

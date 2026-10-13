@@ -10,7 +10,7 @@ import logging
 import json
 from collections import deque
 from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from src.thermal_constants import PhysicsConstants
 
@@ -124,7 +124,7 @@ class PredictionMetrics:
             timestamp: Prediction timestamp (ISO format)
         """
         if timestamp is None:
-            timestamp = datetime.now().isoformat()
+            timestamp = datetime.now(timezone.utc).isoformat()
             
         prediction_record = {
             'timestamp': timestamp,
@@ -166,7 +166,7 @@ class PredictionMetrics:
             Dict with MAE, RMSE, and other metrics for each time window
         """
         # Check cache validity
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         if (self._cache_timestamp and 
             not refresh_cache and
             (now - self._cache_timestamp).total_seconds() < self._cache_valid_duration):
@@ -347,7 +347,7 @@ class PredictionMetrics:
             state_data = {
                 'predictions': list(self.predictions),
                 'max_history_size': self.max_history_size,
-                'saved_at': datetime.now().isoformat()
+                'saved_at': datetime.now(timezone.utc).isoformat()
             }
             
             with open(filepath, 'w') as f:
@@ -494,7 +494,7 @@ class PredictionMetrics:
         if not self.predictions:
             return []
         
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         cutoff_time = now - timedelta(hours=24)
         
         window_predictions = []
@@ -507,9 +507,13 @@ class PredictionMetrics:
                     continue
                     
                 pred_time = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                # Remove timezone info for comparison
-                pred_time = pred_time.replace(tzinfo=None)
-                
+                # Normalize legacy naive timestamps to UTC: this deployment
+                # runs in UTC, so a naive stored timestamp is re-tagged as UTC.
+                # Already-aware timestamps are compared as-is against the
+                # tz-aware cutoff_time.
+                if pred_time.tzinfo is None:
+                    pred_time = pred_time.replace(tzinfo=timezone.utc)
+
                 if pred_time >= cutoff_time:
                     window_predictions.append(prediction)
             except (ValueError, KeyError):

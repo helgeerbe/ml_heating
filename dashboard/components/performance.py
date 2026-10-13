@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import sys
@@ -38,8 +38,8 @@ def generate_demo_analytics():
     
     # Generate 30 days of learning data
     dates = pd.date_range(
-        start=datetime.now() - timedelta(days=30), 
-        end=datetime.now(), 
+        start=datetime.now(timezone.utc) - timedelta(days=30), 
+        end=datetime.now(timezone.utc), 
         freq='H'
     )
     
@@ -459,8 +459,8 @@ def generate_demo_shadow_benchmarks():
     
     # Generate 7 days of shadow mode benchmark data
     timestamps = pd.date_range(
-        start=datetime.now() - timedelta(days=7),
-        end=datetime.now(),
+        start=datetime.now(timezone.utc) - timedelta(days=7),
+        end=datetime.now(timezone.utc),
         freq='H'
     )
     

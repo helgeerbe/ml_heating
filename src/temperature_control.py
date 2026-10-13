@@ -6,7 +6,7 @@ extracted from main.py for better code organization.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Tuple, Optional
 import numpy as np
 
@@ -315,7 +315,7 @@ class OnlineLearning:
                     predicted_temp=previous_indoor,  # Starting indoor temp
                     actual_temp=current_indoor,      # Actual result indoor temp
                     prediction_context=prediction_context,
-                    timestamp=datetime.now().isoformat()
+                    timestamp=datetime.now(timezone.utc).isoformat()
                 )
                 
                 logging.debug(
@@ -348,7 +348,7 @@ class OnlineLearning:
                     predicted_temp=predicted_temp,
                     actual_temp=current_indoor,
                     prediction_context=prediction_context,
-                    timestamp=datetime.now().isoformat()
+                    timestamp=datetime.now(timezone.utc).isoformat()
                 )
                 
                 logging.debug(
@@ -473,7 +473,7 @@ class OnlineLearning:
                 'ml_outlet_prediction': ml_outlet_prediction,
                 'heat_curve_outlet_actual': heat_curve_outlet_actual,
                 'efficiency_advantage': efficiency_advantage,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now(timezone.utc).isoformat()
             }
             
             # Write benchmark data point
