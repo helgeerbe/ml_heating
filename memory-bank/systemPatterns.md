@@ -498,6 +498,20 @@ The `sensor.ml_heating_state` **value** answers *"is ML actually commanding the 
 
 **Passthrough safety cap**: the passthrough guard caps the outlet at `config.PASSTHROUGH_MAX_SAFE_OUTLET` (default 50.0 °C) instead of `_MAX_OUTLET_TEMP` (65 °C). This rejects heat-curve feedback-loop contamination (the 53 °C incident) and keeps a hard safety margin between passthrough and the absolute model ceiling.
 
+**Demotion / re-promotion hysteresis** (Oct 13, 2026 death-spiral fix):
+- **Demotion floor**: `good_control_pct < AUTO_CAL_GOOD_CONTROL_PCT / DEMOTION_FACTOR` (40% with `DEMOTION_FACTOR=2.0`).
+- **Re-promotion threshold**: now the *same scaled* value `AUTO_CAL_GOOD_CONTROL_PCT / DEMOTION_FACTOR` (40%), **not** the unscaled 80%. This makes hysteresis symmetric so a demoted model can actually recover. The previous asymmetry (53.3% floor vs unreachable 80% re-promotion) trapped the model in passthrough forever once a false demotion occurred.
+- **Minimum-predictions guard** (`MIN_PREDICTIONS_FOR_DEMOTION`, default 12): `_check_accuracy_demotion()` skips the **entire** gate (resets `_demotion_streak`, returns) when `prediction_metrics.get_24h_prediction_count() < MIN_PREDICTIONS_FOR_DEMOTION`. This prevents two failure modes: (a) stale passthrough-era predictions re-demoting `accuracy_state` on every restart while the 24h window is sparse, and (b) premature re-promotion from a handful of lucky predictions. Both demotion and re-promotion are suppressed on sparse windows.
+
+### Passive Learning (`heating_active` flag)
+
+When the heat pump is off, the model still learns the building's *passive* dynamics without corrupting control-quality metrics:
+
+- **Passive equilibrium** (`thermal_equilibrium_model.py`): with `heating_active=False`, the radiator/outlet term is dropped entirely — equilibrium reduces to `T_out + (PV + fireplace + TV) / HLC` (no outlet-effectiveness in the denominator). Parameter gradients (`_calculate_parameter_gradient`, `_calculate_equilibrium_based_oe_gradient`) become per-record `heating_active`-aware; the OE gradient is forced to 0 when all recent records are passive.
+- **Trust-gate isolation** (`model_wrapper.py`): `learn_from_prediction_feedback` always calls `update_prediction_feedback` (so passive parameters keep adapting) but only calls `prediction_metrics.add_prediction` when `heating_active=True`. Passive observations never count toward `good_control_pct` / accuracy metrics that drive the trust gate.
+- **Main loop contract** (`main.py`): reads `was_heating_active` from `last_run_features`; uses passive mode (outlet=0, passive trajectory) when False. The heating-off `continue` path now saves passive state (fresh `last_indoor_temp`, `heating_active=False` in features) so the next cycle has a valid baseline.
+- **Backward compatibility**: `heating_active` defaults to `True` everywhere, so no existing caller breaks.
+
 ### Outlet-Effectiveness (OE) Gradient Learning
 
 OE self-corrects from two gradient signals, combined in the main OE update:

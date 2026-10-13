@@ -61,6 +61,17 @@ class EnhancedModelWrapper:
         os.getenv("MIN_PREDICTIONS_FOR_TRUST", "50")
     )
 
+    # Minimum number of time-based predictions that must exist in the 24h
+    # window before the accuracy-demotion gate is allowed to act. With fewer
+    # samples (e.g. shortly after a history reset, or during extended
+    # heating-off periods where passive learning intentionally adds no
+    # trust-gate predictions) the good_control_pct / mae / bias signals are
+    # statistically meaningless and must not demote a working model. 12
+    # predictions ~= 6h of 30-min control cycles, a defensible minimum sample.
+    MIN_PREDICTIONS_FOR_DEMOTION = int(
+        os.getenv("MIN_PREDICTIONS_FOR_DEMOTION", "12")
+    )
+
     def __init__(self):
         self.thermal_model = ThermalEquilibriumModel()
         self.learning_enabled = True
@@ -439,6 +450,32 @@ class EnhancedModelWrapper:
                 self.prediction_metrics.get_24h_good_control_percentage()
             )
 
+            # Minimum-predictions guard: with fewer than
+            # MIN_PREDICTIONS_FOR_DEMOTION time-based predictions in the 24h
+            # window the good_control_pct / mae / bias signals are
+            # statistically meaningless (e.g. right after a history reset, or
+            # during extended heating-off periods where passive learning adds
+            # no trust-gate predictions). Skip the entire gate so a sparse
+            # window can neither demote a working model nor prematurely
+            # re-promote a demoted one. This breaks the restart death-spiral
+            # where stale passthrough-era predictions kept re-demoting the
+            # model on every service start.
+            try:
+                pred_count_24h = int(
+                    self.prediction_metrics.get_24h_prediction_count()
+                )
+            except Exception:
+                pred_count_24h = 0
+            if pred_count_24h < self.MIN_PREDICTIONS_FOR_DEMOTION:
+                logging.debug(
+                    "Skipping accuracy demotion check: only %d predictions in "
+                    "24h window (minimum %d).",
+                    pred_count_24h,
+                    self.MIN_PREDICTIONS_FOR_DEMOTION,
+                )
+                self._demotion_streak = 0
+                return
+
             demoted = (
                 mae_24h > config.AUTO_CAL_MAE_THRESHOLD * config.DEMOTION_FACTOR
                 or abs(mean_error_24h)
@@ -446,10 +483,19 @@ class EnhancedModelWrapper:
                 or good_control_pct < config.AUTO_CAL_GOOD_CONTROL_PCT
                 / config.DEMOTION_FACTOR
             )
+            # Re-promotion uses the *scaled* good_control threshold
+            # (AUTO_CAL_GOOD_CONTROL_PCT / DEMOTION_FACTOR), matching the
+            # demotion floor for symmetric hysteresis. The previous unscaled
+            # 80% threshold was unreachable once the model was demoted to
+            # passthrough (passthrough scoring collapses good_control_pct),
+            # trapping the model in a permanent death-spiral. The
+            # DEMOTION_SUSTAINED_CYCLES requirement supplies the temporal
+            # hysteresis that prevents flapping.
             recovered = (
                 mae_24h <= config.AUTO_CAL_MAE_THRESHOLD
                 and abs(mean_error_24h) <= config.AUTO_CAL_BIAS_THRESHOLD
-                and good_control_pct >= config.AUTO_CAL_GOOD_CONTROL_PCT
+                and good_control_pct
+                >= config.AUTO_CAL_GOOD_CONTROL_PCT / config.DEMOTION_FACTOR
             )
 
             accuracy_state = metrics.get("accuracy_state", "unknown")
@@ -2034,13 +2080,18 @@ class EnhancedModelWrapper:
                     fireplace_active=True,
                 )
 
-            # Add prediction to MAE/RMSE tracking
-            self.prediction_metrics.add_prediction(
-                predicted=predicted_temp,
-                actual=actual_temp,
-                context=prediction_context,
-                timestamp=timestamp,
-            )
+            # Add prediction to MAE/RMSE tracking — but only for active
+            # (heating-on) cycles. Passive (heating-off) observations do not
+            # reflect the model's control quality and must not count toward
+            # good_control_pct / accuracy metrics that feed the trust gate.
+            is_heating_active = prediction_context.get("heating_active", True)
+            if is_heating_active:
+                self.prediction_metrics.add_prediction(
+                    predicted=predicted_temp,
+                    actual=actual_temp,
+                    context=prediction_context,
+                    timestamp=timestamp,
+                )
 
             # Add prediction record to unified state
             prediction_record = {

@@ -72,7 +72,15 @@ def test_main_loop_heating_off(
     MockHeatingSystemStateChecker,
     MockBlockingStateManager,
 ):
-    """Test main loop skips when heating is off and loop breaks."""
+    """Test main loop skips ML prediction when heating is off.
+
+    The ML prediction logic (build_physics_features + simplified_outlet_prediction)
+    is genuinely skipped on a heating-off cycle. However, the passive-learning
+    change now *saves* passive state (fresh last_indoor_temp +
+    last_run_features with heating_active=False) on the heating-off path so the
+    next cycle's learning block uses the passive equilibrium model. So
+    save_state IS expected to be called once, but with heating_active=False.
+    """
     # Arrange
     mock_ha_client = MagicMock()
     # On the second run of the main loop, create_ha_client will raise an
@@ -98,10 +106,19 @@ def test_main_loop_heating_off(
             with patch("sys.argv", ["main.py"]):
                 main.main()
 
-    # Assert that the main logic was skipped
+    # Assert that the main ML logic was skipped
     mock_build_features.assert_not_called()
     mock_prediction.assert_not_called()
-    mock_save_state.assert_not_called()
+
+    # The passive-learning change now saves state on the heating-off path
+    # (fresh last_indoor_temp + last_run_features with heating_active=False)
+    # so the next cycle's learning block uses the passive equilibrium model.
+    mock_save_state.assert_called_once()
+    saved_kwargs = mock_save_state.call_args.kwargs
+    assert saved_kwargs["last_run_features"]["heating_active"] is False, (
+        "Heating-off save_state must mark heating_active=False so the next "
+        "cycle uses the passive equilibrium model (no outlet/OE term)."
+    )
 
     # Assert that the system is idle
     # mock_sleep.assert_called_once_with(300)

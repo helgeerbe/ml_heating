@@ -1,5 +1,102 @@
 # Active Context - Current Work & Decision State
 
+### 🎯 **TRUST-GATE DEATH-SPIRAL CODE FIX (Oct 13, 2026)**
+
+**COMPLETED**: Implemented the agreed code-level fix for the trust-gate death spiral that the previous config-only fix (`.env` `DEMOTION_FACTOR=2.0`) left exposed. The config fix prevented *new* false demotions but did not add the minimum-predictions guard or symmetric re-promotion, so a sparse 24h window (e.g. after a history reset or during extended heating-off periods where passive learning adds no trust-gate predictions) could still re-demote the model on every restart via stale passthrough-era predictions.
+
+#### Root Cause (this round)
+- On restart at 07:54 Oct 13, `accuracy_state` was auto-demoted to `"inaccurate"` because the 24h time-based `good_control_pct` was 21.5% (below the 40% floor) — computed from 79 stale passthrough-era predictions left in `learning_state.prediction_history`. Once demoted, re-promotion needed the unscaled 80% (unreachable: all-time `good_control_pct` is only 56.6%).
+
+#### ✅ Changes (3 source files + 1 test file + state + env)
+1. **`model_wrapper.py`** — `EnhancedModelWrapper`: added `MIN_PREDICTIONS_FOR_DEMOTION` class constant (env `MIN_PREDICTIONS_FOR_DEMOTION`, default 12). In `_check_accuracy_demotion()`: added a minimum-predictions guard that skips the entire gate (resets `_demotion_streak`, returns) when `get_24h_prediction_count() < MIN_PREDICTIONS_FOR_DEMOTION`. Scaled the `recovered` good_control threshold from unscaled `AUTO_CAL_GOOD_CONTROL_PCT` to `AUTO_CAL_GOOD_CONTROL_PCT / DEMOTION_FACTOR` (40%) for symmetric hysteresis; `DEMOTION_SUSTAINED_CYCLES` supplies the temporal hysteresis that prevents flapping.
+2. **`prediction_metrics.py`** — added `get_24h_prediction_count()` returning `len(self._get_predictions_in_24h_window())` (the public accessor the guard calls).
+3. **`tests/unit/test_trust_gate_lifecycle.py`** — fixture now stubs `get_24h_prediction_count` (default 100 so existing demotion tests pass the guard); added `TestMinimumPredictionsGuard` (3 tests: not-demoted with few predictions even on terrible metrics; demoted once enough predictions exist; demoted model not re-promoted on a sparse window).
+4. **`unified_thermal_state.json`** — cleared `learning_state.prediction_history` (85→0), reset `baseline_parameters.accuracy_state` `inaccurate`→`unknown`, reset `prediction_metrics.total_predictions`→0. `source` kept `calibrated`. Backup: `unified_thermal_state.json.bak.20261013`.
+5. **`.env`** — documented `MIN_PREDICTIONS_FOR_DEMOTION=12` and the symmetric re-promotion note.
+
+#### ✅ Verification (live)
+- Service stopped → state cleared → service restarted. Logs: `🎯 ACTIVE MODE: ML actively controls heating system`, `Restored prediction history: 0 records`, `Skipping accuracy demotion check: only 0 predictions in 24h window (minimum 12).` Trust state exported to InfluxDB. `accuracy_state` stayed `"unknown"` across cycles (no spurious demotion).
+- **Caveat**: heat pump currently OFF, so live `outlet_source: ml_predicted` confirmation still awaits the next active heating cycle (same caveat as the prior config-only fix).
+- **Test Suite Health**: EXCELLENT — 45/45 tests pass across `test_main_functions.py` + `test_trust_gate_lifecycle.py` + `test_passive_learning.py` + `test_model_wrapper.py` (exit 0). The previously-failing `test_main_functions.py::test_main_loop_heating_off` is now **fixed**: updated its stale assertion (`mock_save_state.assert_not_called()` → `assert_called_once()`) and added a contract-pinning assertion that the heating-off save_state carries `heating_active: False`. This was a test-only change (no production code touched) — the failure was caused by the passive-learning `main.py` change that intentionally saves passive state on the heating-off path.
+
+#### 🔑 Key Design Decisions
+- The guard skips the **whole** gate (neither demote nor promote) on a sparse window — prevents false demotion AND premature re-promotion on insufficient data.
+- `prediction_history` is shared storage between `prediction_metrics` (trust gate) and `thermal_equilibrium_model` (parameter adaptation); clearing it also resets the thermal model's learning history, which is correct here because the cleared records were corrupt passthrough-era data.
+- The `try/except` around `get_24h_prediction_count()` (defaults to 0 on failure) makes the guard fail-safe: if the count can't be determined, the gate is skipped rather than acting on unknown data.
+
+---
+
+### 🎯 **PASSIVE LEARNING IMPLEMENTATION (Oct 13, 2026)**
+
+**COMPLETED**: Implemented passive learning when the heat pump is OFF, so the ML model learns passive dynamics (heat loss, PV gain, fireplace/TV heat, thermal time constant) without corrupting `outlet_effectiveness` via the stale-outlet OE ratchet.
+
+#### Root Cause (3 interlocking bugs)
+1. **Stale `actual_applied_temp`**: Learning block reads 44°C from HA even when pump off → OE in equilibrium denominator with no actual heat delivery.
+2. **Stale `last_indoor_temp`**: `save_state` skipped on the `continue` path (line 858) → per-cycle indoor change becomes accumulated drift.
+3. **OE in equilibrium denominator**: Passive cycles produce spurious OE gradient (~−0.007/cycle), ratcheting OE down during heating-off periods.
+
+#### ✅ Changes (6 changes across 3 files + tests)
+1. **`thermal_equilibrium_model.py` — `predict_equilibrium_temperature`**: Added `heating_active: bool = True` param. When False, returns `T_eq = T_outdoor + (PV + fireplace + TV + aux) / HLC` — drops outlet/OE term entirely.
+2. **`thermal_equilibrium_model.py` — `predict_thermal_trajectory`**: Added `heating_active` param, passes through to equilibrium calc in each trajectory step.
+3. **`thermal_equilibrium_model.py` — `_calculate_parameter_gradient`**: Reads `heating_active` from each prediction record's context, passes to trajectory. Per-record aware.
+4. **`thermal_equilibrium_model.py` — `_calculate_equilibrium_based_oe_gradient`**: Skips passive records (`continue` if `heating_active=False`).
+5. **`thermal_equilibrium_model.py` — `_adapt_parameters_from_recent_errors`**: Belt-and-suspenders guard — if ALL recent records passive, force OE gradient to 0.0.
+6. **`thermal_equilibrium_model.py` — `update_prediction_feedback`**: Reads `heating_active` from context, stores in prediction record (via context copy), passes to trajectory.
+7. **`model_wrapper.py` — `learn_from_prediction_feedback`**: Always calls `update_prediction_feedback` (parameter adaptation), but only calls `prediction_metrics.add_prediction` when `heating_active=True` (trust-gate protection).
+8. **`main.py` — Learning block**: Reads `was_heating_active` from `last_run_features.get("heating_active")`; sets `actual_applied_temp=0.0` and `prediction_context["heating_active"]` for passive cycles; passes `heating_active` to trajectory.
+9. **`main.py` — Heating-off `continue` path**: Now saves passive state (fresh `last_indoor_temp`, `last_run_features` with `heating_active=False`, outdoor/PV/fireplace/TV readings) before sleeping/continuing — fixes the stale `last_indoor_temp` bug.
+10. **`main.py` — Normal save**: Adds `heating_active=True` to `features` before `save_state` so next cycle knows this was active.
+
+#### ✅ Tests
+- **`tests/unit/test_passive_learning.py`** — 10 tests covering:
+  - Passive equilibrium excludes outlet term (independence from outlet_temp)
+  - Exact formula: `T_eq = T_out + (PV+fireplace+TV)/HLC`
+  - PV, fireplace, TV each raise passive equilibrium
+  - Passive trajectory independent of outlet
+  - OE gradient = 0 when all records passive (both trajectory and equilibrium-based)
+  - Equilibrium-based OE gradient skips passive records (active record still produces signal)
+  - HLC gradient non-zero for passive records with PV (passive learning works)
+  - Trust-gate isolation: `add_prediction` NOT called for passive, IS called for active
+- **All 55 tests pass** (10 new + 45 existing across thermal model, trust gate, model wrapper, solar lag, trajectory correction).
+
+#### 🔑 Key Design Decisions
+- `heating_active` defaults to `True` everywhere → backward compatible, no existing caller breaks.
+- Passive predictions feed `update_prediction_feedback` (parameter adaptation) but NOT `prediction_metrics.add_prediction` (trust gate) — passive observations don't reflect control quality.
+- Passive equilibrium formula drops the outlet clamping logic entirely (lines 624-634 in original) — no need to clamp to outdoor when outlet=0.
+- HLC only has a passive gradient when external heat sources are present (with ext=0, T_eq=T_out regardless of HLC).
+
+---
+
+### 🎯 **TRUST-GATE DEATH-SPIRAL FIX (Oct 13, 2026)**
+
+> **⚠️ SUPERSEDED — see the [TRUST-GATE DEATH-SPIRAL CODE FIX](#-trust-gate-death-spiral-code-fix-oct-13-2026) section above.** This config-only fix (state reset + `DEMOTION_FACTOR=2.0`) stopped the *initial* false demotion but left the asymmetric re-promotion threshold and the stale-prediction restart hazard in place. The code fix above closed both gaps: (1) `MIN_PREDICTIONS_FOR_DEMOTION=12` guard skips the gate on sparse 24h windows, and (2) the re-promotion threshold is now scaled (`AUTO_CAL_GOOD_CONTROL_PCT / DEMOTION_FACTOR`) for symmetric hysteresis. The "shadow-benchmark re-promotion path" described below as a *future option* is **no longer required** — the symmetric threshold + minimum-predictions guard proved sufficient. The earlier "NEXT STEPS" (monitor for AUTO-DEMOTION, consider persisting `_demotion_streak`) are retained below for historical reference only.
+
+**CRITICAL FIX**: Resolved a trust-gate "death spiral" where the ML model was demoted to passthrough (state 0) and could never re-promote. Root cause: **hysteresis asymmetry** in `_check_accuracy_demotion` (`model_wrapper.py:442-453`). Demotion triggers when `good_control_pct < AUTO_CAL_GOOD_CONTROL_PCT / DEMOTION_FACTOR` (floor 80/1.5 = 53.3%), but re-promotion requires `good_control_pct >= AUTO_CAL_GOOD_CONTROL_PCT` (raw 80%, **not** scaled). Once demoted to passthrough, the model is scored against the heat-curve's 44°C outlet (not its own ~31°C), so `good_control_pct` collapsed from ~46% (active) to **8.3%** (passthrough, 24h window) — making the 80% re-promotion threshold permanently unreachable. Manual reset was the only escape.
+
+#### ✅ **CHANGES (config + state only, no code)**
+1. **State reset** — `unified_thermal_state.json`: `baseline_parameters.accuracy_state` `inaccurate` → `unknown`. `source` kept `calibrated` (so `mark_accurate()` re-promotion path stays available). NOTE: `accuracy_state` lives under `baseline_parameters`, NOT `learning_state`/`prediction_metrics` (previous summaries had the path slightly off).
+2. **`.env` `DEMOTION_FACTOR=2.0`** (was default 1.5) — lowers the demotion floor to 80/2.0 = **40%**, safely below the observed ~46% active-mode `good_control_pct`, so the model is no longer falsely demoted and the spiral never triggers. `AUTO_CAL_GOOD_CONTROL_PCT` left at 80 (default) to avoid over-loosening.
+
+#### ✅ **VERIFICATION**
+- Service stopped/edited/restarted; `accuracy_state='unknown'`, `source='calibrated'` persisted; JSON valid.
+- Loaded config: `DEMOTION_FACTOR=2.0`, `AUTO_CAL_GOOD_CONTROL_PCT=80.0`, demotion floor=40.0, re-promotion threshold=80.0.
+- Logs: `🎯 ACTIVE MODE: ML actively controls heating system` (was passthrough before). Trust state exported to InfluxDB.
+- **Caveat**: heat pump currently OFF ("Heating system not active, skipping cycle"), so no live `outlet_source: ml_predicted` control cycle observed yet. The "ACTIVE MODE" log line is the trust-gate confirmation; full confirmation (`outlet_source`, `is_trusted: True`, suggested outlet) awaits the next active heating cycle.
+- **Tests**: 17 trust-gate lifecycle tests pass with `DEMOTION_FACTOR=2.0`.
+
+#### 🔑 **KEY LEARNINGS**
+- The root cause was **NOT** "shadow-accuracy evaluated at heat-curve outlet vs ML outlet" as initially suspected. Predictions correctly use the actually-applied outlet (the prediction is `trajectory(outlet=applied)`, validated against the measured indoor temp that *resulted from* that outlet — you can't validate a counterfactual). The real issue is the **asymmetric re-promotion threshold** (unscaled 80% vs scaled 53.3% demotion floor) combined with the fact that passthrough scoring can't reach either threshold.
+- A valid "symmetric re-promotion threshold" code fix (use `AUTO_CAL_GOOD_CONTROL_PCT / DEMOTION_FACTOR` for re-promotion too) is test-safe (existing tests use 100% for re-promotion, demote via MAE) but **doesn't actually break the spiral** — passthrough good_control_pct (8.3%) is still far below even a 40% re-promotion floor. The `.env` change is the real fix because it prevents the false demotion that starts the spiral.
+- A proper shadow-benchmark re-promotion path ("ML's recommended outlet would track target better than the heat curve over N cycles") is the only code change that could *escape* a spiral once started, but it's invasive (self-referential, needs design+tests) and shouldn't ride along with an emergency fix. Revisit **only if** false demotions recur after this tuning.
+
+#### 📋 **NEXT STEPS**
+1. On the next active heating cycle, confirm `outlet_source: ml_predicted`, `is_trusted: True`, and a sensible suggested outlet (~28–35°C, not 44°C).
+2. Monitor `good_control_pct` stays ≥40% so no false demotion recurs.
+3. Watch for `AUTO-DEMOTION` log lines — if one appears with `DEMOTION_FACTOR=2.0`, the floor is still too close to the 46% active baseline and the shadow-benchmark re-promotion code fix becomes warranted.
+4. Consider persisting `_demotion_streak`/`learning_confidence` across restarts (carried over from prior session, still open).
+
+---
+
 ### 🎯 **OE RECALIBRATION + EQUILIBRIUM GRADIENT + PASSTHROUGH CAP (Oct 12, 2026)**
 
 **CRITICAL FIX**: Resolved a miscalibrated ML heating model that commanded dangerously high outlet temperatures (53°C vs needed ~32°C). Root cause chain: asymmetric cold-weather OE damping ratchet → `outlet_effectiveness` drifted 1.107→0.358 over 15K cycles → equilibrium math says 32°C outlet gives only 17.9°C room → model demanded 53°C to compensate → 53°C fed back into heat curve entity → passthrough also commanded 53°C → no safety margin anywhere.

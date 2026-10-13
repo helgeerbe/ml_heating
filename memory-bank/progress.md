@@ -1,6 +1,61 @@
 # ML Heating System - Current Progress
 
-## 🎯 CURRENT STATUS - October 12, 2026
+## 🎯 CURRENT STATUS - October 13, 2026
+
+### ✅ **TRUST-GATE DEATH-SPIRAL CODE FIX (Oct 13, 2026)**
+
+**System Status**: **OPERATIONAL — ML CONTROL ACTIVE** — Completed the agreed code-level fix that closes the gap left by the prior config-only death-spiral fix. The model no longer gets trapped in passthrough by stale passthrough-era predictions re-demoting `accuracy_state` on every restart.
+
+**Root cause fixed (this round)**: On restart, 79 stale passthrough-era predictions in `learning_state.prediction_history` produced a 24h `good_control_pct` of 21.5% (below the 40% demotion floor), auto-demoting to `"inaccurate"`; re-promotion then needed the unreachable unscaled 80%.
+
+**Changes (2 source files + 1 test file + state + env):**
+1. `src/model_wrapper.py`: Added `MIN_PREDICTIONS_FOR_DEMOTION` constant (env, default 12). `_check_accuracy_demotion()` now skips the entire gate (resets streak, returns) when `get_24h_prediction_count() < MIN_PREDICTIONS_FOR_DEMOTION`. Scaled the `recovered` good_control threshold to `AUTO_CAL_GOOD_CONTROL_PCT / DEMOTION_FACTOR` (40%) for symmetric hysteresis.
+2. `src/prediction_metrics.py`: Added `get_24h_prediction_count()` (returns `len(_get_predictions_in_24h_window())`).
+3. `tests/unit/test_trust_gate_lifecycle.py`: Fixture stubs `get_24h_prediction_count` (default 100); added `TestMinimumPredictionsGuard` (3 tests).
+4. `unified_thermal_state.json`: cleared `prediction_history` (85→0), `accuracy_state` `inaccurate`→`unknown`, `total_predictions`→0. `source` kept `calibrated`. Backup: `*.bak.20261013`.
+5. `.env`: documented `MIN_PREDICTIONS_FOR_DEMOTION=12` + symmetric re-promotion note.
+
+**Test Suite Health**: EXCELLENT — 45/45 across `test_main_functions.py` + `test_trust_gate_lifecycle.py` + `test_passive_learning.py` + `test_model_wrapper.py` (exit 0). Previously-failing `test_main_loop_heating_off` fixed (test-only): updated stale `assert_not_called()` → `assert_called_once()` + pinned `heating_active: False` contract.
+
+**Live Verification**: Service stopped → state cleared → restarted. Logs: `🎯 ACTIVE MODE: ML actively controls heating system`, `Restored prediction history: 0 records`, `Skipping accuracy demotion check: only 0 predictions in 24h window (minimum 12).` `accuracy_state` stayed `"unknown"` across cycles. Heat pump OFF, so live `outlet_source: ml_predicted` awaits next active cycle.
+
+**Key Files**: `src/model_wrapper.py`, `src/prediction_metrics.py`, `tests/unit/test_trust_gate_lifecycle.py`, `.env`, `unified_thermal_state.json`
+
+#### 📋 **NEXT STEPS (live monitoring — awaiting first active heating cycle)**
+1. **Turn heating on** (planned late afternoon) — model will begin making real trust-gate predictions.
+2. **Verify `outlet_source: ml_predicted`** on first active heating cycle (confirms the model escaped passthrough).
+3. **Monitor logs for 24h** — confirm `good_control_pct` stabilizes above 40% and the model is **not** re-demoted once 12+ predictions accumulate.
+4. **Confirm no spurious demotion** after the 12-prediction grace period expires (watch for `Skipping accuracy demotion check` lines while < 12, then normal gate operation ≥ 12).
+5. If a false `AUTO-DEMOTION` *does* recur with `DEMOTION_FACTOR=2.0`, revisit the more invasive shadow-benchmark re-promotion path (currently deemed unnecessary).
+
+### ✅ **PASSIVE LEARNING IMPLEMENTATION (Oct 13, 2026)**
+
+**System Status**: **OPERATIONAL** — Implemented passive learning for heating-OFF cycles. The ML model now learns passive dynamics (HLC, PV weight, fireplace/TV weight, thermal time constant, solar lag) when the heat pump is off, without corrupting `outlet_effectiveness`.
+
+**Root cause fixed**: 3 interlocking bugs — stale `actual_applied_temp` (44°C read from HA when pump off), stale `last_indoor_temp` (save_state skipped on `continue` path), and OE in the equilibrium denominator when no heat is delivered. These caused OE to ratchet down ~0.007/cycle during heating-off periods.
+
+**Changes (3 source files + 1 test file):**
+1. `thermal_equilibrium_model.py`: Added `heating_active` param to `predict_equilibrium_temperature` and `predict_thermal_trajectory`; passive equilibrium = `T_out + (PV+fireplace+TV)/HLC` (no OE). Made `_calculate_parameter_gradient` per-record `heating_active`-aware. `_calculate_equilibrium_based_oe_gradient` skips passive records. `_adapt_parameters_from_recent_errors` forces OE gradient to 0 when all records passive. `update_prediction_feedback` stores/passes `heating_active`.
+2. `model_wrapper.py`: `learn_from_prediction_feedback` always calls `update_prediction_feedback` but only calls `prediction_metrics.add_prediction` when `heating_active=True` (trust-gate protection).
+3. `main.py`: Learning block reads `was_heating_active` from `last_run_features`, uses passive mode (outlet=0, passive trajectory) when False. Heating-off `continue` path now saves passive state (fresh `last_indoor_temp`, `heating_active=False` in features). Normal save adds `heating_active=True` to features.
+
+**Test Suite Health**: **EXCELLENT** — 10 new passive learning tests + 45 existing tests = 55 passing, 0 failures. New file: `tests/unit/test_passive_learning.py`.
+
+**Key Files**: `src/thermal_equilibrium_model.py`, `src/model_wrapper.py`, `src/main.py`, `tests/unit/test_passive_learning.py`
+
+### ✅ **TRUST-GATE DEATH-SPIRAL FIX (Oct 13, 2026)**
+
+**System Status**: **OPERATIONAL — ML CONTROL ACTIVE (pending live heating cycle)** — Fixed a trust-gate death spiral where the demoted model could never re-promote. Root cause: hysteresis asymmetry — demotion floor = `AUTO_CAL_GOOD_CONTROL_PCT / DEMOTION_FACTOR` (53.3%) but re-promotion needs the unscaled 80%. Passthrough scoring against the heat-curve's 44°C outlet drove `good_control_pct` to 8.3% (was ~46% active), making recovery impossible.
+
+**Fix (config + state only, no code):**
+1. `unified_thermal_state.json`: `baseline_parameters.accuracy_state` `inaccurate` → `unknown` (`source` kept `calibrated`).
+2. `.env` `DEMOTION_FACTOR=2.0` (was 1.5) → demotion floor now 40%, below the ~46% active-mode baseline, preventing false demotion. `AUTO_CAL_GOOD_CONTROL_PCT` left at 80.
+
+**Test Suite Health**: **EXCELLENT** — 17 trust-gate lifecycle tests pass with `DEMOTION_FACTOR=2.0`.
+
+**Live Verification**: Service restarted; logs show `ACTIVE MODE: ML actively controls heating system`. Heat pump currently OFF, so live `outlet_source: ml_predicted` confirmation awaits next active cycle.
+
+**Key Files**: `.env`, `unified_thermal_state.json` (no source code changed)
 
 ### ✅ **OE RECALIBRATION + EQUILIBRIUM GRADIENT + PASSTHROUGH CAP (Oct 12, 2026)**
 

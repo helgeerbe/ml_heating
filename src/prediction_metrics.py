@@ -572,6 +572,18 @@ class PredictionMetrics:
         breakdown = self.get_24h_accuracy_breakdown()
         return breakdown['perfect']['percentage'] + breakdown['tolerable']['percentage']
 
+    def get_24h_prediction_count(self) -> int:
+        """
+        Return the number of time-based predictions in the last 24h window.
+
+        Used by the trust-gate minimum-predictions guard: a sparse window
+        (e.g. right after a history reset, or during extended heating-off
+        periods where passive learning adds no trust-gate predictions) does
+        not carry a statistically meaningful accuracy signal, so the demotion
+        gate must be skipped to avoid false demotions.
+        """
+        return len(self._get_predictions_in_24h_window())
+
 
 # Global instance for easy access
 prediction_tracker = PredictionMetrics()

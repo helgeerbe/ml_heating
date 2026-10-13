@@ -240,8 +240,16 @@ PASSTHROUGH_MAX_SAFE_OUTLET = float(os.getenv("PASSTHROUGH_MAX_SAFE_OUTLET", "50
 
 # model_wrapper.py — minimum predictions before the ML inversion is trusted
 MIN_PREDICTIONS_FOR_TRUST = int(os.getenv("MIN_PREDICTIONS_FOR_TRUST", "50"))    # .env override: 5 (post-reset re-engagement)
+
+# config.py / model_wrapper.py — demotion / re-promotion hysteresis (death-spiral fix)
+DEMOTION_FACTOR            = float(os.getenv("DEMOTION_FACTOR", "1.5"))          # .env override: 2.0  → demotion floor = 80/2.0 = 40%
+MIN_PREDICTIONS_FOR_DEMOTION = int(os.getenv("MIN_PREDICTIONS_FOR_DEMOTION", "12"))  # skip entire gate when 24h window < this many predictions
 ```
 > **Note**: `MIN_PREDICTIONS_FOR_TRUST` is read as a class attribute on `EnhancedModelWrapper` at import time. The effective `total_predictions` is computed live from `len(prediction_metrics.predictions)` (`model_wrapper.py:2306`), **not** the state-file counter — clearing `prediction_history` resets the effective count. Regression tests in `test_untrained_model_guard.py` pin this to 50 so they stay deterministic under env overrides.
+
+> **Trust-gate hysteresis** (Oct 13, 2026 death-spiral fix): demotion fires when `good_control_pct < AUTO_CAL_GOOD_CONTROL_PCT / DEMOTION_FACTOR` (40% with `DEMOTION_FACTOR=2.0`). **Re-promotion now uses the *same scaled* threshold** (`AUTO_CAL_GOOD_CONTROL_PCT / DEMOTION_FACTOR`), not the unscaled 80%, giving symmetric hysteresis so a demoted model can actually recover. Additionally, `_check_accuracy_demotion()` **skips the entire gate** (resets the streak, no demote/promote) when `prediction_metrics.get_24h_prediction_count() < MIN_PREDICTIONS_FOR_DEMOTION` — this prevents stale passthrough-era predictions from re-demoting `accuracy_state` on every restart while the window is sparse.
+
+> **Passive learning (`heating_active`)** (Oct 13, 2026): when the heat pump is off, the main loop records `heating_active: False` in `last_run_features`. The model still adapts passive parameters (HLC, PV/fireplace/TV weights, thermal time constant, solar lag) via `update_prediction_feedback`, but **does not** call `prediction_metrics.add_prediction` — passive observations don't reflect control quality and must not feed the trust gate. `heating_active` defaults to `True` everywhere, so all existing callers stay backward-compatible.
 
 **Entity ID Mapping**:
 ```python

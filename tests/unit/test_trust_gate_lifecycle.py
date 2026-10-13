@@ -38,6 +38,10 @@ def wrapper(tmp_path, monkeypatch):
         "24h": {"mae": 0.0, "mean_error": 0.0}
     }
     pred_metrics.get_24h_good_control_percentage.return_value = 100.0
+    # Default to a sufficiently populated 24h window so existing demotion
+    # tests are not blocked by the minimum-predictions guard. Tests that
+    # exercise the guard override this return value explicitly.
+    pred_metrics.get_24h_prediction_count.return_value = 100
 
     w = EnhancedModelWrapper.__new__(EnhancedModelWrapper)
     w.state_manager = state_mgr
@@ -277,3 +281,70 @@ class TestUnknownStateDemotion:
         m = wrapper.state_manager.get_learning_metrics()
         # Still unknown (not yet sustained long enough to demote).
         assert m["accuracy_state"] == "unknown"
+
+
+class TestMinimumPredictionsGuard:
+    """A model with fewer than MIN_PREDICTIONS_FOR_DEMOTION time-based
+    predictions in the 24h window must NOT be demoted -- the accuracy signal
+    (good_control_pct / mae / bias) is statistically meaningless on a sparse
+    window. This happens after a history reset, or during extended
+    heating-off periods where passive learning intentionally adds no
+    trust-gate predictions. Without this guard the model gets stuck in a
+    restart death-spiral: stale passthrough-era predictions keep
+    re-demoting it to passthrough on every service start.
+    """
+
+    def _calibrated_accurate(self, wrapper):
+        wrapper.state_manager.state["prediction_metrics"]["total_predictions"] = 100
+        wrapper.state_manager.state["baseline_parameters"]["source"] = "calibrated"
+        wrapper.state_manager.state["baseline_parameters"]["accuracy_state"] = "accurate"
+        wrapper.state_manager.state["baseline_parameters"]["calibration_cycles"] = 100
+
+    def test_not_demoted_with_few_predictions(self, wrapper):
+        """Even with terrible accuracy metrics, a sparse 24h window (< 12
+        predictions) must not demote an accurate model."""
+        self._calibrated_accurate(wrapper)
+        wrapper.prediction_metrics.get_metrics.return_value = {
+            "24h": {"mae": 5.0, "mean_error": 0.0}
+        }
+        wrapper.prediction_metrics.get_24h_good_control_percentage.return_value = 10.0
+        wrapper.prediction_metrics.get_24h_prediction_count.return_value = 5
+        # Run well past the sustained-cycle requirement to prove the guard
+        # keeps skipping every cycle, not just the first.
+        for _ in range(config.DEMOTION_SUSTAINED_CYCLES * 3):
+            wrapper._check_accuracy_demotion()
+        m = wrapper.state_manager.get_learning_metrics()
+        assert m["accuracy_state"] == "accurate"
+        assert wrapper._demotion_streak == 0
+
+    def test_demoted_with_enough_predictions(self, wrapper):
+        """Sanity check: once the 24h window has enough predictions, the
+        demotion gate resumes acting on the (terrible) accuracy metrics."""
+        self._calibrated_accurate(wrapper)
+        wrapper.prediction_metrics.get_metrics.return_value = {
+            "24h": {"mae": 5.0, "mean_error": 0.0}
+        }
+        wrapper.prediction_metrics.get_24h_good_control_percentage.return_value = 10.0
+        wrapper.prediction_metrics.get_24h_prediction_count.return_value = 50
+        for _ in range(config.DEMOTION_SUSTAINED_CYCLES):
+            wrapper._check_accuracy_demotion()
+        m = wrapper.state_manager.get_learning_metrics()
+        assert m["accuracy_state"] == "inaccurate"
+
+    def test_demoted_model_not_re_promoted_with_few_predictions(self, wrapper):
+        """A demoted (inaccurate) model with a sparse 24h window must not be
+        re-promoted on insufficient data either -- the guard skips the whole
+        gate."""
+        self._calibrated_accurate(wrapper)
+        wrapper.state_manager.state["baseline_parameters"]["accuracy_state"] = "inaccurate"
+        wrapper.prediction_metrics.get_metrics.return_value = {
+            "24h": {"mae": 0.0, "mean_error": 0.0}
+        }
+        wrapper.prediction_metrics.get_24h_good_control_percentage.return_value = 100.0
+        wrapper.prediction_metrics.get_24h_prediction_count.return_value = 3
+        for _ in range(config.DEMOTION_SUSTAINED_CYCLES * 3):
+            wrapper._check_accuracy_demotion()
+        m = wrapper.state_manager.get_learning_metrics()
+        assert m["accuracy_state"] == "inaccurate"
+        assert wrapper._demotion_streak == 0
+

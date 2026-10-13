@@ -518,11 +518,23 @@ class ThermalEquilibriumModel:
         auxiliary_heat: float = 0.0,
         _suppress_logging: bool = False,
         fireplace_power_kw: float = None,
+        heating_active: bool = True,
     ) -> float:
         """
         Predict equilibrium temperature using standard heat balance physics.
         Supports both temperature-based approximation and energy-based
         modeling.
+
+        When ``heating_active`` is ``False`` (heat pump off), the radiator /
+        outlet term is excluded entirely. The equilibrium reduces to the
+        passive balance::
+
+            T_eq = T_outdoor + (PV + fireplace + TV + aux) / HLC
+
+        This allows passive learning of HLC, PV weight, fireplace weight, TV
+        weight, thermal time constant, and solar lag — without corrupting
+        ``outlet_effectiveness`` (which has no signal when no heat is being
+        delivered).
         """
         # Calculate effective solar power with lag
         effective_pv = self._calculate_effective_solar(pv_power)
@@ -552,6 +564,32 @@ class ThermalEquilibriumModel:
         external_thermal_power = (
             heat_from_pv + heat_from_fireplace + heat_from_tv + auxiliary_heat
         )
+
+        # --- Passive mode (heat pump off) ---
+        # The radiator loop is not delivering heat, so the outlet/OE term is
+        # meaningless. The equilibrium is the pure passive balance:
+        #   T_eq = T_outdoor + (PV + fireplace + TV + aux) / HLC
+        # This lets the model learn HLC, PV weight, fireplace weight, TV
+        # weight, thermal time constant, and solar lag from the house's
+        # natural cooling/heating dynamics — without corrupting OE.
+        if not heating_active:
+            if self.heat_loss_coefficient > 0:
+                equilibrium_temp = outdoor_temp + (
+                    external_thermal_power / self.heat_loss_coefficient
+                )
+            else:
+                equilibrium_temp = outdoor_temp
+
+            if not _suppress_logging:
+                logging.debug(
+                    "🔇 Passive equilibrium: outdoor=%.1f°C, ext_power=%.3f, "
+                    "U_loss=%.3f, equilibrium=%.2f°C",
+                    outdoor_temp,
+                    external_thermal_power,
+                    self.heat_loss_coefficient,
+                    equilibrium_temp,
+                )
+            return equilibrium_temp
 
         # Energy-based physical modeling (Preferred if thermal_power is
         # available)
@@ -699,6 +737,11 @@ class ThermalEquilibriumModel:
             )
             return
 
+        # Determine whether this is a passive (heating-off) learning cycle.
+        # When heating is off, the outlet term is meaningless and the model
+        # learns only from passive dynamics (PV, fireplace, TV, heat loss).
+        heating_active = prediction_context.get("heating_active", True)
+
         prediction_error = actual_temp - predicted_temp
 
         # Pass PV history if available for trajectory calculation
@@ -717,6 +760,7 @@ class ThermalEquilibriumModel:
             fireplace_on=prediction_context.get("fireplace_on", 0),
             tv_on=prediction_context.get("tv_on", 0),
             thermal_power=prediction_context.get("thermal_power"),
+            heating_active=heating_active,
         )
         predicted_temp_at_cycle_end = predicted_trajectory["trajectory"][0]
 
@@ -858,6 +902,25 @@ class ThermalEquilibriumModel:
             self._calculate_equilibrium_based_oe_gradient(recent_predictions)
         )
         outlet_effectiveness_gradient += equilibrium_oe_gradient
+
+        # Passive-learning protection: if ALL recent predictions are from
+        # heating-off cycles, force OE gradient to zero. Passive cycles
+        # carry no outlet signal, so any OE gradient would be spurious and
+        # would restart the OE ratchet that corrupted the model before.
+        # (The per-record skip in _calculate_equilibrium_based_oe_gradient
+        # and the passive trajectory path in _calculate_parameter_gradient
+        # already reduce this, but we add a belt-and-suspenders guard here
+        # for the fully-passive-window case.)
+        all_passive = all(
+            not p.get("context", {}).get("heating_active", True)
+            for p in recent_predictions
+        )
+        if all_passive:
+            outlet_effectiveness_gradient = 0.0
+            logging.debug(
+                "🔇 All recent predictions are passive (heating off) — "
+                "OE gradient suppressed to prevent corruption."
+            )
         pv_heat_weight_gradient = (
             self._calculate_pv_heat_weight_gradient(recent_predictions)
         )
@@ -1154,6 +1217,12 @@ class ThermalEquilibriumModel:
     ) -> float:
         """
         Generic finite-difference gradient calculation for any parameter.
+
+        Each prediction record carries a ``heating_active`` flag in its
+        context. When ``False`` (heat pump was off), the trajectory is
+        predicted with the passive model (no outlet/OE term) so that
+        gradients for HLC, PV weight, etc. are computed correctly from
+        passive dynamics.
         """
         gradient_sum = 0.0
         count = 0
@@ -1169,6 +1238,8 @@ class ThermalEquilibriumModel:
             ):
                 continue
 
+            heating_active = context.get("heating_active", True)
+
             setattr(self, parameter_name, original_value + epsilon)
             pred_plus_trajectory = self.predict_thermal_trajectory(
                 current_indoor=context["current_indoor"],
@@ -1181,6 +1252,7 @@ class ThermalEquilibriumModel:
                 fireplace_on=context.get("fireplace_on", 0),
                 tv_on=context.get("tv_on", 0),
                 thermal_power=context.get("thermal_power"),
+                heating_active=heating_active,
             )
             pred_plus = pred_plus_trajectory["trajectory"][0]
 
@@ -1196,6 +1268,7 @@ class ThermalEquilibriumModel:
                 fireplace_on=context.get("fireplace_on", 0),
                 tv_on=context.get("tv_on", 0),
                 thermal_power=context.get("thermal_power"),
+                heating_active=heating_active,
             )
             pred_minus = pred_minus_trajectory["trajectory"][0]
 
@@ -1295,6 +1368,11 @@ class ThermalEquilibriumModel:
                 key in context
                 for key in ["outlet_temp", "outdoor_temp", "current_indoor"]
             ):
+                continue
+
+            # Skip passive (heating-off) records — they carry no outlet/OE
+            # signal and would produce a meaningless OE gradient.
+            if not context.get("heating_active", True):
                 continue
 
             # Only use equilibrium signal when room is thermally stable
@@ -1515,10 +1593,15 @@ class ThermalEquilibriumModel:
         weather_forecasts=None,
         pv_forecasts=None,
         thermal_time_constant=None,
+        heating_active: bool = True,
         **external_sources,
     ):
         """
         Predict temperature trajectory over time horizon.
+
+        When ``heating_active`` is ``False``, the outlet/OE term is excluded
+        from the equilibrium calculation (see
+        ``predict_equilibrium_temperature``), enabling passive learning.
         """
         if time_horizon_hours is None:
             time_horizon_hours = int(self.prediction_horizon_hours)
@@ -1626,6 +1709,7 @@ class ThermalEquilibriumModel:
                 auxiliary_heat=auxiliary_heat,
                 _suppress_logging=True,
                 fireplace_power_kw=fireplace_power_kw,
+                heating_active=heating_active,
             )
 
             time_constant_hours = (

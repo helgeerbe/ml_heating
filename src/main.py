@@ -601,6 +601,27 @@ def main():
                             else {}
                         )
 
+                    # --- Passive vs Active learning mode ---
+                    # If the previous cycle had the heat pump OFF, the outlet
+                    # / radiator term is meaningless. We set the outlet temp
+                    # to 0 (harmless placeholder) and flag heating_active=False
+                    # so the physics model uses the passive equilibrium
+                    # formula: T_eq = T_out + (PV + fireplace + TV) / HLC.
+                    # This lets the model learn HLC, PV weight, fireplace
+                    # weight, TV weight, and thermal time constant from the
+                    # house's natural cooling/heating — WITHOUT corrupting
+                    # outlet_effectiveness.
+                    was_heating_active = learning_features.get(
+                        "heating_active", True
+                    )
+                    if not was_heating_active:
+                        actual_applied_temp = 0.0
+                        logging.info(
+                            "🔇 PASSIVE MODE LEARNING: previous cycle had "
+                            "heating off — learning from passive dynamics only "
+                            "(HLC, PV, fireplace, TV, thermal time constant)."
+                        )
+
                     learning_features["outlet_temp"] = actual_applied_temp
                     learning_features["outlet_temp_sq"] = (
                         actual_applied_temp**2
@@ -638,6 +659,9 @@ def main():
                             "auxiliary_heat": learning_features.get(
                                 "total_auxiliary_heat_kw", 0.0
                             ),
+                            # Flag whether the heat pump was active during the
+                            # cycle being learned from. False → passive model.
+                            "heating_active": was_heating_active,
                         }
 
                         # FIXED SHADOW MODE LEARNING: Only learn from shadow
@@ -653,7 +677,14 @@ def main():
                             # with the control loop's prediction method.
                             was_shadow_mode_cycle = effective_shadow_mode
 
-                            if was_shadow_mode_cycle:
+                            if not was_heating_active:
+                                learning_mode = "passive_mode_trajectory"
+                                log_msg = (
+                                    "🔇 PASSIVE MODE LEARNING (trajectory): "
+                                    "Learning passive dynamics (no outlet heat, "
+                                    f"outdoor={prediction_context.get('outdoor_temp', '?')}°C)"
+                                )
+                            elif was_shadow_mode_cycle:
                                 learning_mode = "shadow_mode_hc_trajectory"
                                 log_msg = (
                                     "🔍 SHADOW MODE LEARNING (trajectory): "
@@ -692,6 +723,7 @@ def main():
                                     thermal_power=prediction_context.get(
                                         "thermal_power"
                                     ),
+                                    heating_active=was_heating_active,
                                 )
                             )
 
@@ -856,6 +888,71 @@ def main():
             # --- Check if heating system is active ---
             heating_checker = HeatingSystemStateChecker()
             if not heating_checker.check_heating_active(ha_client, all_states):
+                # --- PASSIVE STATE SAVE ---
+                # The heat pump is OFF. We must still save state so that:
+                # 1. `last_indoor_temp` stays fresh (otherwise the next
+                #    cycle's learning block reads a stale value, and the
+                #    per-cycle indoor change becomes accumulated drift).
+                # 2. `last_run_features` carries `heating_active=False` so
+                #    the next cycle's learning block uses the passive
+                #    equilibrium model (no outlet/OE term) and learns from
+                #    passive dynamics (HLC, PV, fireplace, TV, thermal time
+                #    constant) without corrupting outlet_effectiveness.
+                try:
+                    passive_indoor = ha_client.get_state(
+                        config.INDOOR_TEMP_ENTITY_ID, all_states
+                    )
+                    passive_outdoor = ha_client.get_state(
+                        config.OUTDOOR_TEMP_ENTITY_ID, all_states
+                    )
+                    passive_pv = ha_client.get_state(
+                        config.PV_POWER_ENTITY_ID, all_states
+                    )
+                    passive_fireplace = ha_client.get_state(
+                        config.FIREPLACE_STATUS_ENTITY_ID, all_states,
+                        is_binary=True
+                    )
+                    passive_tv = ha_client.get_state(
+                        config.TV_STATUS_ENTITY_ID, all_states,
+                        is_binary=True
+                    )
+
+                    passive_features = {
+                        "outdoor_temp": passive_outdoor
+                        if passive_outdoor is not None
+                        else 10.0,
+                        "pv_now": passive_pv if passive_pv is not None else 0.0,
+                        "fireplace_on": passive_fireplace
+                        if passive_fireplace is not None
+                        else 0,
+                        "tv_on": passive_tv if passive_tv is not None else 0,
+                        "heating_active": False,
+                    }
+
+                    save_state(
+                        last_indoor_temp=passive_indoor
+                        if passive_indoor is not None
+                        else state.get("last_indoor_temp"),
+                        last_run_features=passive_features,
+                        # Preserve last_final_temp so the next active cycle
+                        # doesn't lose its reference point.
+                        last_final_temp=state.get("last_final_temp"),
+                    )
+
+                    logging.info(
+                        "💤 Heating inactive — passive state saved "
+                        "(indoor=%s°C, outdoor=%s°C). Next cycle will learn "
+                        "passive dynamics.",
+                        passive_indoor,
+                        passive_outdoor,
+                    )
+                except Exception as passive_err:
+                    logging.error(
+                        "Failed to save passive state: %s",
+                        passive_err,
+                        exc_info=True,
+                    )
+
                 time.sleep(PhysicsConstants.RETRY_DELAY_SECONDS)
                 continue
             
@@ -1552,6 +1649,16 @@ def main():
             # Note: We save final_temp here, but will read the actual
             # applied temp from ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID at the
             # start of the next cycle (after it has had time to update).
+
+            # Flag that this was a heating-active cycle so the next cycle's
+            # learning block uses the full (outlet/OE) model, not the passive
+            # one.
+            if isinstance(features, dict):
+                features["heating_active"] = True
+            elif isinstance(features, pd.DataFrame):
+                features = features.copy()
+                features["heating_active"] = True
+
             state_to_save = {
                 "last_run_features": features,
                 "last_indoor_temp": actual_indoor,
