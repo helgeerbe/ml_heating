@@ -32,7 +32,7 @@ Four coordinated changes, all syntax-verified and live-verified:
 - `src/model_wrapper.py`: the passthrough guard now caps at `config.PASSTHROUGH_MAX_SAFE_OUTLET` instead of `_MAX_OUTLET_TEMP` (65 °C), rejecting 53 °C feedback-loop contamination. The upper bound for the uncalibrated path was also replaced with `passthrough_max`.
 
 ### 5. Re-engagement configuration (`.env`)
-- `CONFIDENCE_THRESHOLD=2.0` — lowered so the model can re-engage after the parameter reset (code default is 0.2; was previously overridden higher in `.env`).
+- `CONFIDENCE_THRESHOLD=2.0` — lowered so the model can re-engage after the parameter reset. The code default is now 2.0 (raised from the stale 0.2, which was a no-op on the 0.1–5.0 `learning_confidence` scale); `.env` pins it explicitly for clarity.
 - `MIN_PREDICTIONS_FOR_TRUST=5` — `src/model_wrapper.py` now reads `MIN_PREDICTIONS_FOR_TRUST` from the env (default 50, set to 5 in `.env`) so deployments with a known-good baseline can re-engage faster after a reset. `import os` added to `model_wrapper.py`.
 
 ### 6. Deterministic regression tests

@@ -189,10 +189,13 @@ FIREPLACE_STATUS_ENTITY_ID: str = os.getenv(
 
 # --- Tuning & Debug Parameters ---
 # DEBUG: Set to "1" to enable verbose logging for development.
-# CONFIDENCE_THRESHOLD: A critical tuning parameter. If the model's
-#   normalized confidence score (0-1) drops below this threshold, the system
-#   will fall back to the baseline temperature. A lower threshold means the
-#   system is more tolerant of model uncertainty.
+# CONFIDENCE_THRESHOLD: A critical tuning parameter. The thermal model's
+#   learning_confidence operates on a 0.1-5.0 scale (initialized to 3.0, clipped
+#   to [0.1, 5.0], multiplicatively boosted x1.1 / decayed x0.99 per prediction
+#   based on prediction error). If learning_confidence drops below this
+#   threshold, the trust gate demotes the model to heat-curve passthrough.
+#   Default 2.0 is conservative for the 0.1-5.0 scale; lower it to tolerate more
+#   model uncertainty, raise it to demand higher confidence before ML engages.
 # HEAT_BALANCE_MODE: Enable the intelligent heat balance controller that uses
 #   trajectory prediction instead of smoothing. Uses 3-phase control:
 #   Charging (>0.5°C error), Balancing (0.2-0.5°C), Maintenance (<0.2°C).
@@ -204,7 +207,7 @@ FIREPLACE_STATUS_ENTITY_ID: str = os.getenv(
 #   for the outlet temperature setpoint in a single cycle. This prevents
 #   abrupt changes and is required as the heatpump only accepts full degrees.
 DEBUG: bool = os.getenv("DEBUG", "0") == "1"
-CONFIDENCE_THRESHOLD: float = float(os.getenv("CONFIDENCE_THRESHOLD", "0.2"))
+CONFIDENCE_THRESHOLD: float = float(os.getenv("CONFIDENCE_THRESHOLD", "2.0"))
 
 # --- T0.7: Self-Calibration Trust Gate ---
 # The ML heating system is always enabled. While the thermal model is not yet
@@ -217,6 +220,10 @@ CONFIDENCE_THRESHOLD: float = float(os.getenv("CONFIDENCE_THRESHOLD", "0.2"))
 AUTO_CAL_MIN_PREDICTIONS: int = int(
     os.getenv("AUTO_CAL_MIN_PREDICTIONS", "200")
 )
+# AUTO_CAL_MAE_THRESHOLD: The 24h-mean-absolute-error gate (in °C) for
+#   trust-gate promotion/demotion. Default 1.0 °C. This is distinct from
+#   ERROR_THRESHOLD_MEDIUM (0.2 °C, in thermal_constants.py), which triggers
+#   the adaptive-learning rate boost — a finer-grained signal, not a gate.
 AUTO_CAL_MAE_THRESHOLD: float = float(
     os.getenv("AUTO_CAL_MAE_THRESHOLD", "1.0")
 )

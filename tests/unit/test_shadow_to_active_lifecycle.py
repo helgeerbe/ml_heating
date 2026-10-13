@@ -46,7 +46,7 @@ def lifecycle_wrapper(tmp_path, monkeypatch):
         {"heat_loss_coefficient": 0.5, "outlet_effectiveness": 0.6}
         for _ in range(25)
     ]
-    thermal.learning_confidence = 3.0  # well above CONFIDENCE_THRESHOLD (0.2)
+    thermal.learning_confidence = 3.0  # well above CONFIDENCE_THRESHOLD (2.0)
     thermal.update_prediction_feedback.return_value = 0.5
 
     pred_metrics = MagicMock()

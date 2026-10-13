@@ -22,7 +22,7 @@ Drives the REAL `main()` control loop with fully-mocked externals (HA, InfluxDB,
 - `continue` paths (grace/heating-off/blocking): break cycle 2 via `create_ha_client.side_effect = [client, KeyboardInterrupt]` — `KeyboardInterrupt` is `BaseException`, so it escapes the `except Exception` handler.
 
 #### 📋 Still-pending review items (next Act-mode passes)
-1. **Threshold reconciliation**: `CONFIDENCE_THRESHOLD` (code 0.2 / `.env` 2.0 / docs 0.9–2.0); `AUTO_CAL_MAE_THRESHOLD` 1.0 °C vs doc's 0.2 °C. Behavior-changing → investigate in plan mode first.
+1. ~~**Threshold reconciliation**~~ ✅ **DONE (Oct 13, 2026)** — `CONFIDENCE_THRESHOLD` code default raised 0.2→2.0 to match the real 0.1–5.0 `learning_confidence` scale (0.2 was a silent no-op on that scale). Comment in `config.py` corrected (was wrongly "0-1 normalized"). `INSTALLATION_GUIDE.md` and `BUGFIX_OE_DRIFT...` docs updated. Test comments fixed. `.env` pins 2.0 explicitly (matches code default; protects fresh deployments). **`AUTO_CAL_MAE_THRESHOLD` 1.0 vs 0.2 was a category error** — `AUTO_CAL_MAE_THRESHOLD=1.0` (trust-gate promotion gate) is distinct from `ERROR_THRESHOLD_MEDIUM=0.2` (adaptive-learning boost trigger in `thermal_constants.py`); no code change needed, clarifying comment added. Full unit suite: 329 passed, 0 failed.
 2. **`prediction_metrics.py` ≥85%** (currently 63%) — second-biggest coverage gap after main.py.
 3. **Fix latent fixture contamination** in `conftest.py` `clean_model` — isolate `ThermalEquilibriumModel()` from the live `unified_thermal_state.json`.
 4. **Refactor**: extract `TrustGate`/`OutletCalculator` from `model_wrapper.py`, `ParameterOptimizer` from `thermal_equilibrium_model.py`, decompose `main()` (1734-line single function).

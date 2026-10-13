@@ -58,8 +58,8 @@ class TestDetermineMlHeatingState:
         state, mode = determine_ml_heating_state(
             effective_shadow_mode=True,
             is_trusted=None,
-            confidence=0.9,
-            confidence_threshold=0.2,
+            confidence=4.0,
+            confidence_threshold=2.0,
         )
         assert state == 0
         assert mode == "shadow"
@@ -68,13 +68,14 @@ class TestDetermineMlHeatingState:
         """Active fallback, confidence above threshold -> ML drives (state 1).
 
         Higher confidence means the model is trustworthy enough to command
-        the outlet, so the sensor reports active (state 1).
+        the outlet, so the sensor reports active (state 1). Values are on the
+        production 0.1-5.0 learning_confidence scale.
         """
         state, mode = determine_ml_heating_state(
             effective_shadow_mode=False,
             is_trusted=None,
-            confidence=0.9,
-            confidence_threshold=0.2,
+            confidence=4.0,
+            confidence_threshold=2.0,
         )
         assert state == 1
         assert mode == "unknown"
@@ -83,13 +84,14 @@ class TestDetermineMlHeatingState:
         """Active fallback, confidence below threshold -> passthrough (state 0).
 
         Low confidence means the model is NOT trustworthy enough to command
-        the outlet, so the sensor reports passthrough (state 0).
+        the outlet, so the sensor reports passthrough (state 0). Values are on
+        the production 0.1-5.0 learning_confidence scale.
         """
         state, mode = determine_ml_heating_state(
             effective_shadow_mode=False,
             is_trusted=None,
-            confidence=0.1,
-            confidence_threshold=0.2,
+            confidence=1.0,
+            confidence_threshold=2.0,
         )
         assert state == 0
         assert mode == "unknown"

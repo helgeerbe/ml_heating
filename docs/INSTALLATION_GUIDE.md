@@ -201,9 +201,9 @@ These entities are used to measure current solar power generation and forecast.
 #### Debugging and Monitoring
 
 *   **DEBUG**: Set to `1` to enable detailed logging of feature vectors and model decisions. Set to `0` or remove for normal operation.
-*   **CONFIDENCE_THRESHOLD**: The model uses a normalized confidence in the range (0..1], where 1.0 means perfect agreement between trees (σ = 0 °C). This threshold determines when the model's confidence is considered sufficient for optimal operation.
-    *   To pick a threshold: decide the maximum tolerated σ (°C) and convert using the formula: `threshold = 1.0 / (1.0 + sigma_max)`.
-    *   Example: tolerate σ_max = 1.0°C -> `CONFIDENCE_THRESHOLD = 0.5`. Default: `0.5`.
+*   **CONFIDENCE_THRESHOLD**: The thermal model's `learning_confidence` operates on a **0.1–5.0 scale** (initialized to 3.0, clipped to `[0.1, 5.0]`, multiplicatively boosted `x1.1` / decayed `x0.99` per prediction based on error). If `learning_confidence` drops below this threshold, the trust gate demotes the model to heat-curve passthrough.
+    *   **Default: `2.0`** — conservative for the 0.1–5.0 scale. Lower it to tolerate more model uncertainty; raise it to demand higher confidence before ML engages.
+    *   Do **not** use 0–1 values here — `learning_confidence` is not a normalized 0–1 score.
 *   **BLOCKING_POLL_INTERVAL_SECONDS**: How often (in seconds) to poll blocking entities during the idle period. A value of `60` means checking the blocking state once per minute. Increase this value to reduce Home Assistant polling load, or lower it to react faster to defrost/DHW transitions. Default: `60`.
 *   **GRACE_PERIOD_MAX_MINUTES**: Maximum minutes to wait during the grace period after blocking events end. Default: `30`.
 

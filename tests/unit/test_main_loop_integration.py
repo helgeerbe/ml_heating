@@ -285,7 +285,7 @@ def test_main_loop_active_trust_gate_fallback():
     assert state_calls
     attrs = state_calls[-1].args[2]
     assert attrs["ml_control_mode"] == "unknown"
-    # confidence 0.9 >= CONFIDENCE_THRESHOLD(0.2) -> "OK - Prediction done"
+    # confidence 0.9 >= CONFIDENCE_THRESHOLD(0.5, patched) -> "OK - Prediction done"
     assert attrs["state_description"] == "OK - Prediction done"
 
 
