@@ -1,17 +1,19 @@
 # ML Heating System - Current Progress
 
-### 🎯 CURRENT STATUS - October 13, 2026 (architectural review pass)
+### 🎯 CURRENT STATUS - October 13, 2026 (main.py coverage pass)
 
-**Approved Act-mode pass completed: dead-code cleanup + two highest-value tests.** Full suite **332 passed** (was 329). Coverage **71% TOTAL** (`model_wrapper.py` 82%, `thermal_equilibrium_model.py` 84%, `multi_heat_source_physics.py` 80%, `main.py` 52%, `prediction_metrics.py` 63%).
+**Approved Act-mode pass completed: end-to-end `main()` loop integration tests.** Full suite **336 passed** (was 332; +4 new). Coverage **78% across the tracked modules** (`main.py` **71%** ↑ from 52%, `model_wrapper.py` 82%, `thermal_equilibrium_model.py` 84%, `multi_heat_source_physics.py` 80%, `prediction_metrics.py` 63%).
 
-> ⚠️ Corrects stale claims elsewhere in this file ("294 tests / Zero Technical Debt"): actual = 332 tests, 71% coverage, technical debt present (god-classes, threshold mismatches, stale artifacts).
+> ⚠️ Corrects stale claims elsewhere in this file ("294 tests / Zero Technical Debt"): actual = 336 tests, 71% main.py coverage, technical debt present (god-classes, threshold mismatches, stale artifacts).
 
-**Done this pass:**
-- Removed dead code: `create_multi_source_heat_balance_controller_integration()` + `__main__` harness (~125 lines) in `multi_heat_source_physics.py`; disabled `* 0.0` OE-scaling no-op in `thermal_equilibrium_model.py` (replaced with clear one-liner + NOTE); unused stubs `calculate_physics_aware_thresholds` & `reset_adaptive_learning`. Deleted dummy `test_main_module.py`, source `.bak` files, state `.bak` files, stray lock. `.gitignore` updated (`*.bak*`, `*.json.lock`). KEPT `src/analysis/` (imported by notebooks).
-- Added 4 tests: passive-OE closed-loop invariant (`test_passive_learning.py::TestPassiveOEInvariantClosedLoop`) and shadow→active end-to-end lifecycle (`test_shadow_to_active_lifecycle.py`, 3 tests).
-- Found a test-isolation issue: `clean_model` fixture loads the live `unified_thermal_state.json` (real `prediction_history`); new tests work around it by clearing buffers. Conftest env-var monkeypatches are ineffective (config evaluated at import). Both are pre-existing; defer to a hardening pass.
+**Done this pass (commit `f223f37`):**
+- New `tests/unit/test_main_loop_integration.py` (4 tests) drives the REAL `main()` control loop with fully-mocked externals across the four paths the existing tests missed: (1) active+trusted full cycle — online learning from a prior heating-active cycle (trajectory → `learn_from_prediction_feedback`), model-based smart rounding (floor vs ceiling via `predict_indoor_temp`), rich trust-gate sensor update, heating-active state save; (2) trust-gate fallback (`get_trust_state` raises → confidence-only attrs); (3) shadow-mode cycle (prediction calculated but not applied, heat-curve comparison logged, sensor state 0); (4) grace-period passthrough (control skipped, previous valid target preserved, no state poisoning).
+- Harness pins `config.SHADOW_MODE` and `CONFIDENCE_THRESHOLD` for determinism (the `.env` override `CONFIDENCE_THRESHOLD=2.0` made the fallback assertion order-dependent) and uses a fresh dict per `get_sensor_attributes` call so the trust-gate block can't mutate the dict recorded against the earlier `set_state`.
+- Re-used the established break pattern: `StopIteration` from `poll_for_blocking` (outside the `try`) for full cycles; `KeyboardInterrupt` (BaseException, escapes `except Exception`) for `continue` paths.
 
-**Pending (next passes):** threshold reconciliation (CONFIDENCE_THRESHOLD 0.2 vs 0.9; AUTO_CAL_MAE 1.0 vs 0.2); main.py end-to-end integration test (≥70%); prediction_metrics ≥85%; refactor god-classes (TrustGate/OutletCalculator/ParameterOptimizer extraction, decompose main()); timezone-aware UTC; remove vestigial equilibrium_ratio/total_conductance from state schema.
+**Prior pass (commit `d34b48c`):** dead-code cleanup (`create_multi_source_heat_balance_controller_integration()` + `__main__` harness; disabled `*0.0` OE no-op; unused stubs) + passive-OE invariant + shadow→active lifecycle (3 tests). Found test-isolation issue: `clean_model` fixture loads live `unified_thermal_state.json`; deferred to hardening pass.
+
+**Pending (next passes):** threshold reconciliation (`CONFIDENCE_THRESHOLD` code 0.2 vs `.env` 2.0 vs docs; `AUTO_CAL_MAE_THRESHOLD` 1.0 vs 0.2 — **note**: live `.env` pins `CONFIDENCE_THRESHOLD=2.0`, confirmed during this pass); `prediction_metrics.py` ≥85% (currently 63%); fix latent fixture contamination in `conftest.py`/`clean_model` (isolate from live state file); refactor god-classes (`TrustGate`/`OutletCalculator` from `model_wrapper.py`, `ParameterOptimizer` from `thermal_equilibrium_model.py`, decompose `main()` 1734-line function); timezone-aware UTC; remove vestigial `equilibrium_ratio`/`total_conductance` from state schema (guarded).
 
 
 # ML Heating System - Current Progress
