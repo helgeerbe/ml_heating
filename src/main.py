@@ -100,14 +100,8 @@ def determine_ml_heating_state(
     return 0, "passthrough"
 
 
-def main():
-    """
-    The main function that orchestrates the heating control logic.
-
-    This function initializes the system, enters a continuous loop to
-    monitor and control the heating, and handles command-line arguments
-    for modes like initial training.
-    """
+def _parse_cli_args():
+    """Parse command-line arguments for the heating controller."""
     parser = argparse.ArgumentParser(description="Heating Controller")
     parser.add_argument(
         "--calibrate-physics",
@@ -128,14 +122,17 @@ def main():
     parser.add_argument(
         "--restore-backup", type=str, help="Restore from a backup file."
     )
-    args = parser.parse_args()
-    # Load environment variables and configure logging.
-    load_dotenv()
-    log_level = logging.DEBUG if args.debug or config.DEBUG else logging.INFO
+    return parser.parse_args()
 
-    # Configure logging to ensure output goes to stdout for systemd capture
+
+def _configure_logging(debug):
+    """Load environment variables and configure logging to stdout."""
     import sys
 
+    load_dotenv()
+    log_level = logging.DEBUG if debug or config.DEBUG else logging.INFO
+
+    # Configure logging to ensure output goes to stdout for systemd capture
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s - %(levelname)s - %(message)s",
@@ -147,23 +144,16 @@ def main():
     logging.getLogger("requests").setLevel(logging.INFO)
     logging.getLogger("urllib3").setLevel(logging.INFO)
 
-    # --- Initialization ---
-    # ThermalEquilibriumModel is now loaded directly in model_wrapper.py
-    # Shadow mode comparison metrics (no longer tracking MAE/RMSE)
-    shadow_ml_error_sum = 0.0
-    shadow_hc_error_sum = 0.0
-    shadow_comparison_count = 0
 
-    influx_service = create_influx_service()
+def _hydrate_sensor_buffer(influx_service):
+    """Initialize and hydrate the sensor buffer from InfluxDB.
 
-    # --- Sensor Buffer Initialization ---
-    # Initialize the circular buffer for sensor smoothing
+    Returns the populated ``SensorBuffer``. On hydration failure, an empty
+    buffer is returned (Cold Start Mode).
+    """
     sensor_buffer = SensorBuffer(max_age_minutes=120)
-
-    # Hydrate buffer from InfluxDB (Startup only)
     try:
         logging.info("💧 Hydrating sensor buffer from InfluxDB...")
-        # Define sensors to hydrate
         hydration_sensors = [
             config.INDOOR_TEMP_ENTITY_ID,
             config.ACTUAL_OUTLET_TEMP_ENTITY_ID,
@@ -172,24 +162,22 @@ def main():
             config.INLET_TEMP_ENTITY_ID,
             config.FLOW_RATE_ENTITY_ID,
         ]
-
-        # Fetch raw history
         history_data = influx_service.fetch_recent_history(
             hydration_sensors,
             lookback_minutes=120
         )
-
-        # Hydrate the buffer
         sensor_buffer.hydrate(history_data)
         logging.info("✅ Sensor buffer hydrated successfully")
-
     except Exception as e:
         logging.warning(
             f"⚠️ Buffer hydration failed: {e}. "
             "Starting with empty buffer (Cold Start Mode)."
         )
+    return sensor_buffer
 
-    # --- Shadow Mode Status ---
+
+def _log_run_mode_status():
+    """Log whether the controller is in shadow or active mode."""
     if config.SHADOW_MODE:
         logging.info(
             "🔍 SHADOW MODE ENABLED: ML will observe and learn without "
@@ -206,79 +194,865 @@ def main():
     else:
         logging.info("🎯 ACTIVE MODE: ML actively controls heating system")
 
+
+def _run_calibration_phase():
+    """Run thermal model calibration and log the result."""
+    try:
+        from .physics_calibration import backup_existing_calibration
+
+        logging.info("=== CALIBRATING THERMAL EQUILIBRIUM MODEL ===")
+
+        # Create backup before calibration
+        logging.info("Step 0: Creating backup before calibration...")
+        backup_path = backup_existing_calibration()
+        if backup_path:
+            import os
+
+            logging.info(
+                "✅ Previous thermal state backed up: %s",
+                os.path.basename(backup_path),
+            )
+        else:
+            logging.info("ℹ️ No existing thermal state found to backup")
+
+        result = train_thermal_equilibrium_model()
+        if result:
+            logging.info("✅ Thermal model calibrated successfully!")
+            logging.info(
+                "🔄 Restart ml_heating to use trained thermal model"
+            )
+        else:
+            logging.error("❌ Thermal model calibration failed")
+    except Exception as e:
+        logging.error(
+            "Thermal model calibration error: %s", e, exc_info=True
+        )
+
+
+def _run_validation_phase():
+    """Validate the thermal model and log the result."""
+    try:
+        result = validate_thermal_model()
+        if result:
+            logging.info("✅ Thermal model validation passed!")
+        else:
+            logging.error("❌ Thermal model validation failed!")
+    except Exception as e:
+        logging.error(
+            "Thermal model validation error: %s", e, exc_info=True
+        )
+
+
+def _handle_list_backups():
+    """List available thermal-state backups to stdout."""
+    from .unified_thermal_state import get_thermal_state_manager
+    import json
+
+    state_manager = get_thermal_state_manager()
+    backups = state_manager.list_backups()
+    if backups:
+        print("Available backups:")
+        # print backups in a json format so it is easy to parse
+        print(json.dumps(backups, indent=2, default=str))
+    else:
+        print("No backups found.")
+
+
+def _handle_restore_backup(restore_target):
+    """Restore thermal state from the named backup file."""
+    from .unified_thermal_state import get_thermal_state_manager
+
+    state_manager = get_thermal_state_manager()
+    success, message = state_manager.restore_from_backup(restore_target)
+    if success:
+        print(f"Successfully restored from backup: {restore_target}")
+        print(message)
+    else:
+        print(f"Failed to restore from backup: {restore_target}")
+        print(message)
+
+
+def _update_sensor_buffer_and_thermo(ha_client, all_states, sensor_buffer):
+    """Push fresh readings into the sensor buffer and export realtime
+    thermodynamic sensors (COP, thermal power) to Home Assistant.
+
+    This runs every cycle before the control logic so the sensors stay
+    live even when the cycle is later skipped (blocking/idle).
+    """
+    current_time = datetime.now(timezone.utc)
+
+    # Helper to safely get float state
+    def get_float_state(entity_id):
+        try:
+            val = ha_client.get_state(entity_id, all_states)
+            return float(val) if val is not None else None
+        except (ValueError, TypeError):
+            return None
+
+    # Push new readings to buffer
+    buffer_updates = {
+        config.INDOOR_TEMP_ENTITY_ID: get_float_state(
+            config.INDOOR_TEMP_ENTITY_ID
+        ),
+        config.ACTUAL_OUTLET_TEMP_ENTITY_ID: get_float_state(
+            config.ACTUAL_OUTLET_TEMP_ENTITY_ID
+        ),
+        config.TARGET_OUTLET_TEMP_ENTITY_ID: get_float_state(
+            config.TARGET_OUTLET_TEMP_ENTITY_ID
+        ),
+        config.OUTDOOR_TEMP_ENTITY_ID: get_float_state(
+            config.OUTDOOR_TEMP_ENTITY_ID
+        ),
+        config.INLET_TEMP_ENTITY_ID: get_float_state(
+            config.INLET_TEMP_ENTITY_ID
+        ),
+        config.FLOW_RATE_ENTITY_ID: get_float_state(
+            config.FLOW_RATE_ENTITY_ID
+        ),
+    }
+
+    for entity_id, value in buffer_updates.items():
+        if value is not None:
+            sensor_buffer.add_reading(entity_id, value, current_time)
+
+    # --- Real-time Thermodynamic Sensors ---
+    # Calculate and export COP and Thermal Power immediately so
+    # they are available even if the cycle is skipped (e.g.
+    # blocking/idle).
+    try:
+        # Get power consumption which isn't in the buffer updates
+        power_consumption = get_float_state(
+            config.POWER_CONSUMPTION_ENTITY_ID
+        )
+
+        # Use values we just fetched for the buffer
+        current_outlet = buffer_updates.get(
+            config.ACTUAL_OUTLET_TEMP_ENTITY_ID
+        )
+        current_inlet = buffer_updates.get(
+            config.INLET_TEMP_ENTITY_ID
+        )
+        current_flow = buffer_updates.get(
+            config.FLOW_RATE_ENTITY_ID
+        )
+
+        # Only calculate if we have the minimum required data
+        # (outlet temp)
+        if current_outlet is not None:
+            thermo_metrics = calculate_thermodynamic_metrics(
+                outlet_temp=current_outlet,
+                inlet_temp=current_inlet,
+                flow_rate=current_flow,
+                power_consumption=power_consumption
+            )
+
+            # Export to Home Assistant
+            # 1. COP
+            ha_client.set_state(
+                "sensor.ml_heating_cop_realtime",
+                thermo_metrics["cop_realtime"],
+                {
+                    "friendly_name": "ML Heating COP (Realtime)",
+                    "unit_of_measurement": "COP",
+                    "icon": "mdi:heat-pump",
+                    "device_class": "power_factor",
+                    "state_class": "measurement"
+                },
+                round_digits=2
+            )
+
+            # 2. Thermal Power
+            ha_client.set_state(
+                "sensor.ml_heating_thermal_power",
+                thermo_metrics["thermal_power_kw"],
+                {
+                    "friendly_name": "ML Heating Thermal Power",
+                    "unit_of_measurement": "kW",
+                    "icon": "mdi:flash",
+                    "device_class": "power",
+                    "state_class": "measurement"
+                },
+                round_digits=3
+            )
+
+            logging.debug(
+                "Thermodynamic sensors updated: COP=%.2f, "
+                "Power=%.3fkW",
+                thermo_metrics["cop_realtime"],
+                thermo_metrics["thermal_power_kw"]
+            )
+    except Exception as e:
+        logging.warning(
+            "Failed to update thermodynamic sensors: %s", e
+        )
+
+
+def _determine_shadow_mode(ha_client, all_states):
+    """Determine whether ML is driving the heat pump this cycle.
+
+    Shadow mode is active when ``config.SHADOW_MODE`` is set OR the
+    ``ML_HEATING_CONTROL`` boolean is off/unavailable.
+    """
+    ml_heating_enabled = None
+    if all_states:
+        ml_heating_enabled = ha_client.get_state(
+            config.ML_HEATING_CONTROL_ENTITY_ID,
+            all_states,
+            is_binary=True
+        )
+
+    # Shadow mode is active when:
+    # - Config SHADOW_MODE=true (override), OR
+    # - ML heating boolean is OFF/unavailable
+    if ml_heating_enabled is None:
+        if all_states:  # Only warn if we could fetch states
+            logging.warning(
+                "Cannot read %s, defaulting to shadow mode",
+                config.ML_HEATING_CONTROL_ENTITY_ID,
+            )
+        ml_heating_enabled = False
+
+    return config.SHADOW_MODE or not ml_heating_enabled, ml_heating_enabled
+
+
+def _handle_no_ha_states():
+    """Emit a NETWORK_ERROR state to Home Assistant when states can't
+    be fetched. Creates a fresh HA client internally.
+    """
+    logging.warning("Could not fetch states from HA, skipping cycle.")
+    # Emit NETWORK_ERROR state to Home Assistant
+    try:
+        ha_client = create_ha_client()
+        attributes_state = get_sensor_attributes(
+            "sensor.ml_heating_state"
+        )
+        attributes_state.update(
+            {
+                "state_description": "Network Error",
+                "last_updated": datetime.now(
+                    timezone.utc
+                ).isoformat(),
+            }
+        )
+        ha_client.set_state(
+            "sensor.ml_heating_state",
+            3,
+            attributes_state,
+            round_digits=None,
+        )
+    except Exception:
+        logging.debug(
+            "Failed to write NETWORK_ERROR state to HA.",
+            exc_info=True,
+        )
+
+
+def _run_online_learning(state, ha_client, all_states, is_blocking, effective_shadow_mode, wrapper):
+    """Step 1: Online learning from the previous cycle.
+
+    Learns from the results of the previous cycle so the model adapts to
+    actual house behavior (active or shadow mode).
+
+    Returns
+    -------
+    tuple
+        ``(wrapper, effective_shadow_mode, skip_cycle)``. When
+        ``skip_cycle`` is True the caller should ``continue`` the loop
+        immediately.
+    """
+    # --- Step 1: Online Learning from Previous Cycle ---
+    # Learn from the results of the previous cycle. This allows the
+    # model to continuously adapt to the actual house behavior,
+    # whether running in active mode (model controls heating) or
+    # shadow mode (heat curve controls heating).
+    last_run_features = state.get("last_run_features")
+    last_indoor_temp = state.get("last_indoor_temp")
+    last_final_temp_stored = state.get("last_final_temp")
+
+    if (
+        last_run_features is not None
+        and last_indoor_temp is not None
+        and last_final_temp_stored is not None
+    ):
+
+        # Read the actual target outlet temp that was applied.
+        # This reads what temperature was actually set by either:
+        # - The model in active mode
+        # - The heat curve in shadow mode
+        # By reading it now (start of next cycle), we give it time
+        # to update after the previous cycle's set_state call.
+        actual_applied_temp = ha_client.get_state(
+            config.ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID, all_states
+        )
+
+        if actual_applied_temp is None:
+            actual_applied_temp = last_final_temp_stored
+
+        # Get current indoor temperature to calculate actual change
+        current_indoor = ha_client.get_state(
+            config.INDOOR_TEMP_ENTITY_ID, all_states
+        )
+
+        if current_indoor is not None:
+            actual_indoor_change = current_indoor - last_indoor_temp
+
+            # Create learning features with the actual outlet temp
+            # that was applied
+            # Handle case where last_run_features might be stored as
+            # string
+            if isinstance(last_run_features, str):
+                logging.error(
+                    "ERROR: last_run_features corrupted as string - "
+                    "attempting to recover"
+                )
+                try:
+                    # Try to parse as JSON if it's a string
+                    # representation
+                    import json
+
+                    last_run_features = json.loads(last_run_features)
+                    logging.info(
+                        "✅ Recovered features from JSON string"
+                    )
+                except (json.JSONDecodeError, TypeError):
+                    logging.error(
+                        "❌ Cannot recover features from string, "
+                        "using empty dict"
+                    )
+                    last_run_features = {}
+
+            if isinstance(last_run_features, pd.DataFrame):
+                learning_features = last_run_features.copy().to_dict(
+                    orient="records"
+                )[0]
+            elif isinstance(last_run_features, dict):
+                learning_features = last_run_features.copy()
+            else:
+                learning_features = (
+                    last_run_features.copy()
+                    if last_run_features
+                    else {}
+                )
+
+            # --- Passive vs Active learning mode ---
+            # If the previous cycle had the heat pump OFF, the outlet
+            # / radiator term is meaningless. We set the outlet temp
+            # to 0 (harmless placeholder) and flag heating_active=False
+            # so the physics model uses the passive equilibrium
+            # formula: T_eq = T_out + (PV + fireplace + TV) / HLC.
+            # This lets the model learn HLC, PV weight, fireplace
+            # weight, TV weight, and thermal time constant from the
+            # house's natural cooling/heating — WITHOUT corrupting
+            # outlet_effectiveness.
+            was_heating_active = learning_features.get(
+                "heating_active", True
+            )
+            if not was_heating_active:
+                actual_applied_temp = 0.0
+                logging.info(
+                    "🔇 PASSIVE MODE LEARNING: previous cycle had "
+                    "heating off — learning from passive dynamics only "
+                    "(HLC, PV, fireplace, TV, thermal time constant)."
+                )
+
+            learning_features["outlet_temp"] = actual_applied_temp
+            learning_features["outlet_temp_sq"] = (
+                actual_applied_temp**2
+            )
+            learning_features["outlet_temp_cub"] = (
+                actual_applied_temp**3
+            )
+
+            # Online learning is now handled by
+            # ThermalEquilibriumModel in model_wrapper
+            try:
+                # Import and create model wrapper for learning
+                from .model_wrapper import get_enhanced_model_wrapper
+
+                # Create wrapper instance
+                wrapper = get_enhanced_model_wrapper()
+
+                # Prepare prediction context for learning
+                prediction_context = {
+                    "outlet_temp": actual_applied_temp,
+                    "outdoor_temp": learning_features.get(
+                        "outdoor_temp", 10.0
+                    ),
+                    "pv_power": learning_features.get("pv_now", 0.0),
+                    "fireplace_on": learning_features.get(
+                        "fireplace_on", 0.0
+                    ),
+                    "tv_on": learning_features.get("tv_on", 0.0),
+                    "current_indoor": last_indoor_temp,
+                    "target_temp": last_indoor_temp,  # Use last indoor as target for learning context
+                    "thermal_power": learning_features.get(
+                        "thermal_power_kw", None
+                    ),
+                    # Pass auxiliary heat if available in features
+                    "auxiliary_heat": learning_features.get(
+                        "total_auxiliary_heat_kw", 0.0
+                    ),
+                    # Flag whether the heat pump was active during the
+                    # cycle being learned from. False → passive model.
+                    "heating_active": was_heating_active,
+                }
+
+                # FIXED SHADOW MODE LEARNING: Only learn from shadow
+                # mode when actually in shadow mode
+                # In ACTIVE MODE: Learn from ML's own decisions
+                # (even with smart rounding)
+                # In SHADOW MODE: Learn from heat curve decisions
+                was_shadow_mode_cycle = effective_shadow_mode
+
+                try:
+                    # UNIFIED LEARNING: Always use trajectory
+                    # prediction for learning to ensure consistency
+                    # with the control loop's prediction method.
+                    was_shadow_mode_cycle = effective_shadow_mode
+
+                    if not was_heating_active:
+                        learning_mode = "passive_mode_trajectory"
+                        log_msg = (
+                            "🔇 PASSIVE MODE LEARNING (trajectory): "
+                            "Learning passive dynamics (no outlet heat, "
+                            f"outdoor={prediction_context.get('outdoor_temp', '?')}°C)"
+                        )
+                    elif was_shadow_mode_cycle:
+                        learning_mode = "shadow_mode_hc_trajectory"
+                        log_msg = (
+                            "🔍 SHADOW MODE LEARNING (trajectory): "
+                            "Predicting indoor temp from heat "
+                            f"curve's {actual_applied_temp}°C "
+                            "outlet setting"
+                        )
+                    else:
+                        learning_mode = "active_mode_ml_trajectory"
+                        log_msg = (
+                            "🎯 ACTIVE MODE LEARNING (trajectory): "
+                            "Verifying ML prediction accuracy for "
+                            f"{actual_applied_temp}°C outlet setting"
+                        )
+                    logging.debug(log_msg)
+
+                    trajectory = (
+                        wrapper.thermal_model
+                        .predict_thermal_trajectory(
+                            current_indoor=last_indoor_temp,
+                            target_indoor=last_indoor_temp,
+                            outlet_temp=actual_applied_temp,
+                            outdoor_temp=prediction_context.get(
+                                "outdoor_temp", 10.0
+                            ),
+                            time_horizon_hours=(
+                                config.CYCLE_INTERVAL_MINUTES / 60.0
+                            ),
+                            pv_power=prediction_context.get(
+                                "pv_power", 0.0
+                            ),
+                            fireplace_on=prediction_context.get(
+                                "fireplace_on", 0.0
+                            ),
+                            tv_on=prediction_context.get("tv_on", 0.0),
+                            thermal_power=prediction_context.get(
+                                "thermal_power"
+                            ),
+                            heating_active=was_heating_active,
+                        )
+                    )
+
+                    predicted_indoor_temp = (
+                        trajectory["trajectory"][0]
+                        if trajectory and trajectory.get("trajectory")
+                        else last_indoor_temp
+                    )
+
+                    if predicted_indoor_temp is None:
+                        logging.warning(
+                            "Skipping online learning (%s): "
+                            "prediction returned None",
+                            learning_mode
+                        )
+                        return wrapper, effective_shadow_mode, True
+
+                    model_predicted_temp = predicted_indoor_temp
+
+                except Exception as e:
+                    logging.warning(
+                        "Skipping online learning: thermal model "
+                        f"prediction error: {e}"
+                    )
+                    return wrapper, effective_shadow_mode, True
+
+                # Enhanced prediction context with learning mode info
+                enhanced_prediction_context = prediction_context.copy()
+
+                # Check if the previous cycle was a grace period
+                # passthrough. If so, override the learning mode to
+                # reflect this
+                if (
+                    isinstance(last_run_features, dict)
+                    and last_run_features.get("learning_mode")
+                    == "grace_period_passthrough"
+                ):
+                    learning_mode = "grace_period_passthrough"
+
+                enhanced_prediction_context[
+                    "learning_mode"
+                ] = learning_mode
+                enhanced_prediction_context[
+                    "was_shadow_mode_cycle"
+                ] = was_shadow_mode_cycle
+                enhanced_prediction_context[
+                    "ml_calculated_temp"
+                ] = last_final_temp_stored
+                enhanced_prediction_context[
+                    "hc_applied_temp"
+                ] = actual_applied_temp
+
+                # Call the learning feedback method with the correct
+                # prediction context
+                wrapper.learn_from_prediction_feedback(
+                    predicted_temp=model_predicted_temp,
+                    actual_temp=current_indoor,
+                    prediction_context=enhanced_prediction_context,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    is_blocking_active=is_blocking,
+                )
+
+                logging.debug(
+                    "✅ Online learning: applied_temp=%.1f°C, "
+                    "actual_change=%.3f°C, cycle=%d",
+                    actual_applied_temp,
+                    actual_indoor_change,
+                    wrapper.cycle_count,
+                )
+            except Exception as e:
+                logging.warning(
+                    "Online learning failed: %s", e, exc_info=True
+                )
+
+            # Shadow mode error tracking
+            # Track what error ML and heat curve made
+            shadow_mode_active = (
+                config.TARGET_OUTLET_TEMP_ENTITY_ID
+                != config.ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID
+            )
+
+            # Shadow mode error tracking removed - handled by
+            # ThermalEquilibriumModel Only log shadow mode
+            # comparison when actually in shadow mode (not active)
+            effective_shadow_mode = (
+                config.SHADOW_MODE
+                or not ha_client.get_state(
+                    config.ML_HEATING_CONTROL_ENTITY_ID,
+                    all_states,
+                    is_binary=True,
+                )
+            )
+        if (
+            effective_shadow_mode
+            and actual_applied_temp != last_final_temp_stored
+        ):
+            logging.debug(
+                "Shadow mode: ML would set %.1f°C, HC set %.1f°C",
+                last_final_temp_stored,
+                actual_applied_temp,
+            )
+        else:
+            logging.debug(
+                "Skipping online learning: current indoor temp "
+                "unavailable"
+            )
+    else:
+        logging.debug(
+            "Skipping online learning: no data from previous cycle"
+        )
+    return wrapper, effective_shadow_mode, False
+
+
+def _handle_grace_period_passive(ha_client, state, all_states):
+    """Grace-period passive-learning passthrough; preserves last_final_temp."""
+    # We are in grace period, but we continue to allow passive
+    # learning (feature calculation and state saving)
+    logging.info("⏳ Grace period active - Passive learning mode")
+    # We will skip the CONTROL part later
+
+    # FIX: Do NOT overwrite last_final_temp with current actual
+    # outlet temp. This causes "state poisoning" where a low
+    # actual temp (e.g. 25C) becomes the target for the next
+    # cycle if sensors fail or another grace period occurs.
+    # Instead, preserve the previous valid target.
+    preserved_target = state.get("last_final_temp")
+    if preserved_target is None:
+        # Fallback only if no previous state exists
+        try:
+            preserved_target = float(
+                ha_client.get_state(
+                    config.ACTUAL_OUTLET_TEMP_ENTITY_ID, all_states
+                )
+            )
+        except (ValueError, TypeError):
+            preserved_target = 20.0 # Safe fallback
+
+    logging.info(
+        "Preserving last_final_temp=%.1f°C during grace period",
+        preserved_target
+    )
+
+    # Save state to ensure next cycle has valid 'last_run_features'
+    # Mark this as a grace period passthrough so the next cycle
+    # knows this wasn't a calculated target
+    save_state(
+        last_final_temp=preserved_target,
+        last_is_blocking=False,  # Grace period is not blocking
+        # Preserve end time
+        last_blocking_end_time=state.last_blocking_end_time,
+        last_run_features={
+            "learning_mode": "grace_period_passthrough"
+        },
+    )
+
+
+def _save_passive_state_inactive(ha_client, state, all_states):
+    """Save passive state when the heat pump is OFF. Return True to continue."""
+    heating_checker = HeatingSystemStateChecker()
+    if not heating_checker.check_heating_active(ha_client, all_states):
+        # --- PASSIVE STATE SAVE ---
+        # The heat pump is OFF. We must still save state so that:
+        # 1. `last_indoor_temp` stays fresh (otherwise the next
+        #    cycle's learning block reads a stale value, and the
+        #    per-cycle indoor change becomes accumulated drift).
+        # 2. `last_run_features` carries `heating_active=False` so
+        #    the next cycle's learning block uses the passive
+        #    equilibrium model (no outlet/OE term) and learns from
+        #    passive dynamics (HLC, PV, fireplace, TV, thermal time
+        #    constant) without corrupting outlet_effectiveness.
+        try:
+            passive_indoor = ha_client.get_state(
+                config.INDOOR_TEMP_ENTITY_ID, all_states
+            )
+            passive_outdoor = ha_client.get_state(
+                config.OUTDOOR_TEMP_ENTITY_ID, all_states
+            )
+            passive_pv = ha_client.get_state(
+                config.PV_POWER_ENTITY_ID, all_states
+            )
+            passive_fireplace = ha_client.get_state(
+                config.FIREPLACE_STATUS_ENTITY_ID, all_states,
+                is_binary=True
+            )
+            passive_tv = ha_client.get_state(
+                config.TV_STATUS_ENTITY_ID, all_states,
+                is_binary=True
+            )
+
+            passive_features = {
+                "outdoor_temp": passive_outdoor
+                if passive_outdoor is not None
+                else 10.0,
+                "pv_now": passive_pv if passive_pv is not None else 0.0,
+                "fireplace_on": passive_fireplace
+                if passive_fireplace is not None
+                else 0,
+                "tv_on": passive_tv if passive_tv is not None else 0,
+                "heating_active": False,
+            }
+
+            save_state(
+                last_indoor_temp=passive_indoor
+                if passive_indoor is not None
+                else state.get("last_indoor_temp"),
+                last_run_features=passive_features,
+                # Preserve last_final_temp so the next active cycle
+                # doesn't lose its reference point.
+                last_final_temp=state.get("last_final_temp"),
+            )
+
+            logging.info(
+                "💤 Heating inactive — passive state saved "
+                "(indoor=%s°C, outdoor=%s°C). Next cycle will learn "
+                "passive dynamics.",
+                passive_indoor,
+                passive_outdoor,
+            )
+        except Exception as passive_err:
+            logging.error(
+                "Failed to save passive state: %s",
+                passive_err,
+                exc_info=True,
+            )
+
+        time.sleep(PhysicsConstants.RETRY_DELAY_SECONDS)
+        return True
+    return False
+
+
+def _handle_grace_period_skip(ha_client, state, all_states):
+    """Skip control logic during a grace period, preserving last_final_temp."""
+    # Skip control logic but allow state saving at the end of loop
+    logging.info("⏭️ Grace period active - Skipping control logic")
+
+    # FIX: Do NOT overwrite last_final_temp with current actual
+    # outlet temp. This causes "state poisoning" where a low
+    # actual temp (e.g. 25C) becomes the target for the next
+    # cycle if sensors fail or another grace period occurs.
+    # Instead, preserve the previous valid target.
+    preserved_target = state.get("last_final_temp")
+    if preserved_target is None:
+        # Fallback only if no previous state exists
+        try:
+            preserved_target = float(
+                ha_client.get_state(
+                    config.ACTUAL_OUTLET_TEMP_ENTITY_ID, all_states
+                )
+            )
+        except (ValueError, TypeError):
+            preserved_target = 20.0  # Safe fallback
+
+    logging.info(
+        "Preserving last_final_temp=%.1f°C during grace period",
+        preserved_target
+    )
+
+    save_state(
+        last_final_temp=preserved_target,
+        last_is_blocking=False,  # Grace period is not blocking
+        # Preserve end time
+        last_blocking_end_time=state.last_blocking_end_time,
+    )
+
+
+def _handle_blocking_skip(ha_client, state, all_states, blocking_entities):
+    """Skip the cycle when a blocking process (DHW/Defrost) is active."""
+    logging.info(
+        "Blocking process active (DHW/Defrost), skipping."
+    )
+    try:
+        blocking_reasons = [
+            e
+            for e in blocking_entities
+            if ha_client.get_state(e, all_states, is_binary=True)
+        ]
+        attributes_state = get_sensor_attributes(
+            "sensor.ml_heating_state"
+        )
+        attributes_state.update(
+            {
+                "state_description": (
+                    "Blocking activity - Skipping"
+                ),
+                "blocking_reasons": blocking_reasons,
+                "last_updated": datetime.now(
+                    timezone.utc
+                ).isoformat(),
+            }
+        )
+        ha_client.set_state(
+            "sensor.ml_heating_state",
+            2,
+            attributes_state,
+            round_digits=None,
+        )
+    except Exception:
+        logging.debug(
+            "Failed to write BLOCKED state to HA.", exc_info=True
+        )
+    # Save the blocking state for the next cycle (preserve
+    # last_final_temp and record which entities caused the
+    # blocking so we can avoid learning from DHW-like cycles).
+    save_state(
+        last_is_blocking=True,
+        last_final_temp=state.get("last_final_temp"),
+        last_blocking_reasons=blocking_reasons,
+        last_blocking_end_time=None,
+    )
+    time.sleep(PhysicsConstants.RETRY_DELAY_SECONDS)
+
+
+def _persist_cycle_state(
+    state,
+    features,
+    actual_indoor,
+    avg_other_rooms_temp,
+    fireplace_on,
+    final_temp,
+    is_blocking,
+    blocking_reasons,
+):
+    """Step 6: persist the cycle state for the next run.
+
+    Saves the features and indoor temperature from the current run so the
+    next cycle's online-learning step can use them. The next cycle reads
+    the actual applied temp from Home Assistant at its start (after it has
+    had time to update). Flags the run as ``heating_active`` so the next
+    cycle's learning uses the full (outlet/OE) model rather than the
+    passive equilibrium one.
+    """
+    if isinstance(features, dict):
+        features["heating_active"] = True
+    elif isinstance(features, pd.DataFrame):
+        features = features.copy()
+        features["heating_active"] = True
+
+    state_to_save = {
+        "last_run_features": features,
+        "last_indoor_temp": actual_indoor,
+        "last_avg_other_rooms_temp": avg_other_rooms_temp,
+        "last_fireplace_on": fireplace_on,
+        "last_final_temp": final_temp,
+        "last_is_blocking": is_blocking,
+        "last_blocking_reasons": (
+            blocking_reasons if is_blocking else []
+        ),
+    }
+    save_state(**state_to_save)
+    # Update in-memory state so the idle poll uses fresh data
+    state.update(state_to_save)
+
+
+def main():
+    """
+    The main function that orchestrates the heating control logic.
+
+    This function initializes the system, enters a continuous loop to
+    monitor and control the heating, and handles command-line arguments
+    for modes like initial training.
+    """
+    args = _parse_cli_args()
+    _configure_logging(args.debug)
+
+    # --- Initialization ---
+    # ThermalEquilibriumModel is now loaded directly in model_wrapper.py
+    # Shadow mode comparison metrics (no longer tracking MAE/RMSE)
+    shadow_ml_error_sum = 0.0
+    shadow_hc_error_sum = 0.0
+    shadow_comparison_count = 0
+
+    influx_service = create_influx_service()
+
+    # --- Sensor Buffer Initialization ---
+    # Initialize the circular buffer for sensor smoothing
+    sensor_buffer = _hydrate_sensor_buffer(influx_service)
+
+    # --- Shadow Mode Status ---
+    _log_run_mode_status()
+
     # --- Thermal Model Calibration ---
     if args.calibrate_physics:
-        try:
-            from .physics_calibration import backup_existing_calibration
-
-            logging.info("=== CALIBRATING THERMAL EQUILIBRIUM MODEL ===")
-
-            # Create backup before calibration
-            logging.info("Step 0: Creating backup before calibration...")
-            backup_path = backup_existing_calibration()
-            if backup_path:
-                import os
-
-                logging.info(
-                    "✅ Previous thermal state backed up: %s",
-                    os.path.basename(backup_path),
-                )
-            else:
-                logging.info("ℹ️ No existing thermal state found to backup")
-
-            result = train_thermal_equilibrium_model()
-            if result:
-                logging.info("✅ Thermal model calibrated successfully!")
-                logging.info(
-                    "🔄 Restart ml_heating to use trained thermal model"
-                )
-            else:
-                logging.error("❌ Thermal model calibration failed")
-        except Exception as e:
-            logging.error(
-                "Thermal model calibration error: %s", e, exc_info=True
-            )
+        _run_calibration_phase()
         return
 
     # --- Thermal Model Validation ---
     if args.validate_physics:
-        try:
-            result = validate_thermal_model()
-            if result:
-                logging.info("✅ Thermal model validation passed!")
-            else:
-                logging.error("❌ Thermal model validation failed!")
-        except Exception as e:
-            logging.error(
-                "Thermal model validation error: %s", e, exc_info=True
-            )
+        _run_validation_phase()
         return
 
     if args.list_backups:
-        from .unified_thermal_state import get_thermal_state_manager
-        import json
-        state_manager = get_thermal_state_manager()
-        backups = state_manager.list_backups()
-        if backups:
-            print("Available backups:")
-            # print backups in a json format so it is easy to parse
-            print(json.dumps(backups, indent=2, default=str))
-        else:
-            print("No backups found.")
+        _handle_list_backups()
         return
 
     if args.restore_backup:
-        from .unified_thermal_state import get_thermal_state_manager
-        state_manager = get_thermal_state_manager()
-        success, message = state_manager.restore_from_backup(
-            args.restore_backup
-        )
-        if success:
-            print(f"Successfully restored from backup: {args.restore_backup}")
-            print(message)
-        else:
-            print(f"Failed to restore from backup: {args.restore_backup}")
-            print(message)
+        _handle_restore_backup(args.restore_backup)
         return
 
     # --- Main Control Loop ---
@@ -348,169 +1122,17 @@ def main():
 
             # --- Update Sensor Buffer ---
             if all_states:
-                current_time = datetime.now(timezone.utc)
-                
-                # Helper to safely get float state
-                def get_float_state(entity_id):
-                    try:
-                        val = ha_client.get_state(entity_id, all_states)
-                        return float(val) if val is not None else None
-                    except (ValueError, TypeError):
-                        return None
-
-                # Push new readings to buffer
-                buffer_updates = {
-                    config.INDOOR_TEMP_ENTITY_ID: get_float_state(
-                        config.INDOOR_TEMP_ENTITY_ID
-                    ),
-                    config.ACTUAL_OUTLET_TEMP_ENTITY_ID: get_float_state(
-                        config.ACTUAL_OUTLET_TEMP_ENTITY_ID
-                    ),
-                    config.TARGET_OUTLET_TEMP_ENTITY_ID: get_float_state(
-                        config.TARGET_OUTLET_TEMP_ENTITY_ID
-                    ),
-                    config.OUTDOOR_TEMP_ENTITY_ID: get_float_state(
-                        config.OUTDOOR_TEMP_ENTITY_ID
-                    ),
-                    config.INLET_TEMP_ENTITY_ID: get_float_state(
-                        config.INLET_TEMP_ENTITY_ID
-                    ),
-                    config.FLOW_RATE_ENTITY_ID: get_float_state(
-                        config.FLOW_RATE_ENTITY_ID
-                    ),
-                }
-
-                for entity_id, value in buffer_updates.items():
-                    if value is not None:
-                        sensor_buffer.add_reading(
-                            entity_id, value, current_time
-                        )
-
-                # --- Real-time Thermodynamic Sensors ---
-                # Calculate and export COP and Thermal Power immediately so
-                # they are available even if the cycle is skipped (e.g.
-                # blocking/idle).
-                try:
-                    # Get power consumption which isn't in the buffer updates
-                    power_consumption = get_float_state(
-                        config.POWER_CONSUMPTION_ENTITY_ID
-                    )
-
-                    # Use values we just fetched for the buffer
-                    current_outlet = buffer_updates.get(
-                        config.ACTUAL_OUTLET_TEMP_ENTITY_ID
-                    )
-                    current_inlet = buffer_updates.get(
-                        config.INLET_TEMP_ENTITY_ID
-                    )
-                    current_flow = buffer_updates.get(
-                        config.FLOW_RATE_ENTITY_ID
-                    )
-
-                    # Only calculate if we have the minimum required data
-                    # (outlet temp)
-                    if current_outlet is not None:
-                        thermo_metrics = calculate_thermodynamic_metrics(
-                            outlet_temp=current_outlet,
-                            inlet_temp=current_inlet,
-                            flow_rate=current_flow,
-                            power_consumption=power_consumption
-                        )
-
-                        # Export to Home Assistant
-                        # 1. COP
-                        ha_client.set_state(
-                            "sensor.ml_heating_cop_realtime",
-                            thermo_metrics["cop_realtime"],
-                            {
-                                "friendly_name": "ML Heating COP (Realtime)",
-                                "unit_of_measurement": "COP",
-                                "icon": "mdi:heat-pump",
-                                "device_class": "power_factor",
-                                "state_class": "measurement"
-                            },
-                            round_digits=2
-                        )
-
-                        # 2. Thermal Power
-                        ha_client.set_state(
-                            "sensor.ml_heating_thermal_power",
-                            thermo_metrics["thermal_power_kw"],
-                            {
-                                "friendly_name": "ML Heating Thermal Power",
-                                "unit_of_measurement": "kW",
-                                "icon": "mdi:flash",
-                                "device_class": "power",
-                                "state_class": "measurement"
-                            },
-                            round_digits=3
-                        )
-
-                        logging.debug(
-                            "Thermodynamic sensors updated: COP=%.2f, "
-                            "Power=%.3fkW",
-                            thermo_metrics["cop_realtime"],
-                            thermo_metrics["thermal_power_kw"]
-                        )
-                except Exception as e:
-                    logging.warning(
-                        "Failed to update thermodynamic sensors: %s", e
-                    )
-
-            # --- Determine Shadow Mode Early (needed for grace period) ---
-            # Read input_boolean.ml_heating to determine control mode
-            ml_heating_enabled = None
-            if all_states:
-                ml_heating_enabled = ha_client.get_state(
-                    config.ML_HEATING_CONTROL_ENTITY_ID,
-                    all_states,
-                    is_binary=True
+                _update_sensor_buffer_and_thermo(
+                    ha_client, all_states, sensor_buffer
                 )
 
-            # Shadow mode is active when:
-            # - Config SHADOW_MODE=true (override), OR
-            # - ML heating boolean is OFF/unavailable
-            if ml_heating_enabled is None:
-                if all_states:  # Only warn if we could fetch states
-                    logging.warning(
-                        "Cannot read %s, defaulting to shadow mode",
-                        config.ML_HEATING_CONTROL_ENTITY_ID,
-                    )
-                ml_heating_enabled = False
-
-            effective_shadow_mode = (
-                config.SHADOW_MODE or not ml_heating_enabled
+            # --- Determine Shadow Mode Early (needed for grace period) ---
+            effective_shadow_mode, ml_heating_enabled = (
+                _determine_shadow_mode(ha_client, all_states)
             )
 
             if not all_states:
-                logging.warning(
-                    "Could not fetch states from HA, skipping cycle."
-                )
-                # Emit NETWORK_ERROR state to Home Assistant
-                try:
-                    ha_client = create_ha_client()
-                    attributes_state = get_sensor_attributes(
-                        "sensor.ml_heating_state"
-                    )
-                    attributes_state.update(
-                        {
-                            "state_description": "Network Error",
-                            "last_updated": datetime.now(
-                                timezone.utc
-                            ).isoformat(),
-                        }
-                    )
-                    ha_client.set_state(
-                        "sensor.ml_heating_state",
-                        3,
-                        attributes_state,
-                        round_digits=None,
-                    )
-                except Exception:
-                    logging.debug(
-                        "Failed to write NETWORK_ERROR state to HA.",
-                        exc_info=True,
-                    )
+                _handle_no_ha_states()
                 time.sleep(PhysicsConstants.RETRY_DELAY_SECONDS)
                 continue
 
@@ -528,312 +1150,12 @@ def main():
             )
 
             # --- Step 1: Online Learning from Previous Cycle ---
-            # Learn from the results of the previous cycle. This allows the
-            # model to continuously adapt to the actual house behavior,
-            # whether running in active mode (model controls heating) or
-            # shadow mode (heat curve controls heating).
-            last_run_features = state.get("last_run_features")
-            last_indoor_temp = state.get("last_indoor_temp")
-            last_final_temp_stored = state.get("last_final_temp")
-
-            if (
-                last_run_features is not None
-                and last_indoor_temp is not None
-                and last_final_temp_stored is not None
-            ):
-
-                # Read the actual target outlet temp that was applied.
-                # This reads what temperature was actually set by either:
-                # - The model in active mode
-                # - The heat curve in shadow mode
-                # By reading it now (start of next cycle), we give it time
-                # to update after the previous cycle's set_state call.
-                actual_applied_temp = ha_client.get_state(
-                    config.ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID, all_states
-                )
-
-                if actual_applied_temp is None:
-                    actual_applied_temp = last_final_temp_stored
-
-                # Get current indoor temperature to calculate actual change
-                current_indoor = ha_client.get_state(
-                    config.INDOOR_TEMP_ENTITY_ID, all_states
-                )
-
-                if current_indoor is not None:
-                    actual_indoor_change = current_indoor - last_indoor_temp
-
-                    # Create learning features with the actual outlet temp
-                    # that was applied
-                    # Handle case where last_run_features might be stored as
-                    # string
-                    if isinstance(last_run_features, str):
-                        logging.error(
-                            "ERROR: last_run_features corrupted as string - "
-                            "attempting to recover"
-                        )
-                        try:
-                            # Try to parse as JSON if it's a string
-                            # representation
-                            import json
-
-                            last_run_features = json.loads(last_run_features)
-                            logging.info(
-                                "✅ Recovered features from JSON string"
-                            )
-                        except (json.JSONDecodeError, TypeError):
-                            logging.error(
-                                "❌ Cannot recover features from string, "
-                                "using empty dict"
-                            )
-                            last_run_features = {}
-
-                    if isinstance(last_run_features, pd.DataFrame):
-                        learning_features = last_run_features.copy().to_dict(
-                            orient="records"
-                        )[0]
-                    elif isinstance(last_run_features, dict):
-                        learning_features = last_run_features.copy()
-                    else:
-                        learning_features = (
-                            last_run_features.copy()
-                            if last_run_features
-                            else {}
-                        )
-
-                    # --- Passive vs Active learning mode ---
-                    # If the previous cycle had the heat pump OFF, the outlet
-                    # / radiator term is meaningless. We set the outlet temp
-                    # to 0 (harmless placeholder) and flag heating_active=False
-                    # so the physics model uses the passive equilibrium
-                    # formula: T_eq = T_out + (PV + fireplace + TV) / HLC.
-                    # This lets the model learn HLC, PV weight, fireplace
-                    # weight, TV weight, and thermal time constant from the
-                    # house's natural cooling/heating — WITHOUT corrupting
-                    # outlet_effectiveness.
-                    was_heating_active = learning_features.get(
-                        "heating_active", True
-                    )
-                    if not was_heating_active:
-                        actual_applied_temp = 0.0
-                        logging.info(
-                            "🔇 PASSIVE MODE LEARNING: previous cycle had "
-                            "heating off — learning from passive dynamics only "
-                            "(HLC, PV, fireplace, TV, thermal time constant)."
-                        )
-
-                    learning_features["outlet_temp"] = actual_applied_temp
-                    learning_features["outlet_temp_sq"] = (
-                        actual_applied_temp**2
-                    )
-                    learning_features["outlet_temp_cub"] = (
-                        actual_applied_temp**3
-                    )
-
-                    # Online learning is now handled by
-                    # ThermalEquilibriumModel in model_wrapper
-                    try:
-                        # Import and create model wrapper for learning
-                        from .model_wrapper import get_enhanced_model_wrapper
-
-                        # Create wrapper instance
-                        wrapper = get_enhanced_model_wrapper()
-
-                        # Prepare prediction context for learning
-                        prediction_context = {
-                            "outlet_temp": actual_applied_temp,
-                            "outdoor_temp": learning_features.get(
-                                "outdoor_temp", 10.0
-                            ),
-                            "pv_power": learning_features.get("pv_now", 0.0),
-                            "fireplace_on": learning_features.get(
-                                "fireplace_on", 0.0
-                            ),
-                            "tv_on": learning_features.get("tv_on", 0.0),
-                            "current_indoor": last_indoor_temp,
-                            "target_temp": last_indoor_temp,  # Use last indoor as target for learning context
-                            "thermal_power": learning_features.get(
-                                "thermal_power_kw", None
-                            ),
-                            # Pass auxiliary heat if available in features
-                            "auxiliary_heat": learning_features.get(
-                                "total_auxiliary_heat_kw", 0.0
-                            ),
-                            # Flag whether the heat pump was active during the
-                            # cycle being learned from. False → passive model.
-                            "heating_active": was_heating_active,
-                        }
-
-                        # FIXED SHADOW MODE LEARNING: Only learn from shadow
-                        # mode when actually in shadow mode
-                        # In ACTIVE MODE: Learn from ML's own decisions
-                        # (even with smart rounding)
-                        # In SHADOW MODE: Learn from heat curve decisions
-                        was_shadow_mode_cycle = effective_shadow_mode
-
-                        try:
-                            # UNIFIED LEARNING: Always use trajectory
-                            # prediction for learning to ensure consistency
-                            # with the control loop's prediction method.
-                            was_shadow_mode_cycle = effective_shadow_mode
-
-                            if not was_heating_active:
-                                learning_mode = "passive_mode_trajectory"
-                                log_msg = (
-                                    "🔇 PASSIVE MODE LEARNING (trajectory): "
-                                    "Learning passive dynamics (no outlet heat, "
-                                    f"outdoor={prediction_context.get('outdoor_temp', '?')}°C)"
-                                )
-                            elif was_shadow_mode_cycle:
-                                learning_mode = "shadow_mode_hc_trajectory"
-                                log_msg = (
-                                    "🔍 SHADOW MODE LEARNING (trajectory): "
-                                    "Predicting indoor temp from heat "
-                                    f"curve's {actual_applied_temp}°C "
-                                    "outlet setting"
-                                )
-                            else:
-                                learning_mode = "active_mode_ml_trajectory"
-                                log_msg = (
-                                    "🎯 ACTIVE MODE LEARNING (trajectory): "
-                                    "Verifying ML prediction accuracy for "
-                                    f"{actual_applied_temp}°C outlet setting"
-                                )
-                            logging.debug(log_msg)
-
-                            trajectory = (
-                                wrapper.thermal_model
-                                .predict_thermal_trajectory(
-                                    current_indoor=last_indoor_temp,
-                                    target_indoor=last_indoor_temp,
-                                    outlet_temp=actual_applied_temp,
-                                    outdoor_temp=prediction_context.get(
-                                        "outdoor_temp", 10.0
-                                    ),
-                                    time_horizon_hours=(
-                                        config.CYCLE_INTERVAL_MINUTES / 60.0
-                                    ),
-                                    pv_power=prediction_context.get(
-                                        "pv_power", 0.0
-                                    ),
-                                    fireplace_on=prediction_context.get(
-                                        "fireplace_on", 0.0
-                                    ),
-                                    tv_on=prediction_context.get("tv_on", 0.0),
-                                    thermal_power=prediction_context.get(
-                                        "thermal_power"
-                                    ),
-                                    heating_active=was_heating_active,
-                                )
-                            )
-
-                            predicted_indoor_temp = (
-                                trajectory["trajectory"][0]
-                                if trajectory and trajectory.get("trajectory")
-                                else last_indoor_temp
-                            )
-
-                            if predicted_indoor_temp is None:
-                                logging.warning(
-                                    "Skipping online learning (%s): "
-                                    "prediction returned None",
-                                    learning_mode
-                                )
-                                continue
-
-                            model_predicted_temp = predicted_indoor_temp
-
-                        except Exception as e:
-                            logging.warning(
-                                "Skipping online learning: thermal model "
-                                f"prediction error: {e}"
-                            )
-                            continue
-
-                        # Enhanced prediction context with learning mode info
-                        enhanced_prediction_context = prediction_context.copy()
-                        
-                        # Check if the previous cycle was a grace period
-                        # passthrough. If so, override the learning mode to
-                        # reflect this
-                        if (
-                            isinstance(last_run_features, dict)
-                            and last_run_features.get("learning_mode")
-                            == "grace_period_passthrough"
-                        ):
-                            learning_mode = "grace_period_passthrough"
-                            
-                        enhanced_prediction_context[
-                            "learning_mode"
-                        ] = learning_mode
-                        enhanced_prediction_context[
-                            "was_shadow_mode_cycle"
-                        ] = was_shadow_mode_cycle
-                        enhanced_prediction_context[
-                            "ml_calculated_temp"
-                        ] = last_final_temp_stored
-                        enhanced_prediction_context[
-                            "hc_applied_temp"
-                        ] = actual_applied_temp
-
-                        # Call the learning feedback method with the correct
-                        # prediction context
-                        wrapper.learn_from_prediction_feedback(
-                            predicted_temp=model_predicted_temp,
-                            actual_temp=current_indoor,
-                            prediction_context=enhanced_prediction_context,
-                            timestamp=datetime.now(timezone.utc).isoformat(),
-                            is_blocking_active=is_blocking,
-                        )
-
-                        logging.debug(
-                            "✅ Online learning: applied_temp=%.1f°C, "
-                            "actual_change=%.3f°C, cycle=%d",
-                            actual_applied_temp,
-                            actual_indoor_change,
-                            wrapper.cycle_count,
-                        )
-                    except Exception as e:
-                        logging.warning(
-                            "Online learning failed: %s", e, exc_info=True
-                        )
-
-                    # Shadow mode error tracking
-                    # Track what error ML and heat curve made
-                    shadow_mode_active = (
-                        config.TARGET_OUTLET_TEMP_ENTITY_ID
-                        != config.ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID
-                    )
-
-                    # Shadow mode error tracking removed - handled by
-                    # ThermalEquilibriumModel Only log shadow mode
-                    # comparison when actually in shadow mode (not active)
-                    effective_shadow_mode = (
-                        config.SHADOW_MODE
-                        or not ha_client.get_state(
-                            config.ML_HEATING_CONTROL_ENTITY_ID,
-                            all_states,
-                            is_binary=True,
-                        )
-                    )
-                if (
-                    effective_shadow_mode
-                    and actual_applied_temp != last_final_temp_stored
-                ):
-                    logging.debug(
-                        "Shadow mode: ML would set %.1f°C, HC set %.1f°C",
-                        last_final_temp_stored,
-                        actual_applied_temp,
-                    )
-                else:
-                    logging.debug(
-                        "Skipping online learning: current indoor temp "
-                        "unavailable"
-                    )
-            else:
-                logging.debug(
-                    "Skipping online learning: no data from previous cycle"
-                )
+            wrapper, effective_shadow_mode, _skip_cycle = _run_online_learning(
+                state, ha_client, all_states, is_blocking,
+                effective_shadow_mode, wrapper,
+            )
+            if _skip_cycle:
+                continue
 
             # --- Grace Period after Blocking ---
             # Use modular blocking state manager for cleaner code
@@ -844,196 +1166,21 @@ def main():
             )
             
             if is_grace_period:
-                # We are in grace period, but we continue to allow passive
-                # learning (feature calculation and state saving)
-                logging.info("⏳ Grace period active - Passive learning mode")
-                # We will skip the CONTROL part later
-
-                # FIX: Do NOT overwrite last_final_temp with current actual
-                # outlet temp. This causes "state poisoning" where a low
-                # actual temp (e.g. 25C) becomes the target for the next
-                # cycle if sensors fail or another grace period occurs.
-                # Instead, preserve the previous valid target.
-                preserved_target = state.get("last_final_temp")
-                if preserved_target is None:
-                    # Fallback only if no previous state exists
-                    try:
-                        preserved_target = float(
-                            ha_client.get_state(
-                                config.ACTUAL_OUTLET_TEMP_ENTITY_ID, all_states
-                            )
-                        )
-                    except (ValueError, TypeError):
-                        preserved_target = 20.0 # Safe fallback
-
-                logging.info(
-                    "Preserving last_final_temp=%.1f°C during grace period",
-                    preserved_target
-                )
-
-                # Save state to ensure next cycle has valid 'last_run_features'
-                # Mark this as a grace period passthrough so the next cycle
-                # knows this wasn't a calculated target
-                save_state(
-                    last_final_temp=preserved_target,
-                    last_is_blocking=False,  # Grace period is not blocking
-                    # Preserve end time
-                    last_blocking_end_time=state.last_blocking_end_time,
-                    last_run_features={
-                        "learning_mode": "grace_period_passthrough"
-                    },
-                )
+                _handle_grace_period_passive(ha_client, state, all_states)
                 continue
 
             # --- Check if heating system is active ---
-            heating_checker = HeatingSystemStateChecker()
-            if not heating_checker.check_heating_active(ha_client, all_states):
-                # --- PASSIVE STATE SAVE ---
-                # The heat pump is OFF. We must still save state so that:
-                # 1. `last_indoor_temp` stays fresh (otherwise the next
-                #    cycle's learning block reads a stale value, and the
-                #    per-cycle indoor change becomes accumulated drift).
-                # 2. `last_run_features` carries `heating_active=False` so
-                #    the next cycle's learning block uses the passive
-                #    equilibrium model (no outlet/OE term) and learns from
-                #    passive dynamics (HLC, PV, fireplace, TV, thermal time
-                #    constant) without corrupting outlet_effectiveness.
-                try:
-                    passive_indoor = ha_client.get_state(
-                        config.INDOOR_TEMP_ENTITY_ID, all_states
-                    )
-                    passive_outdoor = ha_client.get_state(
-                        config.OUTDOOR_TEMP_ENTITY_ID, all_states
-                    )
-                    passive_pv = ha_client.get_state(
-                        config.PV_POWER_ENTITY_ID, all_states
-                    )
-                    passive_fireplace = ha_client.get_state(
-                        config.FIREPLACE_STATUS_ENTITY_ID, all_states,
-                        is_binary=True
-                    )
-                    passive_tv = ha_client.get_state(
-                        config.TV_STATUS_ENTITY_ID, all_states,
-                        is_binary=True
-                    )
-
-                    passive_features = {
-                        "outdoor_temp": passive_outdoor
-                        if passive_outdoor is not None
-                        else 10.0,
-                        "pv_now": passive_pv if passive_pv is not None else 0.0,
-                        "fireplace_on": passive_fireplace
-                        if passive_fireplace is not None
-                        else 0,
-                        "tv_on": passive_tv if passive_tv is not None else 0,
-                        "heating_active": False,
-                    }
-
-                    save_state(
-                        last_indoor_temp=passive_indoor
-                        if passive_indoor is not None
-                        else state.get("last_indoor_temp"),
-                        last_run_features=passive_features,
-                        # Preserve last_final_temp so the next active cycle
-                        # doesn't lose its reference point.
-                        last_final_temp=state.get("last_final_temp"),
-                    )
-
-                    logging.info(
-                        "💤 Heating inactive — passive state saved "
-                        "(indoor=%s°C, outdoor=%s°C). Next cycle will learn "
-                        "passive dynamics.",
-                        passive_indoor,
-                        passive_outdoor,
-                    )
-                except Exception as passive_err:
-                    logging.error(
-                        "Failed to save passive state: %s",
-                        passive_err,
-                        exc_info=True,
-                    )
-
-                time.sleep(PhysicsConstants.RETRY_DELAY_SECONDS)
+            if _save_passive_state_inactive(ha_client, state, all_states):
                 continue
             
             if is_grace_period:
-                # Skip control logic but allow state saving at the end of loop
-                logging.info("⏭️ Grace period active - Skipping control logic")
-                
-                # FIX: Do NOT overwrite last_final_temp with current actual
-                # outlet temp. This causes "state poisoning" where a low
-                # actual temp (e.g. 25C) becomes the target for the next
-                # cycle if sensors fail or another grace period occurs.
-                # Instead, preserve the previous valid target.
-                preserved_target = state.get("last_final_temp")
-                if preserved_target is None:
-                    # Fallback only if no previous state exists
-                    try:
-                        preserved_target = float(
-                            ha_client.get_state(
-                                config.ACTUAL_OUTLET_TEMP_ENTITY_ID, all_states
-                            )
-                        )
-                    except (ValueError, TypeError):
-                        preserved_target = 20.0  # Safe fallback
-
-                logging.info(
-                    "Preserving last_final_temp=%.1f°C during grace period",
-                    preserved_target
-                )
-
-                save_state(
-                    last_final_temp=preserved_target,
-                    last_is_blocking=False,  # Grace period is not blocking
-                    # Preserve end time
-                    last_blocking_end_time=state.last_blocking_end_time,
-                )
+                _handle_grace_period_skip(ha_client, state, all_states)
                 continue
 
             if is_blocking:
-                logging.info(
-                    "Blocking process active (DHW/Defrost), skipping."
+                _handle_blocking_skip(
+                    ha_client, state, all_states, blocking_entities
                 )
-                try:
-                    blocking_reasons = [
-                        e
-                        for e in blocking_entities
-                        if ha_client.get_state(e, all_states, is_binary=True)
-                    ]
-                    attributes_state = get_sensor_attributes(
-                        "sensor.ml_heating_state"
-                    )
-                    attributes_state.update(
-                        {
-                            "state_description": (
-                                "Blocking activity - Skipping"
-                            ),
-                            "blocking_reasons": blocking_reasons,
-                            "last_updated": datetime.now(
-                                timezone.utc
-                            ).isoformat(),
-                        }
-                    )
-                    ha_client.set_state(
-                        "sensor.ml_heating_state",
-                        2,
-                        attributes_state,
-                        round_digits=None,
-                    )
-                except Exception:
-                    logging.debug(
-                        "Failed to write BLOCKED state to HA.", exc_info=True
-                    )
-                # Save the blocking state for the next cycle (preserve
-                # last_final_temp and record which entities caused the
-                # blocking so we can avoid learning from DHW-like cycles).
-                save_state(
-                    last_is_blocking=True,
-                    last_final_temp=state.get("last_final_temp"),
-                    last_blocking_reasons=blocking_reasons,
-                    last_blocking_end_time=None,
-                )
-                time.sleep(PhysicsConstants.RETRY_DELAY_SECONDS)
                 continue
 
             # --- Get current sensor values ---
@@ -1640,39 +1787,19 @@ def main():
             )
 
             # --- Step 6: State Persistence for Next Run ---
-            # Model saving is now handled by ThermalEquilibriumModel in
-            # model_wrapper
-
-            # The features and indoor temperature from the *current* run are
-            # saved to a file. This data will be loaded at the start of the
-            # next loop iteration to be used in the "Online Learning" step.
-            # Note: We save final_temp here, but will read the actual
-            # applied temp from ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID at the
-            # start of the next cycle (after it has had time to update).
-
-            # Flag that this was a heating-active cycle so the next cycle's
-            # learning block uses the full (outlet/OE) model, not the passive
-            # one.
-            if isinstance(features, dict):
-                features["heating_active"] = True
-            elif isinstance(features, pd.DataFrame):
-                features = features.copy()
-                features["heating_active"] = True
-
-            state_to_save = {
-                "last_run_features": features,
-                "last_indoor_temp": actual_indoor,
-                "last_avg_other_rooms_temp": avg_other_rooms_temp,
-                "last_fireplace_on": fireplace_on,
-                "last_final_temp": final_temp,
-                "last_is_blocking": is_blocking,
-                "last_blocking_reasons": (
-                    blocking_reasons if is_blocking else []
-                ),
-            }
-            save_state(**state_to_save)
-            # Update in-memory state so the idle poll uses fresh data
-            state.update(state_to_save)
+            # Save the current run's features/indoor temp so the next cycle's
+            # online-learning step can use them. The actual applied temp is
+            # re-read from Home Assistant at the start of the next cycle.
+            _persist_cycle_state(
+                state,
+                features,
+                actual_indoor,
+                avg_other_rooms_temp,
+                fireplace_on,
+                final_temp,
+                is_blocking,
+                blocking_reasons,
+            )
 
         except Exception as e:
             logging.error("Error in main loop: %s", e, exc_info=True)

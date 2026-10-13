@@ -1,5 +1,26 @@
 # Active Context - Current Work & Decision State
 
+### 🎯 **PASS C3 — Decompose `main()` in `src/main.py` (Oct 13, 2026)**
+
+**STATUS**: Completed Act-mode structural refactor. The ~1630-line `main()` body was decomposed into **17 module-level helper functions** with **zero behavior change**; full suite **379 passed** (2.05s), 0 new warnings; `ast.parse` clean; `pyflakes` clean except one *pre-existing* dead assignment (`shadow_mode_active` in `_run_online_learning`, faithfully moved from the original block).
+
+**Constraint honored**: extracted helpers **must remain module-level in `src/main.py`** (not new files) so bare-name references resolve through `src.main` module globals and respect the ~20 `src.main.<name>` patches enforced by `tests/unit/test_main_loop_integration.py` and `tests/integration/test_main.py` (e.g. `load_dotenv`, `logging`, `create_influx_service`, `SensorBuffer`, `load_state`, `save_state`, `create_ha_client`, `get_sensor_attributes`, `calculate_thermodynamic_metrics`, `build_physics_features`, `simplified_outlet_prediction`, `time.sleep`, `BlockingStateManager`, `HeatingSystemStateChecker`, `SensorDataManager`, `config.*`). Verified all 17 helpers are `inspect`-confirmed module-level (`__module__ == 'src.main'`).
+
+**Approach**: blocks extracted as module-level helpers taking explicit state/args, returning values or skip-flags; `continue`/`return` control flow stays in `main()`. The **hot-path per-cycle pipeline** (feature build → predict → smart-rounding → ML-state sensor → shadow compare, ~lines 1145–1789) stays inline as coherent coupled flow. `get_enhanced_model_wrapper` stays a *local* import inside `_run_online_learning` (matching the original pattern; not patched by tests).
+
+**The 17 helpers** (all `_`-prefixed, module-level in `src/main.py`):
+- Setup/dispatch (Phase 1): `_parse_cli_args`, `_configure_logging`, `_hydrate_sensor_buffer`, `_log_run_mode_status`, `_run_calibration_phase`, `_run_validation_phase`, `_handle_list_backups`, `_handle_restore_backup` — `main()` calls each then `return`s.
+- Loop-entry (Phase 2): `_update_sensor_buffer_and_thermo` (moves the `get_float_state` closure inboard), `_determine_shadow_mode` (returns `(effective_shadow_mode, ml_heating_enabled)` — `ml_heating_enabled` is still consumed later in the hot-path status log), `_handle_no_ha_states` (emits NETWORK_ERROR; `main()` keeps the `time.sleep` + `continue`).
+- Online learning: `_run_online_learning(state, ha_client, all_states, is_blocking, effective_shadow_mode, wrapper)` → returns `(wrapper, effective_shadow_mode, skip_cycle)`; the two inner `continue` paths become `return (…, True)`. Extracted mechanically (dedent + `continue`→`return`) to guarantee byte-fidelity of the ~308-line block.
+- Continue-blocks (guards stay in `main()`): `_handle_grace_period_passive`, `_save_passive_state_inactive` (returns bool — also owns the `HeatingSystemStateChecker` check), `_handle_grace_period_skip`, `_handle_blocking_skip` (recomputes its own `blocking_reasons`; the outer `is_blocking`/`blocking_reasons` stay in `main()` for the persistence block).
+- Persistence: `_persist_cycle_state(state, features, actual_indoor, avg_other_rooms_temp, fireplace_on, final_temp, is_blocking, blocking_reasons)` — last step of each cycle.
+
+**Result**: `main()` body ~1630 → **848 lines** (~48% reduction). `src/main.py` 1734 → 1861 lines (net +127; the helpers add signatures/docstrings but `main()` shrank by ~782). Net tracked diff +887/−760. `is_blocking`, `blocking_reasons`, `is_grace_period`, `ml_heating_enabled`, `effective_shadow_mode`, `wrapper` remain `main()`-scope loop variables flowing through the inline hot path and into `_persist_cycle_state`.
+
+**Validation**: targeted `tests/unit/test_main_loop_integration.py tests/integration/test_main.py` 5 passed after each phase; full `tests/` **379 passed**. `import src.main` OK; 17 module-level `_` helpers confirmed. **Next**: commit Pass C3; consider a future Pass C4 to further split the inline hot-path pipeline (feature-build/predict/smart-round/ML-state-sensor) once a state-carrier struct is introduced.
+
+---
+
 ### 🎯 **PASS C2 — EXTRACT OutletCalculator + TrustGate (Oct 13, 2026)**
 
 **STATUS**: Completed Act-mode structural refactor. Two more god-class slices extracted with **zero behavior change**; full suite **379 passed**, 0 warnings.
