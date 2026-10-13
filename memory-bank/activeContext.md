@@ -1,5 +1,31 @@
 # Active Context - Current Work & Decision State
 
+### 🎯 **PASS C1 — EXTRACT ParameterOptimizer (Oct 13, 2026)**
+
+**STATUS**: Completed Act-mode structural refactor. Extracted the gradient-based parameter-adaptation cluster out of the `ThermalEquilibriumModel` god-class into a new focused `src/parameter_optimizer.py` (`ParameterOptimizer`). Pure structural refactor — no behavior change; full suite **379 passed**, 0 warnings.
+
+**What moved (13 methods → `ParameterOptimizer`)**:
+- `_adapt_parameters_from_recent_errors` (the adaptation step: gradient aggregation, cold-weather protection, passive-cycle OE suppression, catastrophic-error gating, clip+apply, `parameter_history` append, persistence).
+- `_calculate_parameter_gradient` (generic finite-diff core) + 6 per-parameter wrappers: `_calculate_thermal_time_constant_gradient`, `_calculate_heat_loss_coefficient_gradient`, `_calculate_outlet_effectiveness_gradient`, `_calculate_equilibrium_based_oe_gradient`, `_calculate_pv_heat_weight_gradient`, `_calculate_tv_heat_weight_gradient`, `_calculate_solar_lag_gradient`.
+- `_calculate_adaptive_learning_rate`, `_assess_learning_quality`, `_save_learning_to_thermal_state`, `_detect_parameter_corruption`.
+
+**Design (delegation; state stays on the model)**:
+- `ParameterOptimizer.__init__(self, model)` holds only `self.model`; **no state of its own** — all learned params, history, bounds, and learning rates remain attributes of the owning `ThermalEquilibriumModel`, accessed via `self.model.<attr>`.
+- `ThermalEquilibriumModel` keeps thin delegating wrappers with the **same method names/signatures** so existing call sites and `unittest.mock.patch.object(model, ...)` patches keep working unchanged.
+- Uniform `self.` → `self.model.` translation of the moved bodies, so cross-method calls route *through the model* — this guarantees monkey-patches on the model (e.g. patching a gradient calculator in `test_physics_constraints.py`) still take effect exactly as before. The two bare-`self` code sites (`getattr(self, …)` / `setattr(self, …)` in `_calculate_parameter_gradient`) translated the same way; the docstring word "self-corrects" left untouched.
+- `self._optimizer = ParameterOptimizer(self)` created in `__init__` *before* `_load_thermal_parameters` (load may call `_detect_parameter_corruption`).
+- `config` is a `sys.modules` singleton, so `patch('src.thermal_equilibrium_model.config.SHADOW_MODE')` still affects the optimizer's `config.SHADOW_MODE` reference (verified by `test_adaptive_learning_boost`).
+
+**How the file was generated safely**: extracted the 13 methods by exact line ranges, applied 3 mechanical transforms (`self.`→`self.model.`, `getattr(self,`→`getattr(self.model,`, `setattr(self,`→`setattr(self.model,`) via a script; pre-audited that the only bare-`self`-in-code sites are the getattr/setattr pair and that no `self.` occurs in real comments/docstrings (the one apparent hit, line 1464 `* self.learning_confidence`, is code, not a docstring).
+
+**Result**: `thermal_equilibrium_model.py` 2223 → ~1384 lines (diff: −896 / +63; 13 method bodies → 13 one-line delegating stubs). New `parameter_optimizer.py` 1018 lines.
+
+**Validation**: full `tests/` suite **379 passed** (2.06s); 0 warnings; both files `ast.parse` clean; smoke import + `ThermalEquilibriumModel()` instantiation OK; `m._optimizer` is a `ParameterOptimizer`. (Baseline before change: 379 passed, confirmed.)
+
+**Next**: Pass C2 — extract `TrustGate` / `OutletCalculator` from the same god-class. Then Pass C3 — decompose the long `main()` in `main.py`.
+
+---
+
 ### 🎯 **PASS B — TIMEZONE-AWARE UTC CONVERSION (Oct 13, 2026)**
 
 **STATUS**: Completed Act-mode pass. Converted all naive `datetime.now()` calls to timezone-aware UTC across the entire codebase, normalized naive parse sites (`fromtimestamp`/`strptime`/`fromisoformat`) to tz-aware UTC, and suppressed the third-party `reactivex` `utcfromtimestamp` DeprecationWarning via `pyproject.toml` `filterwarnings`.
