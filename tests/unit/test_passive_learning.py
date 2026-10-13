@@ -322,12 +322,15 @@ class TestPassiveOEInvariantClosedLoop:
     """
 
     def test_passive_cycles_freeze_oe_but_move_hlc(self, clean_model):
-        # The clean_model fixture builds ThermalEquilibriumModel() which loads
-        # the *live* unified_thermal_state.json, inheriting a real
-        # prediction_history. That would make the windowed adaptation fire on
-        # cycle 0. Reset the learning buffers so adaptation only fires once we
-        # have fed >= recent_errors_window (10) clean passive records -- the
-        # regime the invariant is meant to characterise.
+        # The autouse `isolated_thermal_state` fixture (tests/conftest.py) swaps
+        # the global state singleton for a temp-file-backed manager, so
+        # clean_model starts with an *empty* prediction_history/parameter_history
+        # and config/TDD defaults rather than the live calibrated state. The
+        # explicit resets below are therefore now defensive no-ops, retained so
+        # the invariant cannot break if that isolation is ever removed: they
+        # ensure the windowed adaptation only fires once we have fed >=
+        # recent_errors_window (10) clean passive records -- the regime the
+        # invariant is meant to characterise.
         clean_model.prediction_history = []
         clean_model.parameter_history = []
         # Mid-range HLC (bounds 0.01..1.2) so a gradient in *either* direction

@@ -1,5 +1,19 @@
 # Active Context - Current Work & Decision State
 
+# Active Context - Current Work & Decision State
+
+### 🎯 **TEST FIXTURE ISOLATION PASS (Oct 13, 2026)**
+
+**STATUS**: Completed an Act-mode pass eliminating latent live-state-file contamination from the test suite. Added an **autouse `isolated_thermal_state` fixture** to `tests/conftest.py` that swaps the global `src.unified_thermal_state._thermal_state_manager` singleton for a per-test temp-file-backed `ThermalStateManager` (via `tmp_path`) and restores it on teardown. `ThermalEquilibriumModel()` (and `EnhancedModelWrapper()`, which constructs one internally) load params + learning history via `get_thermal_state_manager()` — a singleton backed by `config.UNIFIED_STATE_FILE`, the live `/opt/ml_heating/unified_thermal_state.json`. Without isolation the suite (1) inherited live calibrated params + a real `prediction_history` (non-deterministic, machine-local) and (2) **wrote back** to the live file: any test triggering parameter adaptation called `update_learning_state()→save_state()` on the singleton, persisting accumulated learning deltas into production state (confirmed: a plain 12-cycle repro wrote `heat_loss_coefficient_delta: -0.06`, `outlet_effectiveness_delta: +0.06` into the live path).
+
+**Validation**: full unit suite **372 passed** (unchanged from baseline); full `tests/` suite **379 passed** (372 unit + 7 integration). **Definitive**: with the live file moved aside, a full `tests/` run creates NO `unified_thermal_state.json` at the live path — the suite never touches production state; the live file's md5 is identical before/after a full run. (The pre-existing live file — gitignored runtime state, possibly mixing real calibrated data with residual baseline-run contamination — was left untouched; the fix prevents *future* contamination only.)
+
+**Latent test bug exposed & fixed**: `tests/integration/test_adaptive_learning.py::test_source_attribution_learning` was passing ONLY because of the contamination — it runs 5 cycles but adaptation needs `len(prediction_history) >= recent_errors_window` (10); the live state's ~28 pre-existing records satisfied that from cycle 0. With a clean empty history it correctly failed (`assert 0.2 > 0.2`). Fixed by setting `model.recent_errors_window = 1` (with an explanatory comment) so the 5-cycle attribution loops exercise source-attribution adaptation from a clean slate (the window threshold is orthogonal to what that test checks).
+
+**Why autouse (not per-fixture wiring)**: contamination spanned many sites — the 3 `clean_model` fixtures (`test_thermal_equilibrium_model.py`, `test_thermal_equilibrium_model_confidence.py`, `test_passive_learning.py`), 4 `model` fixtures (`test_adaptive_learning_boost.py`, `test_thermal_equilibrium_model_properties.py`, `test_solar_lag.py`, `test_untrained_model_guard.py`), and `EnhancedModelWrapper()` constructions (`test_morning_drop.py`, `test_precheck_logic.py`, `test_untrained_model_guard.py`, `test_trajectory_correction.py` — these mock `thermal_model` post-construction so isolation is transparent). A single conftest autouse fixture covers all of them and any future construction. Tests that already manage the singleton themselves (`test_model_wrapper.clean_state`, `test_unified_thermal_state`, `test_regression_scenarios`, `test_physics_constraints`, `test_thermal_equilibrium_model_loading`) override `_thermal_state_manager` / patch `get_thermal_state_manager` in their own fixtures, so the autouse default is a safe no-op for them (verified: singleton-caching & clean_state tests still pass).
+
+**Edits**: `tests/conftest.py` (new autouse fixture), `tests/unit/test_passive_learning.py` (updated stale contamination comment → the in-test `prediction_history=[]` resets are now defensive no-ops), `tests/integration/test_adaptive_learning.py` (the `recent_errors_window=1` fix + comment).
+
 ### 🎯 **PREDICTION_METRICS.PY COVERAGE PASS (Oct 13, 2026)**
 
 **STATUS**: Completed an Act-mode pass raising `prediction_metrics.py` coverage **63% → 99%** (target was ≥85%). Added a brand-new dedicated test file `tests/unit/test_prediction_metrics.py` (43 tests); the module previously had **no dedicated unit test** — it was only exercised indirectly, so ~all real methods were uncovered (the 62% baseline came almost entirely from the module-level `prediction_tracker = PredictionMetrics()` running `__init__`/`_load_from_state` at import).
@@ -28,7 +42,7 @@ Full unit suite: **372 passed, 0 failed** (was 329; +43 new). Only the pre-exist
 
 #### 📋 Still-pending review items (next Act-mode passes)
 1. ~~**Threshold reconciliation**~~ ✅ DONE. ~~**`prediction_metrics.py` ≥85%**~~ ✅ DONE (99%).
-2. **Fix latent fixture contamination** in `conftest.py`/`clean_model` (isolate from live `unified_thermal_state.json`).
+2. ~~**Fix latent fixture contamination**~~ ✅ **DONE (Oct 13, 2026)** — autouse `isolated_thermal_state` fixture in `tests/conftest.py` swaps the state singleton to a temp file per test; suite never touches the live `unified_thermal_state.json` (full suite 379 passed). See TEST FIXTURE ISOLATION PASS above.
 3. Refactor god-classes (plan-mode first): extract `TrustGate`/`OutletCalculator` from `model_wrapper.py`, `ParameterOptimizer` from `thermal_equilibrium_model.py`, decompose `main()` (1734-line function).
 4. Timezone-aware UTC audit; remove vestigial state-schema fields.
 
@@ -58,7 +72,7 @@ Drives the REAL `main()` control loop with fully-mocked externals (HA, InfluxDB,
 #### 📋 Still-pending review items (next Act-mode passes)
 1. ~~**Threshold reconciliation**~~ ✅ **DONE (Oct 13, 2026)** — `CONFIDENCE_THRESHOLD` code default raised 0.2→2.0 to match the real 0.1–5.0 `learning_confidence` scale (0.2 was a silent no-op on that scale). Comment in `config.py` corrected (was wrongly "0-1 normalized"). `INSTALLATION_GUIDE.md` and `BUGFIX_OE_DRIFT...` docs updated. Test comments fixed. `.env` pins 2.0 explicitly (matches code default; protects fresh deployments). **`AUTO_CAL_MAE_THRESHOLD` 1.0 vs 0.2 was a category error** — `AUTO_CAL_MAE_THRESHOLD=1.0` (trust-gate promotion gate) is distinct from `ERROR_THRESHOLD_MEDIUM=0.2` (adaptive-learning boost trigger in `thermal_constants.py`); no code change needed, clarifying comment added. Full unit suite: 329 passed, 0 failed.
 2. **`prediction_metrics.py` ≥85%** (currently 63%) — second-biggest coverage gap after main.py.
-3. **Fix latent fixture contamination** in `conftest.py` `clean_model` — isolate `ThermalEquilibriumModel()` from the live `unified_thermal_state.json`.
+3. ~~**Fix latent fixture contamination**~~ ✅ **DONE (Oct 13, 2026)** — autouse `isolated_thermal_state` fixture in `tests/conftest.py` isolates `ThermalEquilibriumModel()`/`EnhancedModelWrapper()` from the live `unified_thermal_state.json`; full suite 379 passed. See TEST FIXTURE ISOLATION PASS at top.
 4. **Refactor**: extract `TrustGate`/`OutletCalculator` from `model_wrapper.py`, `ParameterOptimizer` from `thermal_equilibrium_model.py`, decompose `main()` (1734-line single function).
 5. **Standardize**: timezone-aware UTC; single package install.
 6. Remove vestigial `equilibrium_ratio`/`total_conductance` from state schema (guarded).

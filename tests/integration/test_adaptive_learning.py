@@ -179,6 +179,17 @@ def test_source_attribution_learning():
         # Force safe parameters to avoid corruption detection during test
         model.heat_loss_coefficient = 0.6
         model.outlet_effectiveness = 0.6
+        # The autouse `isolated_thermal_state` conftest fixture now gives the
+        # model an *empty* prediction_history (config/TDD defaults) instead of
+        # the previously-inherited live calibrated state, which carried ~28
+        # prior records and so satisfied `recent_errors_window` from cycle 0.
+        # Adaptation only fires once len(prediction_history) >=
+        # recent_errors_window, so lower the window so the 5-cycle attribution
+        # loops below actually exercise the source-attribution adaptation from
+        # a clean slate (the window threshold is orthogonal to what this test
+        # checks: that TV-on overheating bumps the TV weight, PV-high
+        # overheating bumps the PV weight).
+        model.recent_errors_window = 1
         
         # --- Test TV Learning ---
         initial_tv_weight = model.external_source_weights['tv']
