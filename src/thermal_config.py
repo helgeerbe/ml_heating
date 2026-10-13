@@ -32,8 +32,6 @@ class ThermalParameterConfig:
         'outlet_temp_max': 65.0,           # °C
         'outlet_temp_min': 14.0,           # °C
         'thermal_time_constant': 4.0,      # hours
-        'equilibrium_ratio': 0.17,         # dimensionless
-        'total_conductance': 0.8,         # 1/hour
         'pv_heat_weight': 0.002,           # °C/W
         'fireplace_heat_weight': 5.0,      # °C
         'tv_heat_weight': 0.2,             # °C
@@ -53,8 +51,6 @@ class ThermalParameterConfig:
         'outlet_temp_max': (60.0, 70.0),   # °C
         'outlet_temp_min': (14.0, 30.0),   # °C
         'thermal_time_constant': (3.0, 100.0),     # Hours
-        'equilibrium_ratio': (0.1, 0.9),         # dimensionless
-        'total_conductance': (0.1, 0.8),         # 1/hour
         'pv_heat_weight': (0.0, 0.01),           # W/°C
         'fireplace_heat_weight': (0.01, 6.0),    # 1/°C
         'tv_heat_weight': (0.05, 1.5),           # W/°C
@@ -73,8 +69,6 @@ class ThermalParameterConfig:
         'outlet_temp_min': 'Minimum outlet temperature (°C)',
         'thermal_time_constant':
             'Time constant for thermal equilibrium (hours)',
-        'equilibrium_ratio': 'Equilibrium ratio (dimensionless)',
-        'total_conductance': 'Total conductance (1/hour)',
         'pv_heat_weight': 'PV power heating contribution (W/°C)',
         'fireplace_heat_weight': 'Fireplace heating contribution (1/°C)',
         'tv_heat_weight': 'TV/appliance heating contribution (W/°C)',
@@ -93,8 +87,6 @@ class ThermalParameterConfig:
         'outlet_temp_max': '°C',
         'outlet_temp_min': '°C',
         'thermal_time_constant': 'hours',
-        'equilibrium_ratio': 'dimensionless',
-        'total_conductance': '1/hour',
         'pv_heat_weight': 'W/°C',
         'fireplace_heat_weight': '1/°C',
         'tv_heat_weight': 'W/°C',

@@ -32,4 +32,3 @@ class TestThermalConfigValues:
             'thermal_time_constant') == 4.0
         assert ThermalParameterConfig.get_default(
             'heat_loss_coefficient') == 0.4
-        assert ThermalParameterConfig.get_default('equilibrium_ratio') == 0.17

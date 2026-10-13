@@ -60,10 +60,6 @@ class ThermalStateManager:
             "baseline_parameters": {
                 "thermal_time_constant":
                 ThermalParameterConfig.get_default('thermal_time_constant'),
-                "equilibrium_ratio":
-                ThermalParameterConfig.get_default('equilibrium_ratio'),
-                "total_conductance":
-                ThermalParameterConfig.get_default('total_conductance'),
                 "heat_loss_coefficient":
                 ThermalParameterConfig.get_default('heat_loss_coefficient'),
                 "outlet_effectiveness":
@@ -85,18 +81,19 @@ class ThermalStateManager:
                 "learning_confidence": 3.0,
                 "learning_enabled": True,
                 "parameter_adjustments": {
-                    "equilibrium_ratio_delta": 0.0,
-                    "total_conductance_delta": 0.0,
                     "heat_loss_coefficient_delta": 0.0,
                     "outlet_effectiveness_delta": 0.0
                 },
                 "parameter_bounds": {
-                    "equilibrium_ratio":
+                    "thermal_time_constant":
                     list(ThermalParameterConfig.get_bounds(
-                        'equilibrium_ratio')),
-                    "total_conductance":
+                        'thermal_time_constant')),
+                    "heat_loss_coefficient":
                     list(ThermalParameterConfig.get_bounds(
-                        'total_conductance'))
+                        'heat_loss_coefficient')),
+                    "outlet_effectiveness":
+                    list(ThermalParameterConfig.get_bounds(
+                        'outlet_effectiveness'))
                 },
                 "prediction_history": [],
                 "parameter_history": []
@@ -318,10 +315,6 @@ class ThermalStateManager:
         # Update thermal parameters
         if "thermal_time_constant" in parameters:
             baseline["thermal_time_constant"] = parameters["thermal_time_constant"]
-        if "equilibrium_ratio" in parameters:
-            baseline["equilibrium_ratio"] = parameters["equilibrium_ratio"]
-        if "total_conductance" in parameters:
-            baseline["total_conductance"] = parameters["total_conductance"]
         if "heat_loss_coefficient" in parameters:
             baseline["heat_loss_coefficient"] = \
                 parameters["heat_loss_coefficient"]
@@ -348,8 +341,6 @@ class ThermalStateManager:
 
         # Reset learning adjustments when new baseline is set
         self.state["learning_state"]["parameter_adjustments"] = {
-            "equilibrium_ratio_delta": 0.0,
-            "total_conductance_delta": 0.0,
             "heat_loss_coefficient_delta": 0.0,
             "outlet_effectiveness_delta": 0.0
         }
@@ -430,10 +421,6 @@ class ThermalStateManager:
         return {
             "thermal_time_constant": (baseline["thermal_time_constant"] +
                                       adjustments.get("thermal_time_constant_delta", 0.0)),
-            "equilibrium_ratio": (baseline["equilibrium_ratio"] +
-                                  adjustments["equilibrium_ratio_delta"]),
-            "total_conductance": (baseline["total_conductance"] +
-                                  adjustments["total_conductance_delta"]),
             "heat_loss_coefficient": (baseline["heat_loss_coefficient"] +
                                   adjustments.get("heat_loss_coefficient_delta", 0.0)),
             "outlet_effectiveness": (baseline["outlet_effectiveness"] +

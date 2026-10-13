@@ -1,6 +1,24 @@
 # Active Context - Current Work & Decision State
 
-# Active Context - Current Work & Decision State
+### 🎯 **PASS A — VESTIGIAL `equilibrium_ratio`/`total_conductance` SCHEMA REMOVAL (Oct 13, 2026)**
+
+**STATUS**: Completed Act-mode pass. Removed two vestigial keys from the state schema, config, and HA display surface.
+
+**Evidence they were vestigial** (confirmed before edits): `grep 'self\.(equilibrium_ratio|total_conductance)' src/thermal_equilibrium_model.py` → **0 matches** (never model attributes). The 6 gradient methods in `_adapt_parameters_from_recent_errors` (line 828) target only `thermal_time_constant`/`heat_loss_coefficient`/`outlet_effectiveness`/`pv_heat_weight`/`tv_heat_weight`/`solar_lag`. `get_adaptive_learning_metrics().current_parameters` (line 2030) emits only the first 3; `get_learning_metrics()` (model_wrapper 2195) only adds `learning_confidence`/`cycle_count` — so `ha_client.py` always fell back to static `0.3`/`0.5` (dead display values). Live file showed `equilibrium_ratio_delta: 0.0`/`total_conductance_delta: 0.0` pinned over 9380 cycles. **IMPORTANT**: `total_conductance` as a *local physics variable* in `thermal_equilibrium_model.py` (lines 631/1807/1915, = `heat_loss_coefficient + outlet_effectiveness`) is REAL and was deliberately left untouched — it only shares a name with the removed stored parameter.
+
+**12 deletions across 4 files**:
+- `src/unified_thermal_state.py` (6): dropped both keys from baseline init (60-66), delta init (87-91), bounds init (93-100), `set_calibrated_baseline` merge (319-322), reset block (350-355), `get_computed_parameters` (433-436). Note: the old `parameter_bounds` block only had the two vestigial keys, so it was repopulated with `thermal_time_constant`/`heat_loss_coefficient`/`outlet_effectiveness` bounds (the real adapted params) for completeness.
+- `src/thermal_config.py` (4): removed both from `DEFAULTS`/`BOUNDS`/`DESCRIPTIONS`/`UNITS`.
+- `src/ha_client.py` (1): deleted the two static-fallback attributes from the `sensor.ml_heating_learning` entity (per user decision — dead display values never backed by real data).
+- `tests/unit/test_thermal_config_values.py` (1): deleted the `get_default('equilibrium_ratio')==0.17` assertion.
+
+**Migration**: none needed. `load_state()` tolerates extra/unknown keys (verified by spot-check: a legacy file containing the old keys loads cleanly and `get_computed_parameters()` no longer emits them). The live `unified_thermal_state.json` self-cleans on the next `save_state()` — no manual edit required.
+
+**Validation**: full `tests/` suite **379 passed** (unchanged); fresh-state spot-check confirms the two keys are absent from saved JSON and `get_computed_parameters()` keys; legacy-file-with-old-keys loads without error.
+
+**Next passes** (recommended order): Pass B (timezone-aware UTC audit) → Pass C1 (extract `ParameterOptimizer` from `thermal_equilibrium_model.py`) → Pass C2 (extract `TrustGate`/`OutletCalculator`) → Pass C3 (decompose `main()`).
+
+---
 
 ### 🎯 **TEST FIXTURE ISOLATION PASS (Oct 13, 2026)**
 
