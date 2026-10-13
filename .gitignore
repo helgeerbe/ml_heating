@@ -234,3 +234,8 @@ unified_thermal_state.json
 # Calibration artifacts
 stable_periods.json
 thermal_state*.json
+
+# Backup files and runtime locks (cleanup Oct 2026)
+*.bak
+*.bak.*
+*.json.lock

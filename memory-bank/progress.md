@@ -1,5 +1,21 @@
 # ML Heating System - Current Progress
 
+### 🎯 CURRENT STATUS - October 13, 2026 (architectural review pass)
+
+**Approved Act-mode pass completed: dead-code cleanup + two highest-value tests.** Full suite **332 passed** (was 329). Coverage **71% TOTAL** (`model_wrapper.py` 82%, `thermal_equilibrium_model.py` 84%, `multi_heat_source_physics.py` 80%, `main.py` 52%, `prediction_metrics.py` 63%).
+
+> ⚠️ Corrects stale claims elsewhere in this file ("294 tests / Zero Technical Debt"): actual = 332 tests, 71% coverage, technical debt present (god-classes, threshold mismatches, stale artifacts).
+
+**Done this pass:**
+- Removed dead code: `create_multi_source_heat_balance_controller_integration()` + `__main__` harness (~125 lines) in `multi_heat_source_physics.py`; disabled `* 0.0` OE-scaling no-op in `thermal_equilibrium_model.py` (replaced with clear one-liner + NOTE); unused stubs `calculate_physics_aware_thresholds` & `reset_adaptive_learning`. Deleted dummy `test_main_module.py`, source `.bak` files, state `.bak` files, stray lock. `.gitignore` updated (`*.bak*`, `*.json.lock`). KEPT `src/analysis/` (imported by notebooks).
+- Added 4 tests: passive-OE closed-loop invariant (`test_passive_learning.py::TestPassiveOEInvariantClosedLoop`) and shadow→active end-to-end lifecycle (`test_shadow_to_active_lifecycle.py`, 3 tests).
+- Found a test-isolation issue: `clean_model` fixture loads the live `unified_thermal_state.json` (real `prediction_history`); new tests work around it by clearing buffers. Conftest env-var monkeypatches are ineffective (config evaluated at import). Both are pre-existing; defer to a hardening pass.
+
+**Pending (next passes):** threshold reconciliation (CONFIDENCE_THRESHOLD 0.2 vs 0.9; AUTO_CAL_MAE 1.0 vs 0.2); main.py end-to-end integration test (≥70%); prediction_metrics ≥85%; refactor god-classes (TrustGate/OutletCalculator/ParameterOptimizer extraction, decompose main()); timezone-aware UTC; remove vestigial equilibrium_ratio/total_conductance from state schema.
+
+
+# ML Heating System - Current Progress
+
 ## 🎯 CURRENT STATUS - October 13, 2026
 
 ### ✅ **TRUST-GATE DEATH-SPIRAL CODE FIX (Oct 13, 2026)**

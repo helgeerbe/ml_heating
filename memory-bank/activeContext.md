@@ -1,5 +1,36 @@
 # Active Context - Current Work & Decision State
 
+### 🎯 **ARCHITECTURAL REVIEW + CLEANUP + HIGH-VALUE TESTS (Oct 13, 2026)**
+
+**STATUS**: Completed an approved Act-mode pass: (1) dead-code/artifact cleanup, (2) two highest-value invariant/lifecycle tests. Full suite **332 passed** (was 329; −1 deleted dummy + 4 new). Coverage **71% TOTAL** — `model_wrapper.py` **82%**, `thermal_equilibrium_model.py` **84%**, `multi_heat_source_physics.py` **80%**, `main.py` **52%**, `prediction_metrics.py` **63%**.
+
+> ⚠️ **Corrects stale memory-bank claims** below: this repo does NOT have "294 tests / Zero Technical Debt". Actual = 332 tests, 71% coverage, and there IS technical debt (god-classes, threshold mismatches, stale artifacts being cleaned up).
+
+#### ✅ Cleanup (behavior-preserving, full suite green before & after)
+- **`src/multi_heat_source_physics.py`**: removed ~125 lines of dead code — `create_multi_source_heat_balance_controller_integration()` (a never-imported example-string factory) + its `if __name__=="__main__"` manual test harness. The real `MultiHeatSourcePhysics` class is untouched.
+- **`src/thermal_equilibrium_model.py`**: (a) replaced the long-disabled `* 0.0` outlet-effectiveness scaling no-op block in `predict_equilibrium_temperature` with a clear `effective_outlet_effectiveness = self.outlet_effectiveness` + explanatory NOTE (behavior identical — `scaling_factor` was always `1.0`); (b) deleted unused stub `calculate_physics_aware_thresholds(self,*a,**k): pass`; (c) deleted unused stub `reset_adaptive_learning()`.
+- **Deleted**: `tests/unit/test_main_module.py` (a single `def test_dummy_test_to_unblock_runner(): pass`); 2 source `.bak` files; 3 `unified_thermal_state.json.bak*`; stray `test_passive_trust_gate.json.lock`.
+- **`.gitignore`**: appended `*.bak`, `*.bak.*`, `*.json.lock` to stop recurrence.
+- **KEPT** `src/analysis/` — it IS imported by notebooks (`from src.analysis import DataLoader, plotting`). (Earlier audit missed it by only scanning `.py`.)
+- **Deferred** (not done this pass — needs live-state care): removing vestigial state fields `equilibrium_ratio`/`total_conductance` (written to state, never read by the model) — touches the persisted state schema; do in a separate guarded pass.
+
+#### ✅ High-value tests added (the two the review flagged as missing)
+1. **Passive-OE closed-loop invariant** — `tests/unit/test_passive_learning.py::TestPassiveOEInvariantClosedLoop::test_passive_cycles_freeze_oe_but_move_hlc`. Drives the REAL `ThermalEquilibriumModel.update_prediction_feedback` through 15 passive (heating_active=False) cycles and asserts `outlet_effectiveness` stays byte-identical after EVERY cycle while `heat_loss_coefficient` moves to reduce the passive error. Pins the triple-OE-protection (per-record skip + equilibrium-OE-gradient skip + whole-window zeroing) as one composition.
+2. **Shadow→active lifecycle (end-to-end)** — new `tests/unit/test_shadow_to_active_lifecycle.py` (3 tests). Drives the REAL `learn_from_prediction_feedback()` loop (which itself calls `_check_auto_promotion`/`_check_accuracy_demotion` every cycle against a REAL `ThermalStateManager`) and asserts: starts in passthrough/learning while uncalibrated → auto-promotes to `baseline_source="calibrated"` once the 5-criterion gate is met → `get_trust_state()` flips to `is_trusted=True / stage="active" / outlet_source="ml_predicted"`; and stays passthrough before the minimum-predictions threshold. (Sibling `test_trust_gate_lifecycle.py` calls `_check_auto_promotion` directly with mocks; this validates the wiring.)
+
+#### 🔬 Test-isolation issue discovered (NOT yet fixed repo-wide)
+- The `clean_model` fixture in `test_passive_learning.py` builds `ThermalEquilibriumModel()` which loads the **live** `unified_thermal_state.json`, inheriting a real `prediction_history` (hundreds of records) → windowed adaptation fires on cycle 0. The new invariant test works around this by explicitly clearing `prediction_history`/`parameter_history`. The conftest `enforce_tdd_thermal_parameters` env-var monkeypatches are also ineffective (config values are evaluated at import, before the fixture runs). Both are pre-existing latent issues — a future hardening pass should point the model at an isolated tmp state file in fixtures.
+
+#### 📋 Still-pending review items (next Act-mode passes)
+1. **Threshold reconciliation**: `CONFIDENCE_THRESHOLD` 0.2 vs doc's 0.9; `AUTO_CAL_MAE_THRESHOLD` 1.0 °C vs doc's 0.2 °C — tighten or update docs to justify.
+2. **End-to-end `main.py` integration test** (target main.py ≥70%) + `prediction_metrics.py` ≥85%.
+3. **Refactor**: extract `TrustGate`/`OutletCalculator` from `model_wrapper.py`, `ParameterOptimizer` from `thermal_equilibrium_model.py`, decompose `main()` (1734-line single function).
+4. **Standardize**: timezone-aware UTC; single package install.
+5. Remove vestigial `equilibrium_ratio`/`total_conductance` from state schema (guarded).
+
+
+# Active Context - Current Work & Decision State
+
 ### 🎯 **TRUST-GATE DEATH-SPIRAL CODE FIX (Oct 13, 2026)**
 
 **COMPLETED**: Implemented the agreed code-level fix for the trust-gate death spiral that the previous config-only fix (`.env` `DEMOTION_FACTOR=2.0`) left exposed. The config fix prevented *new* false demotions but did not add the minimum-predictions guard or symmetric re-promotion, so a sparse 24h window (e.g. after a history reset or during extended heating-off periods where passive learning adds no trust-gate predictions) could still re-demote the model on every restart via stale passthrough-era predictions.

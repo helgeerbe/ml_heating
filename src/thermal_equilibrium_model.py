@@ -616,36 +616,17 @@ class ThermalEquilibriumModel:
                 )
             return equilibrium_temp
 
-        # Fallback: Temperature-based approximation
-        
-        # RESTORED: Differential-based effectiveness scaling
-        # Radiators are more effective at higher temperatures (non-linear
-        # output). We scale the base effectiveness based on how hot the outlet
-        # is relative to the room.
-        # Base scaling factor: 1.0 at 45°C (typical), increases for hotter
-        # water.
+        # Fallback: Temperature-based approximation.
         #
-        # UPDATE (2026-03-05): Disabled scaling (factor 0.0) as it was causing
-        # significant over-prediction of indoor temperature at high outlet
-        # temps, leading to under-heating.
-        if outlet_temp > current_indoor:
-            temp_diff = max(1.0, outlet_temp - current_indoor)
-            # Scale factor increases with temperature difference
-            # 0.5 at 25°C diff, 1.0 at 45°C diff, 1.5 at 65°C diff
-            # REDUCED TO 0.0 to disable scaling temporarily
-            scaling_factor = 1.0 + (temp_diff - 25.0) * 0.0
-            effective_outlet_effectiveness = (
-                self.outlet_effectiveness * max(0.8, scaling_factor)
-            )
-            if not _suppress_logging and scaling_factor > 1.1:
-                logging.debug(
-                    "🔥 High-Diff Scaling: diff=%.1f, factor=%.3f, "
-                    "base_eff=%.3f, effective_eff=%.3f",
-                    temp_diff, scaling_factor, self.outlet_effectiveness,
-                    effective_outlet_effectiveness
-                )
-        else:
-            effective_outlet_effectiveness = self.outlet_effectiveness
+        # NOTE: A differential-based effectiveness-scaling block previously
+        # lived here (scaling outlet_effectiveness up at higher outlet temps).
+        # It was disabled on 2026-03-05 (`* 0.0`) because it caused
+        # over-prediction of indoor temperature at high outlet temps and
+        # under-heating. It had been a no-op (`scaling_factor == 1.0`,
+        # `max(0.8, 1.0) == 1.0`) ever since, so it is removed outright for
+        # clarity. If non-linear radiator output is reintroduced, do it as a
+        # separate, tested parameter rather than re-enabling this scaling.
+        effective_outlet_effectiveness = self.outlet_effectiveness
 
         total_conductance = (
             self.heat_loss_coefficient + effective_outlet_effectiveness
@@ -1959,10 +1940,6 @@ class ThermalEquilibriumModel:
 
         return clamped_outlet
 
-    def calculate_physics_aware_thresholds(self, *args, **kwargs):
-        """Keep original threshold calculation method unchanged"""
-        pass
-
     def get_feature_importance(self) -> Dict[str, float]:
         """
         Get relative importance of different heat sources/parameters.
@@ -2244,13 +2221,3 @@ class ThermalEquilibriumModel:
             return True
 
         return False
-
-    def reset_adaptive_learning(self):
-        """Reset adaptive learning state with aggressive initial settings."""
-        self._load_config_defaults()
-        self.prediction_history = []
-        self.parameter_history = []
-        self.learning_confidence = 3.0  # Start with high confidence
-        logging.info(
-            "Adaptive learning state reset with aggressive settings"
-        )

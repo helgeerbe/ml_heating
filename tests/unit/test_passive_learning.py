@@ -306,3 +306,67 @@ class TestTrustGateIsolation:
 
         if os.path.exists(state_file):
             os.remove(state_file)
+
+
+class TestPassiveOEInvariantClosedLoop:
+    """Closed-loop invariant: N passive (heating-off) learning cycles must
+    leave outlet_effectiveness byte-identical while heat_loss_coefficient
+    moves to reduce the passive prediction error.
+
+    This is the triple-protection guarantee for OE (per-record skip +
+    equilibrium-OE-gradient skip + whole-window zeroing) validated as a
+    single end-to-end feedback loop -- the safety property the passive
+    learning change set was built to enforce. The unit-level pieces are
+    covered above; this test pins the *composition* so a regression in any
+    one of the three guards cannot silently corrupt OE again.
+    """
+
+    def test_passive_cycles_freeze_oe_but_move_hlc(self, clean_model):
+        # The clean_model fixture builds ThermalEquilibriumModel() which loads
+        # the *live* unified_thermal_state.json, inheriting a real
+        # prediction_history. That would make the windowed adaptation fire on
+        # cycle 0. Reset the learning buffers so adaptation only fires once we
+        # have fed >= recent_errors_window (10) clean passive records -- the
+        # regime the invariant is meant to characterise.
+        clean_model.prediction_history = []
+        clean_model.parameter_history = []
+        # Mid-range HLC (bounds 0.01..1.2) so a gradient in *either* direction
+        # moves it unclamped; the clean_model fixture defaults HLC to 1.2
+        # (the max bound) which would mask an upward gradient.
+        clean_model.heat_loss_coefficient = 1.0
+        oe_initial = clean_model.outlet_effectiveness
+        hlc_initial = clean_model.heat_loss_coefficient
+
+        # recent_errors_window == 10 (conftest), so parameter adaptation only
+        # fires from cycle 10 onward; run well past it.
+        n_cycles = 15
+        for i in range(n_cycles):
+            clean_model.update_prediction_feedback(
+                predicted_temp=19.0,
+                actual_temp=20.0,            # persistent +1C under-prediction
+                prediction_context={
+                    "outlet_temp": 0.0,       # irrelevant when heating is off
+                    "outdoor_temp": 6.0,      # above cold-weather threshold (5)
+                    "current_indoor": 20.0,
+                    "pv_power": 2000.0,        # makes HLC identifiable passively
+                    "fireplace_on": 0,
+                    "tv_on": 0,
+                    "heating_active": False,   # PASSIVE cycle
+                    "indoor_temp_gradient": 0.0,
+                },
+            )
+            # The invariant must hold after *every* cycle, not only at the end.
+            assert clean_model.outlet_effectiveness == oe_initial, (
+                f"OE drifted on passive cycle {i}: "
+                f"{clean_model.outlet_effectiveness!r} != {oe_initial!r}"
+            )
+
+        # HLC must have learned (moved) from the passive error signal.
+        assert clean_model.heat_loss_coefficient != pytest.approx(
+            hlc_initial, abs=1e-9
+        ), (
+            "HLC failed to learn from passive cycles "
+            f"(still {clean_model.heat_loss_coefficient!r})"
+        )
+        # Final sanity: OE still exactly frozen.
+        assert clean_model.outlet_effectiveness == oe_initial
