@@ -1,5 +1,39 @@
 # Active Context - Current Work & Decision State
 
+### 🎯 **PREDICTION_METRICS.PY COVERAGE PASS (Oct 13, 2026)**
+
+**STATUS**: Completed an Act-mode pass raising `prediction_metrics.py` coverage **63% → 99%** (target was ≥85%). Added a brand-new dedicated test file `tests/unit/test_prediction_metrics.py` (43 tests); the module previously had **no dedicated unit test** — it was only exercised indirectly, so ~all real methods were uncovered (the 62% baseline came almost entirely from the module-level `prediction_tracker = PredictionMetrics()` running `__init__`/`_load_from_state` at import).
+
+Full unit suite: **372 passed, 0 failed** (was 329; +43 new). Only the pre-existing reactivex `utcfromtimestamp` `DeprecationWarning` remains.
+
+#### What the new tests cover
+- `_load_from_state`: state-manager-backed load (incl. deriving `abs_error`/`squared_error` from `error`-only records) + **exception fallback** to in-memory deque (`ExplodingStateManager`).
+- `_save_to_state`: no-state-manager early return; **>200 trim** to 200; `save_state()`-raises **exception swallow**.
+- `add_prediction`: record construction, cache invalidation, **>200 sliding-window trim**, explicit timestamp passthrough.
+- `get_metrics`: empty/all-windows, **cache hit within 60 s**, `refresh_cache=True` recompute; `_calculate_window_metrics` zeroed-empty branch.
+- `_calculate_trends`: **`<10`-prediction insufficient-data guard (line 248)**, improving, degrading (percentage clamped to ±100%), and **zero-first-half-MAE → 0% branch (line 277)**. NOTE: trend analysis requires ≥10 predictions — initial tests used only 4 and hit insufficient-data.
+- `get_recent_performance`: no-data + with-data + capped-to-available.
+- `save_state`/`load_state` (file persistence): write JSON, restore, **missing-file `FileNotFoundError`**, corrupt-JSON generic-except, **unwritable-path (nonexistent dir) exception**.
+- `get_summary`: empty, improving, degrading, insufficient-trend (no trend str).
+- `get_simplified_accuracy_breakdown` / `get_good_control_percentage`: empty + populated (perfect/tolerable/poor).
+- 24h-window helpers: time filtering, **None-timestamp skip (line 507)**, **invalid-timestamp skip (515-517)**, breakdown, good-control %, `get_24h_prediction_count`.
+- Module-level convenience fns (`track_prediction`/`get_current_metrics`/`get_metrics_summary`) against the global `prediction_tracker` (cleared in `finally`).
+- `__main__` demo block (lines 618-665) executed via `runpy.run_module(..., run_name="__main__")` (a `RuntimeWarning` about the module already being in `sys.modules` is suppressed with `warnings.catch_warnings()` — benign).
+
+#### Key gotchas learned
+- **`add_prediction(timestamp=None)` replaces `None` with `datetime.now().isoformat()`** — so the `_get_predictions_in_24h_window` None-skip branch (line 507) is only reachable by appending a raw `{'timestamp': None, ...}` record directly to `self.predictions`.
+- **`_calculate_trends` requires ≥10 predictions** (line 248 guard). Lines **213, 258, 264 are defensive dead code** (the `<10` guard makes empty halves/error-lists unreachable), so they correctly remain the only uncovered lines (3/264 = 99%).
+- **`is_improving` is a `numpy.bool_`** — `np.True_ is True` is `False`; tests use `bool(...) is True/False`.
+- **No live-state-file contamination**: the global `prediction_tracker` is in-memory (no `state_manager`), and state-manager-backed tests use a local `FakeStateManager`. (The broader `clean_model`/`conftest` fixture contamination is a separate pending item.)
+
+#### 📋 Still-pending review items (next Act-mode passes)
+1. ~~**Threshold reconciliation**~~ ✅ DONE. ~~**`prediction_metrics.py` ≥85%**~~ ✅ DONE (99%).
+2. **Fix latent fixture contamination** in `conftest.py`/`clean_model` (isolate from live `unified_thermal_state.json`).
+3. Refactor god-classes (plan-mode first): extract `TrustGate`/`OutletCalculator` from `model_wrapper.py`, `ParameterOptimizer` from `thermal_equilibrium_model.py`, decompose `main()` (1734-line function).
+4. Timezone-aware UTC audit; remove vestigial state-schema fields.
+
+---
+
 ### 🎯 **MAIN.PY COVERAGE PASS (Oct 13, 2026)**
 
 **STATUS**: Completed an approved Act-mode pass: end-to-end `main()` loop integration tests. Full suite **336 passed** (was 332; +4 new). `main.py` coverage **71%** ↑ from 52% (target ≥70% met). Other tracked modules unchanged: `model_wrapper.py` 82%, `thermal_equilibrium_model.py` 84%, `multi_heat_source_physics.py` 80%, `prediction_metrics.py` 63%.
