@@ -33,6 +33,15 @@ try:
 except ImportError:
     from parameter_optimizer import ParameterOptimizer  # type: ignore
 
+# Pass C2: the outlet-temperature inversion (direct-calculation and
+# equilibrium-fallback paths) lives in a dedicated OutletCalculator. The model
+# keeps thin delegating wrappers (same method names/signatures) so call sites
+# and unittest.mock.patch.object(model, ...) patches keep working unchanged.
+try:
+    from .outlet_calculator import OutletCalculator  # type: ignore
+except ImportError:
+    from outlet_calculator import OutletCalculator  # type: ignore
+
 
 class ThermalEquilibriumModel:
     """
@@ -66,6 +75,11 @@ class ThermalEquilibriumModel:
         # Constructed before _load_thermal_parameters, which may call
         # _detect_parameter_corruption during load.
         self._optimizer = ParameterOptimizer(self)
+
+        # OutletCalculator owns the outlet-temperature inversion (Pass C2).
+        # Stateless w.r.t. the model's current parameters, so construction
+        # order does not matter; placed alongside the optimizer for clarity.
+        self._outlet_calc = OutletCalculator(self)
 
         # Load calibrated parameters first, fallback to config defaults
         self._load_thermal_parameters()
@@ -1107,174 +1121,31 @@ class ThermalEquilibriumModel:
         config_override=None,
         **external_sources,
     ):
+        """Calculate optimal outlet temperature to reach target indoor temp.
+
+        Thin delegating wrapper (Pass C2); the implementation lives in
+        ``OutletCalculator`` so the model's public/test contract (direct calls
+        and ``unittest.mock.patch.object``) is preserved.
         """
-        Calculate optimal outlet temperature to reach target indoor
-        temperature.
-        """
-        pv_power = external_sources.get(
-            "pv_power", external_sources.get("pv_now", 0)
+        return self._outlet_calc.calculate_optimal_outlet_temperature(
+            target_indoor,
+            current_indoor,
+            outdoor_temp,
+            time_available_hours,
+            config_override,
+            **external_sources,
         )
-        fireplace_on = external_sources.get("fireplace_on", 0)
-        tv_on = external_sources.get("tv_on", 0)
-
-        temp_change_required = target_indoor - current_indoor
-
-        if abs(temp_change_required) < 0.1:
-            outlet_temp = self._calculate_equilibrium_outlet_temperature(
-                target_indoor, outdoor_temp, pv_power, fireplace_on, tv_on
-            )
-            return {
-                "optimal_outlet_temp": outlet_temp,
-                "method": "equilibrium_maintenance",
-                "temp_change_required": temp_change_required,
-                "time_available": time_available_hours,
-            }
-
-        method = "direct_calculation"
-        heat_loss_coefficient = self.heat_loss_coefficient
-        outlet_effectiveness = self.outlet_effectiveness
-        if config_override:
-            heat_loss_coefficient = config_override.get(
-                "heat_loss_coefficient", heat_loss_coefficient
-            )
-            outlet_effectiveness = config_override.get(
-                "outlet_effectiveness", outlet_effectiveness
-            )
-        total_conductance = heat_loss_coefficient + outlet_effectiveness
-
-        external_heating = (
-            pv_power * self.external_source_weights.get("pv", 0.0)
-            + fireplace_on * self.external_source_weights.get("fireplace", 0.0)
-            + tv_on * self.external_source_weights.get("tv", 0.0)
-        )
-
-        if outlet_effectiveness <= 0:
-            return None
-
-        optimal_outlet = (
-            target_indoor * total_conductance
-            - heat_loss_coefficient * outdoor_temp
-            - external_heating
-        ) / outlet_effectiveness
-        required_equilibrium = target_indoor
-
-        min_outlet = max(outdoor_temp + 5, 25.0)
-        max_outlet = self._MAX_OUTLET_TEMP
-
-        optimal_outlet_bounded = max(
-            min_outlet, min(optimal_outlet, max_outlet)
-        )
-
-        # T0.1: surface when the raw inversion demanded an outlet above the
-        # model's soft-max. Silent ceiling-pegging is the untrained-model
-        # incident signature; flag it so the control layer / HA can alert.
-        if optimal_outlet > max_outlet:
-            self.outlet_clamped_to_max = True
-            logging.warning(
-                "⚠️ Direct-calc outlet clamped to model max %.1f°C "
-                "(raw calc %.1f°C) — possible untrained/degraded parameters.",
-                max_outlet, optimal_outlet,
-            )
-        else:
-            self.outlet_clamped_to_max = False
-
-        if optimal_outlet_bounded < outdoor_temp:
-            fallback_outlet = self._calculate_equilibrium_outlet_temperature(
-                target_indoor, outdoor_temp, pv_power, fireplace_on, tv_on
-            )
-            return {
-                "optimal_outlet_temp": fallback_outlet,
-                "method": "fallback_equilibrium",
-                "reason": "unrealistic_outlet_temp",
-                "original_calculation": optimal_outlet,
-                "temp_change_required": temp_change_required,
-                "time_available": time_available_hours,
-            }
-
-        return {
-            "optimal_outlet_temp": optimal_outlet_bounded,
-            "method": method,
-            "required_equilibrium": required_equilibrium,
-            "temp_change_required": temp_change_required,
-            "time_available": time_available_hours,
-            "external_heating": external_heating,
-            "bounded": optimal_outlet != optimal_outlet_bounded,
-            "original_calculation": optimal_outlet,
-        }
 
     def _calculate_equilibrium_outlet_temperature(
         self, target_temp, outdoor_temp, pv_power=0, fireplace_on=0, tv_on=0
     ):
+        """Calculate outlet temperature needed for equilibrium at target temp.
+
+        Thin delegating wrapper (Pass C2); see ``OutletCalculator``.
         """
-        Calculate outlet temperature needed for equilibrium at target temp.
-        """
-        external_heating = (
-            pv_power * self.external_source_weights["pv"]
-            + fireplace_on * self.external_source_weights["fireplace"]
-            + tv_on * self.external_source_weights["tv"]
+        return self._outlet_calc._calculate_equilibrium_outlet_temperature(
+            target_temp, outdoor_temp, pv_power, fireplace_on, tv_on
         )
-
-        # T0.3: Sanity guard on outlet effectiveness / HLC:OE ratio. An
-        # untrained or degraded model can have a tiny outlet_effectiveness
-        # (or a huge heat_loss_coefficient), which makes the equilibrium
-        # inversion explode to the ceiling — the 65°C incident root cause.
-        # When the parameters are physically implausible, fall back to a
-        # conservative, heat-curve-anchored outlet instead of trusting the
-        # inversion.
-        OE_SAFE_MIN = 0.05
-        HLC_OE_RATIO_MAX = 5.0
-        oe = self.outlet_effectiveness
-        hlc = self.heat_loss_coefficient
-
-        if oe <= 0:
-            self.outlet_clamped_to_max = False
-            return 35.0
-
-        if oe < OE_SAFE_MIN or (hlc / oe) > HLC_OE_RATIO_MAX:
-            self.outlet_clamped_to_max = False
-            # Conservative heat-curve-anchored outlet: the target plus a
-            # bounded lift proportional to the indoor/outdoor delta, never
-            # extreme and always below the model soft-max.
-            lift = max(0.0, target_temp - outdoor_temp) * 0.7
-            conservative_outlet = max(
-                max(outdoor_temp + 5, 25.0),
-                min(self._MAX_OUTLET_TEMP - 5.0, target_temp + lift),
-            )
-            logging.warning(
-                "⚠️ Untrustworthy thermal params (OE=%.4f, HLC=%.4f, "
-                "HLC/OE=%.1f) — using conservative heat-curve-anchored "
-                "outlet %.1f°C instead of equilibrium inversion.",
-                oe, hlc, hlc / oe, conservative_outlet,
-            )
-            return conservative_outlet
-
-        total_conductance = (
-            self.heat_loss_coefficient + self.outlet_effectiveness
-        )
-        equilibrium_outlet = (
-            target_temp * total_conductance
-            - self.heat_loss_coefficient * outdoor_temp
-            - external_heating
-        ) / self.outlet_effectiveness
-
-        min_outlet = max(outdoor_temp + 5, 25.0)
-        max_outlet = self._MAX_OUTLET_TEMP
-
-        clamped_outlet = max(min_outlet, min(equilibrium_outlet, max_outlet))
-
-        # T0.1: flag/warn when the equilibrium outlet is clamped to the
-        # model soft-max.
-        if equilibrium_outlet > max_outlet:
-            self.outlet_clamped_to_max = True
-            logging.warning(
-                "⚠️ Equilibrium outlet clamped to model max %.1f°C "
-                "(raw %.1f°C) — possible untrained/degraded parameters.",
-                max_outlet, equilibrium_outlet,
-            )
-        else:
-            self.outlet_clamped_to_max = False
-
-        return clamped_outlet
 
     def get_feature_importance(self) -> Dict[str, float]:
         """

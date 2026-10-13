@@ -1,5 +1,37 @@
 # Active Context - Current Work & Decision State
 
+### 🎯 **PASS C2 — EXTRACT OutletCalculator + TrustGate (Oct 13, 2026)**
+
+**STATUS**: Completed Act-mode structural refactor. Two more god-class slices extracted with **zero behavior change**; full suite **379 passed**, 0 warnings.
+
+> **Plan-note correction**: the original next-step note said "extract TrustGate/OutletCalculator *from `thermal_equilibrium_model.py`". In reality the **TrustGate** logic lived in `model_wrapper.py` (`EnhancedModelWrapper`), not the model. Only the **OutletCalculator** was in the model. Pass C2 extracts both from their *actual* locations.
+
+**Part 1 — `OutletCalculator` (from `thermal_equilibrium_model.py`)**:
+- New `src/outlet_calculator.py` (`OutletCalculator(model)`), stateless — `self.model` pattern identical to Pass C1's `ParameterOptimizer`.
+- Moved 2 methods: `calculate_optimal_outlet_temperature` (direct-calculation path) + `_calculate_equilibrium_outlet_temperature` (equilibrium-fallback path), including the OE/HLC:OE sanity guards and the unified `_MAX_OUTLET_TEMP` soft-max clamping with `outlet_clamped_to_max` flagging.
+- `self.` → `self.model.` translation; the equilibrium fallback cross-call routes through `self.model._calculate_equilibrium_outlet_temperature(...)` so model monkey-patches still apply. The clamp flag is written onto `self.model` (tests read `model.outlet_clamped_to_max`).
+- Model keeps thin delegating wrappers (same names/signatures); `self._outlet_calc = OutletCalculator(self)` in `__init__`. `outlet_calculator.py` needs only `import logging` (no numpy/config — it reads `self.model._MAX_OUTLET_TEMP` etc.).
+- Test contract: `test_untrained_model_guard.py` constructs the real `ThermalEquilibriumModel()` and calls `model.calculate_optimal_outlet_temperature` / `model._calculate_equilibrium_outlet_temperature` + reads `model.outlet_clamped_to_max` — all preserved (no `patch.object` on these methods).
+
+**Part 2 — `TrustGate` (from `model_wrapper.py`)**:
+- New `src/trust_gate.py` (`TrustGate(wrapper)`), stateless — `self.wrapper` pattern.
+- Moved 6 methods: `_is_model_calibrated`, `_evaluate_parameter_stability`, `_evaluate_calibration_gate`, `_check_auto_promotion`, `_check_accuracy_demotion`, `get_trust_state`.
+- `self.` → `self.wrapper.` translation; cross-calls route through `self.wrapper.<method>()` (e.g. `_evaluate_calibration_gate` → `self.wrapper._evaluate_parameter_stability()`) so wrapper monkey-patches still apply. The `_demotion_streak` counter stays on the wrapper (read/written via `self.wrapper._demotion_streak`), so test fixtures that set `wrapper._demotion_streak` are unaffected. `config` is a `sys.modules` singleton, so `patch('src.model_wrapper.config.<ATTR>')` still reaches the gate.
+- Wrapper keeps thin delegating wrappers (same names/signatures).
+- **Critical `__new__` constraint**: 3 test files (`test_trust_gate_lifecycle.py`, `test_shadow_to_active_lifecycle.py`, `test_passive_learning.py`) build the wrapper via `EnhancedModelWrapper.__new__` (bypassing `__init__`), so the wrapper resolves the gate through a **lazy** `_get_trust_gate()` accessor (`getattr(self,'_trust_gate_obj',None) or TrustGate(self)`) rather than relying on `__init__`. `__init__` *also* constructs it eagerly (`self._trust_gate_obj = TrustGate(self)`) for normal instances.
+
+**Result**:
+- `thermal_equilibrium_model.py` ~1384 → 1261 lines (OutletCalculator slice).
+- `model_wrapper.py` 2678 → 2367 lines (TrustGate slice).
+- New `src/outlet_calculator.py` 227 lines; new `src/trust_gate.py` 426 lines.
+- Net tracked-file diff: +67 / −507 across the two god-classes.
+
+**Validation**: full `tests/` suite **379 passed** (2.16s), 0 warnings, exit 0 (identical count to the pre-C2 baseline); all 4 files `ast.parse` clean; `OutletCalculator` / `TrustGate` import OK; targeted trust-gate + outlet + lifecycle suites green (49 passed).
+
+**Next**: Pass C3 — decompose the long `main()` orchestration function in `main.py`.
+
+---
+
 ### 🎯 **PASS C1 — EXTRACT ParameterOptimizer (Oct 13, 2026)**
 
 **STATUS**: Completed Act-mode structural refactor. Extracted the gradient-based parameter-adaptation cluster out of the `ThermalEquilibriumModel` god-class into a new focused `src/parameter_optimizer.py` (`ParameterOptimizer`). Pure structural refactor — no behavior change; full suite **379 passed**, 0 warnings.
