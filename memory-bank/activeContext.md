@@ -1,5 +1,102 @@
 # Active Context - Current Work & Decision State
 
+### 🎯 **OE DELTA MEAN-REVERSION SAFETY NET — drift recurrence fix (Oct 15, 2026)**
+
+**STATUS**: Act-mode fix **implemented & tested** (394 passed: 387 unit + 7 integration). Closes the last open item of the 5-step OFF→ON transition spike fix plan.
+
+#### Root cause (confirmed)
+`outlet_effectiveness_delta` (persisted in `unified_thermal_state.json`) is a **pure accumulator** in `parameter_optimizer.py::_save_learning_to_thermal_state` (legacy `:876`) with no mean-reversion path. The restoring force (equilibrium-based OE gradient) is gated out of active-heating cycles by the `0.15 °C/cycle` stability threshold (`:624-626`), while the biased trajectory gradient still fires on those cycles → one-sided permanent drift. Symmetric cold-weather damping slows the bias but does not remove it. The Oct-12 manual reset fixed the value, not the mechanism → recurrence was inevitable.
+
+#### Fix (flag-gated, byte-identical on clean-signal cycles)
+- **`src/config.py`**: New `OE_DELTA_MEAN_REVERSION_ENABLED` (default `true`) + `OE_DELTA_MEAN_REVERSION_RATE` (default `0.0001`).
+- **`src/parameter_optimizer.py::_adapt_parameters_from_recent_errors`**:
+  - Captures `trajectory_oe_gradient` (raw, before the equilibrium supplement).
+  - Computes `n_active` / `n_passive` / `n_stable_active_records` (active AND `|indoor_temp_gradient| < 0.15`).
+  - Derives `oe_mean_revert = flag AND (all_passive OR n_stable_active_records == 0)`.
+  - Emits one `info` telemetry line per adaptation cycle: `trajectory_oe_gradient`, `equilibrium_oe_gradient`, `n_stable_active_records`, `n_active`, `n_passive`, `oe_runtime`, `mean_revert`.
+  - When `oe_mean_revert`: suppresses the in-memory `outlet_effectiveness_update = 0.0` (live OE frozen — no biased ratchet on no-signal cycles).
+- **`src/parameter_optimizer.py::_save_learning_to_thermal_state`** (and the `ThermalEquilibriumModel` delegating wrapper): new `oe_mean_revert=False` kwarg. When active, decays `updated_outlet_effectiveness_delta = current * (1 - rate)` instead of accumulating the (possibly-biased) new adjustment, and forces the write past the significance gate so the decay persists even when no parameter changed this cycle. Added an `elif oe_mean_revert:` branch at the save-call site so the decay fires on pure no-op cycles too.
+- **`tests/unit/test_oe_delta_mean_reversion.py`** (6 tests): revert-to-baseline on no-signal (passive + active-but-unstable, incl. multi-cycle monotonic decay), byte-identical accumulation on clean active signal (incl. flag on/off parity), flag-disabled pure-accumulator fallback.
+
+#### Scope & deferrals
+- The decay only touches the persisted delta + in-memory OE on no-signal cycles; clean-signal cycles are byte-identical to legacy. The saturation guard (step 1) continues to protect the live symptom (65 °C spike).
+- **Stability-gate threshold relaxation (`0.15 °C/cycle`) explicitly DEFERRED** until 1–2 weeks of the new telemetry data are available. The mean-reversion is a safety net, not a replacement for letting the equilibrium gradient fire more often.
+- `OE_DELTA_MEAN_REVERSION_ENABLED` defaults `true`; can be flipped to `false` for A/B comparison if drift recurs.
+
+#### Verification
+- New tests: 6/6 pass.
+- Full suite: **394 passed** (was 388; +6 new), 2.30s, zero regressions.
+
+---
+
+### 🎯 **STEPS 2, 3, 5 — OFF→ON spike fix (Oct 15, 2026)**
+
+**STATUS**: Act-mode fix **implemented & tested** (388 passed: 381 unit + 7 integration). Completes steps 2, 3, and 5 of the 5-step plan (step 1 saturation guard done prior; step 4 dropped as stale).
+
+#### Step 3 — heat_curve_outlet sourcing (DONE)
+**Root cause**: `heat_curve_temp` was sourced from `ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID`, which in active mode points to `sensor.ml_vorlauftemperatur` (the ML's own entity) → feedback contamination. The feature fed the model its own previous command, making the deviation metric meaningless.
+
+**Fix**:
+- New config var `HEAT_CURVE_OUTLET_ENTITY_ID` in `src/config.py` (default `sensor.hp_target_temp_circuit1`, same as the heat pump's own curve). Falls back to `ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID` if unset → backward compatible.
+- Updated 2 of 3 call sites in `src/main.py`: feature injection (~line 1237) and shadow-mode deviation logging (~line 1705) now source from `config.HEAT_CURVE_OUTLET_ENTITY_ID`.
+- `src/temperature_control.py:213` left unchanged — it legitimately reads the *applied* setpoint (not the heat curve anchor).
+- Added `HEAT_CURVE_OUTLET_ENTITY_ID=sensor.hp_target_temp_circuit1` to `.env`.
+- No test-fixture changes needed: both config values resolve to the same entity ID string, so existing mock state dicts cover it.
+
+#### Step 5 — prediction metrics persistence (DONE)
+**Root cause**: `PredictionMetrics._save_to_state()` persisted `total_predictions` but never wrote the computed `accuracy_stats` (mae_1h/6h/24h/all_time, rmse_all_time) or `recent_performance` (last_10_mae/max_error) to the state dict — they stayed at initialized zeros in `unified_thermal_state.json` forever. Diagnostics-only; control unaffected (in-memory object recomputes on restart).
+
+**Fix**:
+- In `src/prediction_metrics.py::_save_to_state()`, added a nested try/except that calls `get_metrics(refresh_cache=True)` and `get_recent_performance(10)`, writing the results into `state["prediction_metrics"]["accuracy_stats"]` and `["recent_performance"]`. Nested so a metrics-computation failure never blocks saving the prediction history.
+- Updated `FakeStateManager` in `tests/unit/test_prediction_metrics.py` to carry the full default `prediction_metrics` structure (matching `unified_thermal_state.py`).
+- 4 new tests: `persists_computed_accuracy_stats`, `persists_recent_performance`, `accuracy_stats_zeros_when_no_predictions`, `metrics_failure_does_not_block_history_save`.
+- Updated `test_add_prediction_creates_record_and_invalidates_cache`: `_save_to_state` now repopulates the metrics cache as a side-effect of computing accuracy_stats — assertion changed from `_cache_timestamp is None` to `get_metrics()["all"]["count"] == 1` (proves stale cache was invalidated and fresh data is reflected).
+
+#### Step 2 — OE delta reset (DONE)
+**Root cause**: `outlet_effectiveness_delta = −0.252` in `unified_thermal_state.json` → runtime OE = 0.855 (weak coupling → binary search saturates). Baseline OE (1.107) is healthy.
+
+**Fix**:
+- Backed up state file to `unified_thermal_state.json.bak.pre-oe-reset-<timestamp>`.
+- Reset `outlet_effectiveness_delta` → 0.0 (runtime OE restored to baseline 1.107).
+- Also reset `heat_loss_coefficient_delta` → 0.0 (was −0.088, compounds the weak-coupling effect).
+- **⚠️ Recurrence risk**: OE delta was previously reset on Oct 12 and drifted back. The equilibrium-based OE gradient in `parameter_optimizer.py` may not fire during heating-off periods (passive records are skipped). The saturation guard (step 1) now prevents the *symptom* (65°C spike) even if OE drifts again, but the *root recurrence path* in `parameter_optimizer.py` symmetric damping / equilibrium gradient gating is **not yet investigated**.
+
+#### Step 4 — DROPPED
+`last_cycle_time` at `main.py:1840` is correct; the "+5min/cycle growth" claim was stale/incorrect.
+
+---
+
+
+# Active Context - Current Work & Decision State
+
+### 🎯 **SATURATION GUARD — OFF→ON transition spike fix (Oct 15, 2026)**
+
+**STATUS**: Act-mode fix **implemented & unit-tested** (377 passed). This is **step 1 of the approved 5-step plan**; steps 2–5 remain open.
+
+**Problem**: On heating OFF→ON transitions, the ML binary search saturated at the 65°C clamp (`CLAMP_MAX_ABS` from `.env`) because outlet→indoor coupling was too weak (OE drifted to 0.855 vs 1.107 baseline; OE gradient intentionally frozen during heating-off). Even at the ceiling, predicted indoor missed target → the search returned **65°C as a trusted command**, vs the heat curve's self-limited **42°C** (+23°C deviation). The heat curve self-limits (shift automation caps at +10), but the ML had no equivalent guard.
+
+**Fix (step 1 — DONE)**: Added a **saturation guard** in `src/model_wrapper.py` `calculate_optimal_outlet_temp`:
+- New `_apply_saturation_guard(ml_outlet, predicted_indoor, current_indoor, target_indoor, heat_curve_temp)` method.
+- Detects saturation: heating (target>current, `ml_outlet >= CLAMP_MAX_ABS - margin`, `predicted_indoor < target - tol`) and the cooling mirror.
+- When saturated, **does NOT command the clamp extreme**. Falls back toward the heat-pump's own curve outlet, capped to `heat_curve + SATURATION_GUARD_MAX_DELTA` (default 10°C, mirroring the curve's own +shift cap).
+- **Contamination rejection**: in active mode the heat-curve entity (`ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID`) echoes the ML's own previous command (observed 65°C). Reuses the passthrough bounds `[AUTO_CAL_PASSTHROUGH_MIN_OUTLET=15, PASSTHROUGH_MAX_SAFE_OUTLET=50]` to reject contaminated readings; on rejection, heating → `CONSERVATIVE_FALLBACK_TEMP` (35), cooling → `CLAMP_MIN_ABS` (floor, since the 35 fallback is heating-biased and would wrongly raise a cooling outlet).
+- Metadata: `saturation_guarded`, `saturation_reason`, `ml_outlet_temp_raw` (unguarded value preserved for diagnostics). Does **not** touch trust state (avoids demotion-spiral per prior learnings).
+- New config flags in `src/config.py`: `SATURATION_GUARD_ENABLED` (true), `SATURATION_GUARD_MARGIN` (0.5), `SATURATION_GUARD_MAX_DELTA` (10.0).
+
+**Tests added** (`tests/unit/test_model_wrapper.py::TestSaturationGuard`, 5 tests): heating-saturation-caps-to-heat-curve (reproduces the incident: 65→52), contaminated-heat-curve-rejected (65→35), no-saturation-when-target-reachable (genuine cold-weather demand passes through), guard-disabled-passthrough, cooling-saturation-at-floor. Also updated `tests/unit/test_regression_scenarios.py::test_startup_overshoot_prevention` to provide a realistic `heat_curve_temp` (the guard now correctly caps the weak-OE startup to curve+delta instead of the raw 65 spike — better fulfils the "no extreme spike" intent).
+
+**Gotcha fixed during testing**: `mocker.patch('src.config.X', v)` (string-based) is vulnerable to a *transient* whole-module `patch('src.config')` from `test_regression_scenarios.py` replacing the `src.config` **package attribute** with a Mock; model_wrapper reads the real `sys.modules['src.config']` module object (bound via `from src import config` at import), so the string patch silently no-ops. Use **object-based** `mocker.patch.object(config, 'SATURATION_GUARD_ENABLED', False)` (the test's `config` is bound to the real module at collection) to patch what model_wrapper actually reads. Note: `test_regression_scenarios`'s `patch('src.config')` is effectively a no-op for model_wrapper config (model_wrapper uses real config all along); only test fields set on the mock that *happen* to match real defaults mask this.
+
+**REMAINING (steps 2–5, not yet done)**:
+2. **Repair OE baseline** — `calibrated_baseline.json` empty/missing; investigate/restore it, reset `outlet_effectiveness_delta` from −0.252 toward 0 (the root cause that makes the search saturate in the first place). The saturation guard is a *safety net*, not a cure for OE drift.
+3. **Fix `heat_curve_outlet` sourcing** — in active mode `heat_curve_temp`/`heat_curve_outlet` echoes the ML's own applied setpoint (reads `ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID`), so the deviation metric is unreliable when it matters most. Compute an *independent* heat-curve value instead of echoing the applied setpoint.
+4. **Fix `last_cycle_time`** — never updated → cycle interval grows +5min/cycle.
+5. **Fix persisted prediction metrics** — zeroed in `unified_thermal_state.json`.
+
+**Files changed**: `src/config.py` (+saturation-guard flags), `src/model_wrapper.py` (+`_apply_saturation_guard` method + call site), `tests/unit/test_model_wrapper.py` (+TestSaturationGuard), `tests/unit/test_regression_scenarios.py` (+heat_curve_temp).
+
+---
+
 ### 🎯 **PASS C3 — Decompose `main()` in `src/main.py` (Oct 13, 2026)**
 
 **STATUS**: Completed Act-mode structural refactor. The ~1630-line `main()` body was decomposed into **17 module-level helper functions** with **zero behavior change**; full suite **379 passed** (2.05s), 0 new warnings; `ast.parse` clean; `pyflakes` clean except one *pre-existing* dead assignment (`shadow_mode_active` in `_run_online_learning`, faithfully moved from the original block).

@@ -1246,6 +1246,7 @@ class ThermalEquilibriumModel:
         new_outlet_effectiveness_adjustment,
         new_pv_heat_weight_adjustment=0.0,
         new_tv_heat_weight_adjustment=0.0,
+        oe_mean_revert=False,
     ):
         """Save learned parameter adjustments to unified thermal state (delegated)."""
         return self._optimizer._save_learning_to_thermal_state(
@@ -1254,6 +1255,7 @@ class ThermalEquilibriumModel:
             new_outlet_effectiveness_adjustment,
             new_pv_heat_weight_adjustment,
             new_tv_heat_weight_adjustment,
+            oe_mean_revert=oe_mean_revert,
         )
 
     def _detect_parameter_corruption(self) -> bool:

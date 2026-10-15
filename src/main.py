@@ -1235,7 +1235,7 @@ def main():
             # ceiling (untrained-model incident guard).
             try:
                 _heat_curve_temp = ha_client.get_state(
-                    config.ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID, all_states
+                    config.HEAT_CURVE_OUTLET_ENTITY_ID, all_states
                 )
             except Exception:
                 _heat_curve_temp = None
@@ -1703,7 +1703,7 @@ def main():
             if effective_shadow_mode:
                 # Read what the heat curve actually set
                 heat_curve_temp = ha_client.get_state(
-                    config.ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID, all_states
+                    config.HEAT_CURVE_OUTLET_ENTITY_ID, all_states
                 )
 
                 if (

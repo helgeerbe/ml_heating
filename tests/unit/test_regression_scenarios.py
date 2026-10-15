@@ -98,6 +98,12 @@ class TestRegressionScenarios(unittest.TestCase):
             "pv_forecast_2h": 0.0,
             "pv_forecast_3h": 0.0,
             "pv_forecast_4h": 0.0,
+            # Heat-pump curve outlet for this outdoor temp (~5°C). Real cycles
+            # always carry this; the saturation guard anchors to it when the
+            # (deliberately weak, OE=0.8) model can't reach target even at the
+            # clamp, capping the outlet to curve + bounded delta instead of
+            # the raw saturated 65°C spike.
+            "heat_curve_temp": 45.0,
         }
 
         # Run prediction

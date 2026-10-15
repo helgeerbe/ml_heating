@@ -138,6 +138,18 @@ TARGET_OUTLET_TEMP_ENTITY_ID: str = os.getenv(
 ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID: str = os.getenv(
     "ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID", "sensor.hp_target_temp_circuit1"
 )
+# The heat pump's own heat-curve target outlet, independent of the ML command
+# entity. Used to source an uncontaminated heat-curve anchor for feature
+# injection (heat_curve_temp) and shadow-mode deviation metrics, even in
+# active mode where ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID points at the ML's
+# own entity (sensor.ml_vorlauftemperatur) — which would create a feedback
+# loop. Falls back to ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID for backward
+# compatibility (shadow mode where both resolve to the same entity).
+HEAT_CURVE_OUTLET_ENTITY_ID: str = os.getenv(
+    "HEAT_CURVE_OUTLET_ENTITY_ID"
+) or os.getenv(
+    "ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID", "sensor.hp_target_temp_circuit1"
+)
 
 # --- Blocking & Status Entity IDs ---
 # These binary sensors can pause the script's operation. For example, if the
@@ -274,6 +286,59 @@ AUTO_CAL_PASSTHROUGH_MIN_OUTLET: float = float(
 # entity. Default 50 °C; tune via env var if needed.
 PASSTHROUGH_MAX_SAFE_OUTLET: float = float(
     os.getenv("PASSTHROUGH_MAX_SAFE_OUTLET", "50.0")
+)
+
+# --- Saturation Guard ---
+# When the binary search saturates at the absolute clamp ceiling (heating) or
+# floor (cooling) and the predicted indoor temperature *still* cannot reach
+# the target, the model's outlet→indoor coupling is too weak to be trustworthy
+# (typically outlet-effectiveness drift after a long heating-off period). In
+# that case the ML must NOT command the clamp extreme; instead it falls back
+# toward the heat-pump's own curve (mirroring the curve's deliberate +shift
+# self-limit) and accepts the residual error. This directly prevents the
+# OFF→ON transition spike (e.g. 65 °C commanded vs ~42 °C heat curve, +23 °C
+# deviation) observed when stale outlet effectiveness makes the search
+# unable to reach target even at the ceiling.
+SATURATION_GUARD_ENABLED: bool = (
+    os.getenv("SATURATION_GUARD_ENABLED", "true").lower() == "true"
+)
+# How close to the clamp (°C) counts as "saturated". The binary search result
+# is considered saturated if it is within this margin of CLAMP_MAX_ABS
+# (heating) or CLAMP_MIN_ABS (cooling).
+SATURATION_GUARD_MARGIN: float = float(
+    os.getenv("SATURATION_GUARD_MARGIN", "0.5")
+)
+# Maximum deviation (°C) the guarded outlet may exceed the heat-curve outlet
+# when saturated (heating) / fall below it (cooling). Mirrors the heat curve's
+# own +shift cap so the ML is no more aggressive than the curve it replaces.
+SATURATION_GUARD_MAX_DELTA: float = float(
+    os.getenv("SATURATION_GUARD_MAX_DELTA", "10.0")
+)
+
+# OE delta mean-reversion safety net (drift recurrence fix).
+# ``outlet_effectiveness_delta`` (persisted in unified_thermal_state.json) is
+# a pure accumulator: every cycle adds the new OE adjustment with no reversion
+# path, so any biased OE signal drifts it permanently across a season (the
+# 2026-10-12 manual reset fixed the value, not the mechanism). The restoring
+# force is the equilibrium-based OE gradient, but it is gated out of
+# active-heating cycles by the 0.15 C/cycle stability threshold, while the
+# biased trajectory gradient still fires on those cycles -> one-sided drift.
+# When there is no clean OE signal (fully-passive window OR zero stable active
+# records) the persisted delta is decayed toward 0.0 so the runtime OE
+# self-heals to baseline on the next restart instead of ratcheting away. On
+# cycles that carry a clean OE signal (>=1 stable active record) the decay is
+# skipped entirely -- behaviour is byte-identical to the legacy accumulator.
+# Disable to revert to pure-accumulator behaviour for debugging/A-B testing.
+OE_DELTA_MEAN_REVERSION_ENABLED: bool = (
+    os.getenv("OE_DELTA_MEAN_REVERSION_ENABLED", "true").lower() == "true"
+)
+# Fraction of the accumulated OE delta reverted toward 0 per adaptation cycle
+# when mean-reversion is active. 1e-4/cycle is ~0.7%/day at 30-min cycles --
+# slow enough that it never opposes a genuine clean-signal update (which
+# writes the full gradient step, not the decay), fast enough to heal a
+# season-scale drift in a few days.
+OE_DELTA_MEAN_REVERSION_RATE: float = float(
+    os.getenv("OE_DELTA_MEAN_REVERSION_RATE", "0.0001")
 )
 
 TRAJECTORY_STEPS: int = int(os.getenv("TRAJECTORY_STEPS", "4"))

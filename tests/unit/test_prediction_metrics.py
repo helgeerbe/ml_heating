@@ -34,7 +34,20 @@ class FakeStateManager:
         records = list(history or [])
         self.state = {
             "learning_state": {"prediction_history": records},
-            "prediction_metrics": {"total_predictions": len(records)},
+            "prediction_metrics": {
+                "total_predictions": len(records),
+                "accuracy_stats": {
+                    "mae_1h": 0.0,
+                    "mae_6h": 0.0,
+                    "mae_24h": 0.0,
+                    "mae_all_time": 0.0,
+                    "rmse_all_time": 0.0,
+                },
+                "recent_performance": {
+                    "last_10_mae": 0.0,
+                    "last_10_max_error": 0.0,
+                },
+            },
         }
         self.save_calls = 0
 
@@ -143,6 +156,66 @@ def test_save_to_state_exception_is_swallowed():
     metrics._save_to_state()  # must not raise (lines 112-113)
 
 
+def test_save_to_state_persists_computed_accuracy_stats():
+    """_save_to_state must write live-computed MAE/RMSE into accuracy_stats,
+    not leave them at the initial zeros (the pre-fix bug)."""
+    sm = FakeStateManager()
+    metrics = PredictionMetrics(state_manager=sm)
+    # add_prediction creates records with abs_error/squared_error and
+    # auto-calls _save_to_state, so accuracy_stats should be populated.
+    metrics.add_prediction(20.0, 20.5)   # abs_error 0.5
+    metrics.add_prediction(21.0, 20.0)   # abs_error 1.0
+
+    stats = sm.state["prediction_metrics"]["accuracy_stats"]
+    assert stats["mae_all_time"] == pytest.approx(0.75)  # (0.5 + 1.0) / 2
+    assert stats["rmse_all_time"] > 0.0
+    # The 1h window (12 predictions) covers both, so mae_1h matches all-time.
+    assert stats["mae_1h"] == pytest.approx(0.75)
+    assert sm.save_calls == 2  # one per add_prediction
+
+
+def test_save_to_state_persists_recent_performance():
+    """_save_to_state must write recent_performance with live values."""
+    sm = FakeStateManager()
+    metrics = PredictionMetrics(state_manager=sm)
+    metrics.add_prediction(20.0, 20.0)   # abs_error 0.0
+    metrics.add_prediction(20.0, 21.0)   # abs_error 1.0
+
+    perf = sm.state["prediction_metrics"]["recent_performance"]
+    assert perf["last_10_mae"] == pytest.approx(0.5)  # (0.0 + 1.0) / 2
+    assert perf["last_10_max_error"] == pytest.approx(1.0)
+
+
+def test_save_to_state_accuracy_stats_zeros_when_no_predictions():
+    """With an empty deque, accuracy_stats should be zeros (not stale)."""
+    sm = FakeStateManager()
+    metrics = PredictionMetrics(state_manager=sm)
+    metrics._save_to_state()
+
+    stats = sm.state["prediction_metrics"]["accuracy_stats"]
+    assert stats["mae_all_time"] == 0.0
+    assert stats["rmse_all_time"] == 0.0
+    perf = sm.state["prediction_metrics"]["recent_performance"]
+    assert perf["last_10_mae"] == 0.0
+
+
+def test_save_to_state_metrics_failure_does_not_block_history_save():
+    """If get_metrics raises (e.g. records missing abs_error), the prediction
+    history must still be saved — metrics persistence is best-effort."""
+    sm = FakeStateManager()
+    metrics = PredictionMetrics(state_manager=sm)
+    # Append raw records without abs_error/squared_error (as _record does).
+    # get_metrics will KeyError on p['abs_error'], but save must proceed.
+    metrics.predictions.append(_record(20.0, 20.5))
+    metrics.predictions.append(_record(21.0, 20.0))
+
+    metrics._save_to_state()
+
+    assert sm.save_calls == 1
+    assert len(sm.state["learning_state"]["prediction_history"]) == 2
+    assert sm.state["prediction_metrics"]["total_predictions"] == 2
+
+
 # --- add_prediction --------------------------------------------------------
 
 
@@ -153,7 +226,10 @@ def test_add_prediction_creates_record_and_invalidates_cache():
 
     metrics.add_prediction(20.0, 20.5, context={"outlet_temp": 45.0})
 
-    assert metrics._cache_timestamp is None
+    # add_prediction invalidates the cache (line 150). _save_to_state may
+    # repopulate it as a side-effect of computing accuracy_stats for
+    # persistence, but get_metrics must reflect the new record regardless.
+    assert metrics.get_metrics()["all"]["count"] == 1
     rec = list(metrics.predictions)[0]
     assert rec["predicted"] == 20.0
     assert rec["actual"] == 20.5

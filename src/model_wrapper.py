@@ -321,6 +321,147 @@ class EnhancedModelWrapper:
             ml_predicted_outlet, heat_curve_outlet
         )
 
+    def _apply_saturation_guard(
+        self,
+        ml_outlet: float,
+        predicted_indoor: float,
+        current_indoor: float,
+        target_indoor: float,
+        heat_curve_temp: Optional[float],
+    ) -> Tuple[float, bool, Optional[str]]:
+        """Cap an ML outlet that saturates against the absolute clamp.
+
+        The binary search in ``_calculate_required_outlet_temp`` can exit
+        pinned to ``CLAMP_MAX_ABS`` (heating) or ``CLAMP_MIN_ABS`` (cooling)
+        while the predicted indoor temperature *still* misses the target.
+        This happens when the model's outlet→indoor coupling is too weak
+        (e.g. outlet-effectiveness drift after a long heating-off period),
+        and is most severe on the OFF→ON transition. Commanding the clamp
+        extreme in that state is unsafe and far above what the heat-pump's
+        own curve would set.
+
+        This guard detects that saturation and falls back toward the
+        heat-pump's own curve outlet, capped to a bounded deviation
+        (``SATURATION_GUARD_MAX_DELTA``), mirroring the curve's deliberate
+        self-limiting behaviour. Contaminated heat-curve readings (the ML's
+        own previous command echoed back through the heat-curve entity in
+        active mode) are rejected using the same bounds as the passthrough
+        guard, falling back to ``CONSERVATIVE_FALLBACK_TEMP``.
+
+        Returns ``(outlet, was_guarded, reason)``.
+        """
+        if not config.SATURATION_GUARD_ENABLED:
+            return ml_outlet, False, None
+
+        # Predicted must miss the target by more than this to count as a
+        # genuine miss rather than converged-but-rounding.
+        tolerance = 0.05  # °C
+        temp_diff = target_indoor - current_indoor
+
+        def _safe_heat_curve(value: Optional[float]) -> Optional[float]:
+            if value is None:
+                return None
+            try:
+                v = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not (
+                config.AUTO_CAL_PASSTHROUGH_MIN_OUTLET
+                <= v
+                <= config.PASSTHROUGH_MAX_SAFE_OUTLET
+            ):
+                return None
+            return v
+
+        # --- Heating scenario: target above current ---
+        if (
+            temp_diff > 0.1
+            and ml_outlet >= (
+                config.CLAMP_MAX_ABS - config.SATURATION_GUARD_MARGIN
+            )
+            and predicted_indoor < (target_indoor - tolerance)
+        ):
+            reason = "heating-saturated-at-ceiling"
+            hc = _safe_heat_curve(heat_curve_temp)
+            if hc is None:
+                # No genuine curve available (offline or contaminated by the
+                # ML's own previous command). Use the conservative fallback
+                # directly — do NOT inflate it by the delta, which is only
+                # meant to let the ML be slightly more aggressive than a
+                # *genuine* curve.
+                guarded = config.CONSERVATIVE_FALLBACK_TEMP
+                anchor_src = (
+                    "conservative-fallback "
+                    "(heat-curve unavailable/contaminated)"
+                )
+            else:
+                guarded = min(
+                    config.CLAMP_MAX_ABS,
+                    hc + config.SATURATION_GUARD_MAX_DELTA,
+                )
+                anchor_src = f"heat-curve={hc:.1f}°C"
+            guarded = max(guarded, config.CLAMP_MIN_ABS)
+
+            logging.warning(
+                "🛑 SATURATION GUARD (heating): ML %.1f°C predicted only "
+                "%.2f°C indoor (target %.1f°C, current %.1f°C) even at the "
+                "clamp — outlet→indoor coupling too weak. Capping to %.1f°C "
+                "(anchor: %s, max +%.1f°C).",
+                ml_outlet,
+                predicted_indoor,
+                target_indoor,
+                current_indoor,
+                guarded,
+                anchor_src,
+                config.SATURATION_GUARD_MAX_DELTA,
+            )
+            return guarded, True, reason
+
+        # --- Cooling scenario: target below current ---
+        if (
+            temp_diff < -0.1
+            and ml_outlet <= (
+                config.CLAMP_MIN_ABS + config.SATURATION_GUARD_MARGIN
+            )
+            and predicted_indoor > (target_indoor + tolerance)
+        ):
+            reason = "cooling-saturated-at-floor"
+            hc = _safe_heat_curve(heat_curve_temp)
+            if hc is None:
+                # No genuine curve available. CONSERVATIVE_FALLBACK_TEMP is a
+                # heating-biased value and would wrongly RAISE the outlet in a
+                # cooling scenario. The binary search already concluded the
+                # minimum outlet is needed; keep it at the floor rather than
+                # inflating it.
+                guarded = config.CLAMP_MIN_ABS
+                anchor_src = (
+                    "floor-clamp (heat-curve unavailable/contaminated)"
+                )
+            else:
+                guarded = max(
+                    config.CLAMP_MIN_ABS,
+                    hc - config.SATURATION_GUARD_MAX_DELTA,
+                )
+                anchor_src = f"heat-curve={hc:.1f}°C"
+            guarded = min(guarded, config.CLAMP_MAX_ABS)
+
+            logging.warning(
+                "🛑 SATURATION GUARD (cooling): ML %.1f°C predicted only "
+                "%.2f°C indoor (target %.1f°C, current %.1f°C) even at the "
+                "floor — outlet→indoor coupling too weak. Capping to %.1f°C "
+                "(anchor: %s, max −%.1f°C).",
+                ml_outlet,
+                predicted_indoor,
+                target_indoor,
+                current_indoor,
+                guarded,
+                anchor_src,
+                config.SATURATION_GUARD_MAX_DELTA,
+            )
+            return guarded, True, reason
+
+        return ml_outlet, False, None
+
     def calculate_optimal_outlet_temp(
         self, features: Dict
     ) -> Tuple[float, Dict]:
@@ -385,6 +526,31 @@ class EnhancedModelWrapper:
                     "Failed to calculate optimal outlet temperature"
                 )
                 optimal_outlet_temp = 35.0  # Safe fallback
+
+            # SATURATION GUARD: if the binary search saturated against the
+            # absolute clamp and still cannot reach the target (weak
+            # outlet→indoor coupling, e.g. after a long heating-off period),
+            # do not command the clamp extreme. Fall back toward the
+            # heat-pump's own curve (mirroring its deliberate self-limit) so
+            # the ML is no more aggressive than the curve it replaces. This
+            # directly prevents the OFF→ON transition spike. The raw unguarded
+            # ML value is preserved in metadata for diagnostics.
+            _ml_outlet_raw = optimal_outlet_temp
+            (
+                optimal_outlet_temp,
+                _saturation_guarded,
+                _saturation_reason,
+            ) = self._apply_saturation_guard(
+                ml_outlet=_ml_outlet_raw,
+                predicted_indoor=predicted_indoor,
+                current_indoor=current_indoor,
+                target_indoor=target_indoor,
+                heat_curve_temp=features.get("heat_curve_temp"),
+            )
+            prediction_metadata["saturation_guarded"] = _saturation_guarded
+            prediction_metadata["ml_outlet_temp_raw"] = _ml_outlet_raw
+            if _saturation_guarded:
+                prediction_metadata["saturation_reason"] = _saturation_reason
 
             # T0.2b: Self-calibrating trust gate. While the model is not trusted
             # (uncalibrated baseline / too few predictions / demoted), it must

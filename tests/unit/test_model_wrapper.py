@@ -335,3 +335,158 @@ class TestEnhancedModelWrapper:
         # It should receive current_indoor (20.0) as living_room_temp
         _, kwargs = mock_learner.observe_fireplace_state.call_args
         assert kwargs['living_room_temp'] == 20.0
+
+
+class TestSaturationGuard:
+    """Tests for the saturation guard that caps ML outlets pinned to the
+    absolute clamp when the predicted indoor still cannot reach the target
+    (weak outlet->indoor coupling, e.g. after a long heating-off period)."""
+
+    def test_heating_saturation_caps_to_heat_curve(self, trusted_wrapper_instance, mocker):
+        """Reproduce the OFF->ON incident: binary search saturates at the
+        65C ceiling but predicted indoor (20.0) still misses the 21.5C
+        target. The guard must NOT command 65C; it must fall back toward
+        the heat-curve value (42C) capped to a bounded deviation."""
+        mocker.patch.object(
+            trusted_wrapper_instance, '_calculate_required_outlet_temp',
+            return_value=65.0,
+        )
+        mocker.patch.object(
+            trusted_wrapper_instance, 'predict_indoor_temp',
+            return_value=20.0,
+        )
+
+        test_features = {
+            'indoor_temp_lag_30m': 19.0,
+            'target_temp': 21.5,
+            'outdoor_temp': 17.0,
+            'heat_curve_temp': 42.0,
+        }
+
+        optimal_temp, metadata = (
+            trusted_wrapper_instance.calculate_optimal_outlet_temp(test_features)
+        )
+
+        assert optimal_temp < 65.0, (
+            f"Saturation guard failed: commanded {optimal_temp}C at the clamp"
+        )
+        assert optimal_temp == pytest.approx(52.0, abs=0.5)
+        assert metadata['saturation_guarded'] is True
+        assert metadata['saturation_reason'] == 'heating-saturated-at-ceiling'
+        assert metadata['ml_outlet_temp_raw'] == 65.0
+
+    def test_heating_saturation_rejects_contaminated_heat_curve(self, trusted_wrapper_instance, mocker):
+        """In active mode the heat-curve entity echoes the ML's own previous
+        high command (e.g. 65C). The guard must reject this contaminated
+        reading and fall back to the conservative fallback, not 65 + delta."""
+        mocker.patch.object(
+            trusted_wrapper_instance, '_calculate_required_outlet_temp',
+            return_value=65.0,
+        )
+        mocker.patch.object(
+            trusted_wrapper_instance, 'predict_indoor_temp',
+            return_value=20.0,
+        )
+
+        test_features = {
+            'indoor_temp_lag_30m': 19.0,
+            'target_temp': 21.5,
+            'outdoor_temp': 17.0,
+            'heat_curve_temp': 65.0,
+        }
+
+        optimal_temp, metadata = (
+            trusted_wrapper_instance.calculate_optimal_outlet_temp(test_features)
+        )
+
+        assert optimal_temp == pytest.approx(
+            config.CONSERVATIVE_FALLBACK_TEMP, abs=0.5
+        )
+        assert metadata['saturation_guarded'] is True
+
+    def test_no_saturation_when_target_reachable(self, trusted_wrapper_instance, mocker):
+        """When the binary search reaches the ceiling but the predicted
+        indoor actually meets the target, the model is genuinely demanding
+        high heat (cold weather) - the guard must NOT intervene."""
+        mocker.patch.object(
+            trusted_wrapper_instance, '_calculate_required_outlet_temp',
+            return_value=60.0,
+        )
+        mocker.patch.object(
+            trusted_wrapper_instance, 'predict_indoor_temp',
+            return_value=21.5,
+        )
+
+        test_features = {
+            'indoor_temp_lag_30m': 18.0,
+            'target_temp': 21.5,
+            'outdoor_temp': -10.0,
+            'heat_curve_temp': 48.0,
+        }
+
+        optimal_temp, metadata = (
+            trusted_wrapper_instance.calculate_optimal_outlet_temp(test_features)
+        )
+
+        assert metadata['saturation_guarded'] is False
+        assert optimal_temp <= 65.0
+
+    def test_guard_disabled_passthrough(self, trusted_wrapper_instance, mocker):
+        """With SATURATION_GUARD_ENABLED=false, a saturated search returns
+        the raw clamp value unchanged (legacy behaviour)."""
+        mocker.patch.object(
+            trusted_wrapper_instance, '_calculate_required_outlet_temp',
+            return_value=65.0,
+        )
+        mocker.patch.object(
+            trusted_wrapper_instance, 'predict_indoor_temp',
+            return_value=20.0,
+        )
+        # Patch the real config module object directly (not via the
+        # 'src.config' package attribute, which another test's whole-module
+        # ``patch('src.config')`` may have transiently replaced with a Mock).
+        # model_wrapper reads ``config.SATURATION_GUARD_ENABLED`` from this
+        # exact module object, so an object-based patch is robust to that
+        # pollution.
+        mocker.patch.object(config, 'SATURATION_GUARD_ENABLED', False)
+
+        test_features = {
+            'indoor_temp_lag_30m': 19.0,
+            'target_temp': 21.5,
+            'outdoor_temp': 17.0,
+            'heat_curve_temp': 42.0,
+        }
+
+        optimal_temp, metadata = (
+            trusted_wrapper_instance.calculate_optimal_outlet_temp(test_features)
+        )
+
+        assert metadata['saturation_guarded'] is False
+
+    def test_cooling_saturation_caps_at_floor(self, trusted_wrapper_instance, mocker):
+        """Mirror case: cooling scenario saturates at the floor clamp while
+        predicted indoor still exceeds target -> guard caps toward curve."""
+        mocker.patch.object(
+            trusted_wrapper_instance, '_calculate_required_outlet_temp',
+            return_value=config.CLAMP_MIN_ABS,
+        )
+        mocker.patch.object(
+            trusted_wrapper_instance, 'predict_indoor_temp',
+            return_value=23.0,
+        )
+
+        test_features = {
+            'indoor_temp_lag_30m': 24.0,
+            'target_temp': 21.0,
+            'outdoor_temp': 28.0,
+            'heat_curve_temp': 30.0,
+        }
+
+        optimal_temp, metadata = (
+            trusted_wrapper_instance.calculate_optimal_outlet_temp(test_features)
+        )
+
+        assert metadata['saturation_guarded'] is True
+        assert metadata['saturation_reason'] == 'cooling-saturated-at-floor'
+        assert optimal_temp == pytest.approx(20.0, abs=0.5)
+

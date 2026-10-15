@@ -1,6 +1,34 @@
 # ML Heating System - Current Progress
 
-### 🎯 CURRENT STATUS - October 13, 2026 (Pass C3: decompose long `main()` in `main.py`)
+### 🎯 CURRENT STATUS - October 15, 2026 (OE delta mean-reversion safety net complete)
+
+**OE delta mean-reversion safety net implemented & tested (394 passed: 387 unit + 7 integration).** Closes the last open item of the 5-step OFF→ON transition spike fix plan.
+
+- **OE delta mean-reversion (drift recurrence fix)**: `outlet_effectiveness_delta` was a pure accumulator with no reversion path — the equilibrium OE gradient (restoring force) is gated out of active-heating cycles by the `0.15 °C/cycle` stability threshold while the biased trajectory gradient still fires → one-sided permanent drift (the Oct-12 reset fixed the value, not the mechanism). Fix is flag-gated and byte-identical on clean-signal cycles:
+  - **`src/config.py`**: new `OE_DELTA_MEAN_REVERSION_ENABLED` (default `true`) + `OE_DELTA_MEAN_REVERSION_RATE` (default `0.0001`, ≈0.7%/day at 30-min cycles).
+  - **`src/parameter_optimizer.py::_adapt_parameters_from_recent_errors`**: captures `trajectory_oe_gradient`; computes `n_active`/`n_passive`/`n_stable_active_records`; derives `oe_mean_revert = flag AND (all_passive OR n_stable_active_records == 0)`; emits one `info` telemetry line per adaptation cycle (`trajectory_oe_gradient`, `equilibrium_oe_gradient`, `n_stable_active_records`, `n_active`, `n_passive`, `oe_runtime`, `mean_revert`); when `oe_mean_revert`, suppresses the in-memory `outlet_effectiveness_update = 0.0` (live OE frozen on no-signal cycles).
+  - **`src/parameter_optimizer.py::_save_learning_to_thermal_state`** + `ThermalEquilibriumModel` delegating wrapper: new `oe_mean_revert` kwarg; when active, decays `outlet_effectiveness_delta = current * (1 - rate)` instead of accumulating the biased adjustment, and forces the write past the significance gate (incl. a new `elif oe_mean_revert:` branch at the save-call site for pure no-op cycles).
+  - **Tests**: 6 new in `tests/unit/test_oe_delta_mean_reversion.py` (revert-to-baseline passive + active-unstable + multi-cycle decay; byte-identical clean-signal accumulation incl. flag on/off parity; flag-disabled pure-accumulator fallback). Full suite **394 passed** (was 388), zero regressions.
+- **Stability-gate threshold relaxation (`0.15 °C/cycle`) DEFERRED** until 1–2 weeks of the new telemetry are gathered.
+
+---
+
+### 🎯 PRIOR — OFF→ON spike fix: steps 1, 2, 3, 5 complete (Oct 15, 2026)
+
+**Steps 2, 3, 5 implemented & tested (388 passed: 381 unit + 7 integration).** Step 1 (saturation guard) was done prior; step 4 dropped as stale.
+
+- **Step 3 (heat_curve_outlet sourcing)**: New `HEAT_CURVE_OUTLET_ENTITY_ID` config var in `src/config.py` (default `sensor.hp_target_temp_circuit1`, falls back to `ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID`). Updated `src/main.py` feature injection (~line 1237) and shadow-mode deviation (~line 1705) to source from it. `temperature_control.py:213` left unchanged (reads applied setpoint, not curve anchor). Added to `.env`.
+- **Step 5 (prediction metrics persistence)**: `src/prediction_metrics.py::_save_to_state()` now persists computed `accuracy_stats` (mae_1h/6h/24h/all_time, rmse_all_time) and `recent_performance` (last_10_mae/max_error) via `get_metrics(refresh_cache=True)` / `get_recent_performance(10)`, in a nested try so computation failure never blocks history save. 4 new tests in `tests/unit/test_prediction_metrics.py`; `FakeStateManager` updated with full default structure.
+- **Step 2 (OE delta reset)**: Backed up state file; reset `outlet_effectiveness_delta` −0.252→0.0 and `heat_loss_coefficient_delta` −0.088→0.0 in `unified_thermal_state.json`. Runtime OE restored to baseline 1.107. **⚠️ Recurrence risk**: OE gradient may not fire during heating-off periods (passive records skipped) — not yet investigated in `parameter_optimizer.py`; saturation guard (step 1) protects the symptom meanwhile.
+- **Step 4 (last_cycle_time)**: DROPPED — code at `main.py:1840` is correct; "+5min/cycle growth" claim was stale.
+
+**Step 1 recap (saturation guard, done prior)**: Added `_apply_saturation_guard()` to `src/model_wrapper.py::calculate_optimal_outlet_temp` — caps ML outlets pinned to `CLAMP_MAX_ABS=65` when predicted indoor still misses target (weak OE coupling). Falls back toward heat-curve outlet, capped to `curve + SATURATION_GUARD_MAX_DELTA` (10°C). Rejects feedback-contaminated readings using passthrough bounds `[15, 50]`. New config flags `SATURATION_GUARD_ENABLED/MARGIN/MAX_DELTA`. 5 new tests in `TestSaturationGuard`. **Trust state untouched** (avoids demotion-spiral).
+
+Full suite **388 passed** (381 unit + 7 integration, 2.08s).
+
+---
+
+### 🎯 PRIOR — Pass C3: decompose long `main()` in `main.py` (Oct 13, 2026)
 
 **Approved Act-mode structural refactor completed: decomposed the ~1630-line `main()` body into 17 module-level helper functions with zero behavior change.** All helpers stay module-level *inside* `src/main.py` (not new files) so bare-name references resolve through `src.main` globals and respect the ~20 `src.main.<name>` patches the integration/unit tests enforce. Setup/dispatch: `_parse_cli_args`, `_configure_logging`, `_hydrate_sensor_buffer`, `_log_run_mode_status`, `_run_calibration_phase`, `_run_validation_phase`, `_handle_list_backups`, `_handle_restore_backup` (main `return`s after each). Loop-entry: `_update_sensor_buffer_and_thermo` (owns the `get_float_state` closure), `_determine_shadow_mode` (returns `(effective_shadow_mode, ml_heating_enabled)`), `_handle_no_ha_states`. Online learning: `_run_online_learning(...)` → `(wrapper, effective_shadow_mode, skip_cycle)` (the 2 inner `continue` paths → `return (…, True)`; extracted mechanically for byte-fidelity). Continue-blocks (guards stay in main): `_handle_grace_period_passive`, `_save_passive_state_inactive` (bool; owns `HeatingSystemStateChecker`), `_handle_grace_period_skip`, `_handle_blocking_skip` (recomputes own `blocking_reasons`; outer `is_blocking`/`blocking_reasons` stay in main for persistence). Persistence: `_persist_cycle_state(...)`. The inline hot-path per-cycle pipeline (feature build → predict → smart-round → ML-state sensor → shadow compare) stays in `main()` as coherent coupled flow; `get_enhanced_model_wrapper` stays a local import inside `_run_online_learning`. `main()` body ~1630 → **848 lines** (~48%); `src/main.py` 1734 → 1861 (net +127; +887/−760). Full `tests/` suite **379 passed** (2.05s); all `ast.parse` clean; `pyflakes` clean except one *pre-existing* dead `shadow_mode_active` assignment faithfully moved into the helper. **Next**: commit Pass C3; potential future Pass C4 to split the inline hot-path pipeline behind a state-carrier struct.
 

@@ -137,6 +137,9 @@ class ParameterOptimizer:
         outlet_effectiveness_gradient = (
             self.model._calculate_outlet_effectiveness_gradient(recent_predictions)
         )
+        # Capture the raw trajectory-only OE gradient for telemetry before the
+        # equilibrium supplement is added below.
+        trajectory_oe_gradient = outlet_effectiveness_gradient
         # Equilibrium-based OE gradient supplement (T0.5 fix).
         # The trajectory gradient is too weak in stable rooms (approach factor
         # ~0.017 at 30 min with τ≈29 h). This supplement uses the direct
@@ -148,6 +151,26 @@ class ParameterOptimizer:
         )
         outlet_effectiveness_gradient += equilibrium_oe_gradient
 
+        # OE-signal quality accounting. Used both for the passive-protection
+        # guard below and for the OE delta mean-reversion safety net (drift
+        # recurrence fix). "Stable active" = heating on AND |indoor gradient|
+        # below the 0.15 °C/cycle equilibrium-stability threshold -- i.e. a
+        # record that contributes a clean OE signal via the equilibrium
+        # gradient. Records that are passive or active-but-unstable carry no
+        # clean OE signal.
+        n_active = 0
+        n_passive = 0
+        n_stable_active_records = 0
+        for p in recent_predictions:
+            ctx = p.get("context", {})
+            if ctx.get("heating_active", True):
+                n_active += 1
+                if abs(ctx.get("indoor_temp_gradient", 999.0)) < 0.15:
+                    n_stable_active_records += 1
+            else:
+                n_passive += 1
+        all_passive = n_active == 0
+
         # Passive-learning protection: if ALL recent predictions are from
         # heating-off cycles, force OE gradient to zero. Passive cycles
         # carry no outlet signal, so any OE gradient would be spurious and
@@ -156,16 +179,48 @@ class ParameterOptimizer:
         # and the passive trajectory path in _calculate_parameter_gradient
         # already reduce this, but we add a belt-and-suspenders guard here
         # for the fully-passive-window case.)
-        all_passive = all(
-            not p.get("context", {}).get("heating_active", True)
-            for p in recent_predictions
-        )
         if all_passive:
             outlet_effectiveness_gradient = 0.0
             logging.debug(
                 "🔇 All recent predictions are passive (heating off) — "
                 "OE gradient suppressed to prevent corruption."
             )
+
+        # OE delta mean-reversion safety net (drift recurrence fix).
+        # ``outlet_effectiveness_delta`` (persisted in unified_thermal_state)
+        # is a pure accumulator: every cycle adds ``new_oe_adjustment`` with no
+        # reversion path, so any biased OE signal drifts it permanently across
+        # a season. The restoring force is the equilibrium-based OE gradient,
+        # but it is gated out of active-heating cycles by the 0.15 °C/cycle
+        # stability threshold, while the biased trajectory gradient still
+        # fires on those cycles -> one-sided drift. When there is no clean OE
+        # signal (fully-passive window OR zero stable active records) we
+        # suppress the (possibly-biased) in-memory OE update (below) and decay
+        # the persisted delta toward 0.0 (in _save_learning_to_thermal_state)
+        # so the runtime OE self-heals to baseline on the next restart. On
+        # cycles that carry a clean OE signal (>=1 stable active record) this
+        # branch is skipped entirely -- behaviour is byte-identical to the
+        # legacy accumulator.
+        oe_no_clean_signal = all_passive or (n_stable_active_records == 0)
+        oe_mean_revert = bool(
+            getattr(config, "OE_DELTA_MEAN_REVERSION_ENABLED", True)
+        ) and oe_no_clean_signal
+
+        # Telemetry: one concise line per adaptation cycle capturing the OE
+        # signal landscape, for the deferred stability-gate-threshold decision
+        # (needs 1-2 weeks of data). oe_runtime = current in-memory OE.
+        logging.info(
+            "📊 OE telemetry: trajectory_grad=%+.5f, equilibrium_grad=%+.5f, "
+            "n_stable_active=%d, n_active=%d, n_passive=%d, "
+            "oe_runtime=%.4f, mean_revert=%s",
+            trajectory_oe_gradient,
+            equilibrium_oe_gradient,
+            n_stable_active_records,
+            n_active,
+            n_passive,
+            self.model.outlet_effectiveness,
+            oe_mean_revert,
+        )
         pv_heat_weight_gradient = (
             self.model._calculate_pv_heat_weight_gradient(recent_predictions)
         )
@@ -278,6 +333,25 @@ class ParameterOptimizer:
             -max_outlet_effectiveness_change,
             max_outlet_effectiveness_change,
         )
+
+        # OE mean-reversion: when there is no clean OE signal (fully-passive
+        # window or zero stable active records) suppress the possibly-biased
+        # in-memory OE update so the live OE does not ratchet during no-signal
+        # windows. The persisted delta is decayed toward 0.0 separately in
+        # _save_learning_to_thermal_state so the runtime OE self-heals to
+        # baseline on the next restart.
+        if oe_mean_revert:
+            outlet_effectiveness_update = 0.0
+            logging.debug(
+                "🧲 OE mean-reversion: no clean OE signal "
+                "(all_passive=%s, n_stable_active=%d, n_active=%d, "
+                "n_passive=%d) -- suppressing in-memory OE update and "
+                "decaying persisted delta toward 0.0.",
+                all_passive,
+                n_stable_active_records,
+                n_active,
+                n_passive,
+            )
         max_thermal_time_constant_change = (
             PhysicsConstants.MAX_THERMAL_TIME_CONSTANT_CHANGE
         )
@@ -440,6 +514,29 @@ class ParameterOptimizer:
                 self.model.outlet_effectiveness - old_outlet_effectiveness,
                 self.model.pv_heat_weight - old_pv_heat_weight,
                 self.model.tv_heat_weight - old_tv_heat_weight,
+                oe_mean_revert=oe_mean_revert,
+            )
+        elif oe_mean_revert:
+            # No parameter changed this cycle, but the persisted OE delta still
+            # needs to decay toward baseline during no-signal windows so the
+            # runtime OE self-heals to baseline on the next restart. The decay
+            # itself happens inside _save_learning_to_thermal_state.
+            self.model._save_learning_to_thermal_state(
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                oe_mean_revert=True,
+            )
+            logging.debug(
+                "🧲 OE mean-reversion (no param change): decaying persisted "
+                "OE delta toward 0.0 (all_passive=%s, n_stable_active=%d, "
+                "n_active=%d, n_passive=%d)",
+                all_passive,
+                n_stable_active_records,
+                n_active,
+                n_passive,
             )
         else:
             logging.debug(
@@ -834,9 +931,20 @@ class ParameterOptimizer:
         new_outlet_effectiveness_adjustment,
         new_pv_heat_weight_adjustment=0.0,
         new_tv_heat_weight_adjustment=0.0,
+        oe_mean_revert=False,
     ):
         """
         Save learned parameter adjustments to unified thermal state.
+
+        ``oe_mean_revert`` activates the OE delta mean-reversion safety net
+        (drift recurrence fix): when there is no clean OE signal (fully-passive
+        window or zero stable active records) the persisted
+        ``outlet_effectiveness_delta`` is decayed toward 0.0 by
+        ``OE_DELTA_MEAN_REVERSION_RATE`` instead of accumulating the (possibly
+        biased) new OE adjustment. This makes the runtime OE self-heal to
+        baseline on the next restart rather than ratcheting away across a
+        season. On clean-signal cycles ``oe_mean_revert`` is False and the OE
+        delta is accumulated exactly as before (byte-identical).
         """
         try:
             try:
@@ -871,10 +979,6 @@ class ParameterOptimizer:
                 current_heat_loss_coefficient_delta
                 + new_heat_loss_coefficient_adjustment
             )
-            updated_outlet_effectiveness_delta = (
-                current_outlet_effectiveness_delta
-                + new_outlet_effectiveness_adjustment
-            )
             updated_pv_heat_weight_delta = (
                 current_pv_heat_weight_delta + new_pv_heat_weight_adjustment
             )
@@ -882,12 +986,42 @@ class ParameterOptimizer:
                 current_tv_heat_weight_delta + new_tv_heat_weight_adjustment
             )
 
-            if (
+            # OE delta accumulation vs. mean-reversion. outlet_effectiveness_delta
+            # is a pure accumulator with no reversion path; without the decay
+            # any biased OE signal drifts it permanently. When mean-reversion
+            # is active the new (possibly-biased) OE adjustment is discarded and
+            # the accumulated delta is pulled toward 0.0 instead. Byte-identical
+            # to legacy accumulation when oe_mean_revert is False.
+            oe_reversion_enabled = bool(
+                getattr(config, "OE_DELTA_MEAN_REVERSION_ENABLED", True)
+            )
+            if oe_reversion_enabled and oe_mean_revert:
+                decay_rate = float(
+                    getattr(config, "OE_DELTA_MEAN_REVERSION_RATE", 1e-4)
+                )
+                updated_outlet_effectiveness_delta = (
+                    current_outlet_effectiveness_delta * (1.0 - decay_rate)
+                )
+                applied_oe_adjustment = 0.0
+            else:
+                updated_outlet_effectiveness_delta = (
+                    current_outlet_effectiveness_delta
+                    + new_outlet_effectiveness_adjustment
+                )
+                applied_oe_adjustment = new_outlet_effectiveness_adjustment
+
+            # Significance gate. Mean-reversion must always persist the decayed
+            # delta (even when the per-cycle adjustment is ~0), so OR-in the
+            # reversion flag. Other deltas use the legacy threshold.
+            has_significant_change = (
                 abs(new_thermal_adjustment) > 0.001
                 or abs(new_heat_loss_coefficient_adjustment) > 0.0001
-                or abs(new_outlet_effectiveness_adjustment) > 0.0001
+                or abs(applied_oe_adjustment) > 0.0001
                 or abs(new_pv_heat_weight_adjustment) > 0.0001
                 or abs(new_tv_heat_weight_adjustment) > 0.0001
+            )
+            if has_significant_change or (
+                oe_reversion_enabled and oe_mean_revert
             ):
                 state_manager.update_learning_state(
                     learning_confidence=self.model.learning_confidence,
@@ -917,7 +1051,7 @@ class ParameterOptimizer:
                     updated_heat_loss_coefficient_delta,
                     new_heat_loss_coefficient_adjustment,
                     updated_outlet_effectiveness_delta,
-                    new_outlet_effectiveness_adjustment,
+                    applied_oe_adjustment,
                     updated_pv_heat_weight_delta,
                     new_pv_heat_weight_adjustment,
                     updated_tv_heat_weight_delta,

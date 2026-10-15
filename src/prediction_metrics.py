@@ -104,6 +104,29 @@ class PredictionMetrics:
             # Also update the prediction count in metrics section
             self.state_manager.state["prediction_metrics"]["total_predictions"] = len(prediction_list)
             
+            # Persist computed accuracy stats so they survive service restarts.
+            # Previously, the live get_metrics() computed these in-memory but
+            # they were never written back, leaving accuracy_stats and
+            # recent_performance perpetually zeroed in the persisted state
+            # file. Computed in a nested try so a metrics-computation failure
+            # never blocks saving the prediction history itself.
+            try:
+                _metrics = self.get_metrics(refresh_cache=True)
+                self.state_manager.state["prediction_metrics"]["accuracy_stats"] = {
+                    "mae_1h": _metrics.get("1h", {}).get("mae", 0.0),
+                    "mae_6h": _metrics.get("6h", {}).get("mae", 0.0),
+                    "mae_24h": _metrics.get("24h", {}).get("mae", 0.0),
+                    "mae_all_time": _metrics.get("all", {}).get("mae", 0.0),
+                    "rmse_all_time": _metrics.get("all", {}).get("rmse", 0.0),
+                }
+                _perf = self.get_recent_performance(10)
+                self.state_manager.state["prediction_metrics"]["recent_performance"] = {
+                    "last_10_mae": _perf.get("mae", 0.0),
+                    "last_10_max_error": _perf.get("max_error", 0.0),
+                }
+            except Exception as _metrics_err:
+                logging.debug(f"Could not persist accuracy stats: {_metrics_err}")
+            
             # Save unified state
             self.state_manager.save_state()
             
