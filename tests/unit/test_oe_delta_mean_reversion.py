@@ -318,3 +318,65 @@ class TestFlagDisabledFallback:
         # Flag off -> pure accumulation, no decay.
         assert new_delta == pytest.approx(old_delta + oe_change, rel=1e-9)
 
+
+# --- Tests: InfluxDB persistence of OE delta + telemetry -----------------
+
+class TestOEDeltaInfluxPersistence:
+    """``get_adaptive_learning_metrics`` surfaces the persisted
+    ``outlet_effectiveness_delta`` and the per-cycle OE telemetry stashed by
+    the optimizer, so the InfluxDB export can chart drift-vs-heal."""
+
+    def test_metrics_expose_oe_delta_and_telemetry_after_adapt(self, model):
+        """After a clean-signal adaptation cycle the metrics dict carries the
+        persisted OE delta (read back from the state manager) and the exact
+        telemetry the optimizer stashed on the model."""
+        recs = [
+            _make_prediction_record(
+                predicted=21.0, actual=22.0, outlet_temp=45.0,
+                outdoor_temp=15.0, current_indoor=21.0, heating_active=True,
+                indoor_gradient=0.0,
+            )
+            for _ in range(5)
+        ]
+        fake, _old_oe, _old_delta = _run_adapt(
+            model, recs, oe_delta=-0.2, oe_traj_grad=0.0, oe_eq_grad=0.5,
+        )
+        expected_delta = _oe_delta(fake)
+
+        # get_adaptive_learning_metrics reads the state manager, so re-establish
+        # the same patch the _run_adapt context manager has already exited.
+        with patch("src.unified_thermal_state.get_thermal_state_manager",
+                   return_value=fake):
+            metrics = model.get_adaptive_learning_metrics()
+
+        assert "outlet_effectiveness_delta" in metrics
+        assert metrics["outlet_effectiveness_delta"] == pytest.approx(
+            expected_delta, rel=1e-9
+        )
+        tel = metrics["oe_telemetry"]
+        assert isinstance(tel, dict)
+        assert tel.get("trajectory_oe_gradient") == pytest.approx(0.0, abs=1e-9)
+        assert tel.get("equilibrium_oe_gradient") == pytest.approx(0.5, abs=1e-9)
+        assert tel.get("n_stable_active_records") == 5
+        assert tel.get("n_active") == 5
+        assert tel.get("n_passive") == 0
+        # clean signal -> mean_revert must be False
+        assert tel.get("oe_mean_revert") is False
+
+    def test_metrics_default_when_no_adaptation_ran(self, model):
+        """A fresh model that has never adapted exposes an empty telemetry dict
+        and a zero OE delta (read from a clean state manager)."""
+        model.prediction_history = [
+            _make_prediction_record(
+                predicted=20.0, actual=20.1, outlet_temp=45.0,
+                outdoor_temp=15.0, current_indoor=20.0, heating_active=True,
+            )
+        ]
+        fake = FakeStateManager(oe_delta=0.0)
+        with patch("src.unified_thermal_state.get_thermal_state_manager",
+                   return_value=fake):
+            metrics = model.get_adaptive_learning_metrics()
+        assert metrics["outlet_effectiveness_delta"] == pytest.approx(0.0)
+        assert metrics["oe_telemetry"] == {}
+
+

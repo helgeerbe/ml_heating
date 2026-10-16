@@ -340,13 +340,22 @@ class EnhancedModelWrapper:
         extreme in that state is unsafe and far above what the heat-pump's
         own curve would set.
 
-        This guard detects that saturation and falls back toward the
-        heat-pump's own curve outlet, capped to a bounded deviation
-        (``SATURATION_GUARD_MAX_DELTA``), mirroring the curve's deliberate
-        self-limiting behaviour. Contaminated heat-curve readings (the ML's
-        own previous command echoed back through the heat-curve entity in
-        active mode) are rejected using the same bounds as the passthrough
-        guard, falling back to ``CONSERVATIVE_FALLBACK_TEMP``.
+        This guard detects that saturation and falls back to the heat-pump's
+        own curve outlet *verbatim* — i.e. the heat-curve entity's value is
+        used directly with no added offset. The heat-curve entity reports the
+        heat pump's APPLIED target, which already includes its own shift
+        automation (the curve's deliberate self-limit). Adding any further
+        offset here would double-shift and make the ML up to +10 °C MORE
+        aggressive than the curve it replaces — the opposite of the guard's
+        intent (see BUGFIX_OE_DRIFT_AND_PASSTHROUGH_CAP.md). There is
+        deliberately no "max delta" knob: a non-zero delta would only be correct
+        if a TRUE base/unshifted curve entity were wired in as the anchor, and
+        exposing it would re-create the double-shift footgun. Re-add an
+        (adaptive) offset only if/when such a base-curve entity exists.
+        Contaminated heat-curve readings (the ML's own previous command echoed
+        back through the heat-curve entity in active mode) are rejected using
+        the same bounds as the passthrough guard, falling back to
+        ``CONSERVATIVE_FALLBACK_TEMP``.
 
         Returns ``(outlet, was_guarded, reason)``.
         """
@@ -386,19 +395,17 @@ class EnhancedModelWrapper:
             if hc is None:
                 # No genuine curve available (offline or contaminated by the
                 # ML's own previous command). Use the conservative fallback
-                # directly — do NOT inflate it by the delta, which is only
-                # meant to let the ML be slightly more aggressive than a
-                # *genuine* curve.
+                # directly.
                 guarded = config.CONSERVATIVE_FALLBACK_TEMP
                 anchor_src = (
                     "conservative-fallback "
                     "(heat-curve unavailable/contaminated)"
                 )
             else:
-                guarded = min(
-                    config.CLAMP_MAX_ABS,
-                    hc + config.SATURATION_GUARD_MAX_DELTA,
-                )
+                # Use the curve verbatim — the heat-curve entity already
+                # includes the heat pump's shift automation, so any added
+                # offset would double-shift (see method docstring).
+                guarded = min(config.CLAMP_MAX_ABS, hc)
                 anchor_src = f"heat-curve={hc:.1f}°C"
             guarded = max(guarded, config.CLAMP_MIN_ABS)
 
@@ -406,14 +413,13 @@ class EnhancedModelWrapper:
                 "🛑 SATURATION GUARD (heating): ML %.1f°C predicted only "
                 "%.2f°C indoor (target %.1f°C, current %.1f°C) even at the "
                 "clamp — outlet→indoor coupling too weak. Capping to %.1f°C "
-                "(anchor: %s, max +%.1f°C).",
+                "(anchor: %s).",
                 ml_outlet,
                 predicted_indoor,
                 target_indoor,
                 current_indoor,
                 guarded,
                 anchor_src,
-                config.SATURATION_GUARD_MAX_DELTA,
             )
             return guarded, True, reason
 
@@ -438,10 +444,9 @@ class EnhancedModelWrapper:
                     "floor-clamp (heat-curve unavailable/contaminated)"
                 )
             else:
-                guarded = max(
-                    config.CLAMP_MIN_ABS,
-                    hc - config.SATURATION_GUARD_MAX_DELTA,
-                )
+                # Use the curve verbatim — see method docstring (no offset;
+                # the curve already includes the heat pump's shift).
+                guarded = max(config.CLAMP_MIN_ABS, hc)
                 anchor_src = f"heat-curve={hc:.1f}°C"
             guarded = min(guarded, config.CLAMP_MAX_ABS)
 
@@ -449,14 +454,13 @@ class EnhancedModelWrapper:
                 "🛑 SATURATION GUARD (cooling): ML %.1f°C predicted only "
                 "%.2f°C indoor (target %.1f°C, current %.1f°C) even at the "
                 "floor — outlet→indoor coupling too weak. Capping to %.1f°C "
-                "(anchor: %s, max −%.1f°C).",
+                "(anchor: %s).",
                 ml_outlet,
                 predicted_indoor,
                 target_indoor,
                 current_indoor,
                 guarded,
                 anchor_src,
-                config.SATURATION_GUARD_MAX_DELTA,
             )
             return guarded, True, reason
 

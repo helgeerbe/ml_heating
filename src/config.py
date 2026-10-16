@@ -294,11 +294,13 @@ PASSTHROUGH_MAX_SAFE_OUTLET: float = float(
 # the target, the model's outlet→indoor coupling is too weak to be trustworthy
 # (typically outlet-effectiveness drift after a long heating-off period). In
 # that case the ML must NOT command the clamp extreme; instead it falls back
-# toward the heat-pump's own curve (mirroring the curve's deliberate +shift
-# self-limit) and accepts the residual error. This directly prevents the
-# OFF→ON transition spike (e.g. 65 °C commanded vs ~42 °C heat curve, +23 °C
-# deviation) observed when stale outlet effectiveness makes the search
-# unable to reach target even at the ceiling.
+# to the heat-pump's own curve outlet and accepts the residual error. The
+# heat-curve entity (sensor.hp_target_temp_circuit1) reports the heat pump's
+# APPLIED target, which already includes its own shift automation (the curve's
+# deliberate self-limit), so the guard commands that value verbatim. This
+# directly prevents the OFF→ON transition spike (e.g. 65 °C commanded vs
+# ~42 °C heat curve) observed when stale outlet effectiveness makes the
+# search unable to reach target even at the ceiling.
 SATURATION_GUARD_ENABLED: bool = (
     os.getenv("SATURATION_GUARD_ENABLED", "true").lower() == "true"
 )
@@ -308,12 +310,17 @@ SATURATION_GUARD_ENABLED: bool = (
 SATURATION_GUARD_MARGIN: float = float(
     os.getenv("SATURATION_GUARD_MARGIN", "0.5")
 )
-# Maximum deviation (°C) the guarded outlet may exceed the heat-curve outlet
-# when saturated (heating) / fall below it (cooling). Mirrors the heat curve's
-# own +shift cap so the ML is no more aggressive than the curve it replaces.
-SATURATION_GUARD_MAX_DELTA: float = float(
-    os.getenv("SATURATION_GUARD_MAX_DELTA", "10.0")
-)
+# NOTE: There is deliberately NO "max delta" knob for the saturation guard.
+# The guard falls back to the heat-curve entity's value *verbatim* because that
+# entity reports the heat pump's APPLIED target, which already includes its own
+# shift automation (capped at +10 °C). Adding any further offset here would
+# double-shift and make the ML up to +10 °C MORE aggressive than the curve it
+# replaces — the opposite of the guard's intent (see
+# BUGFIX_OE_DRIFT_AND_PASSTHROUGH_CAP.md and the HEAT_CURVE_OUTLET_ENTITY_ID
+# semantics). A non-zero delta would only be correct if a TRUE base/unshifted
+# curve entity were wired in as the anchor; exposing such a knob would re-create
+# the double-shift footgun, so it is omitted. Re-add an (adaptive) offset only
+# if/when such a base-curve entity exists.
 
 # OE delta mean-reversion safety net (drift recurrence fix).
 # ``outlet_effectiveness_delta`` (persisted in unified_thermal_state.json) is

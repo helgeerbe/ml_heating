@@ -861,6 +861,33 @@ class InfluxService:
             )
             p = p.field("parameter_updates_24h", int(parameter_updates_24h))
 
+            # OE drift-vs-heal telemetry (for the deferred stability-gate
+            # analysis). outlet_effectiveness_delta is the persisted
+            # accumulator; the oe_* fields are the per-cycle signal landscape
+            # stashed by ParameterOptimizer and surfaced via
+            # get_adaptive_learning_metrics. Counts/flag are cast to int so
+            # InfluxDB stores them as integer fields.
+            p = p.field(
+                "outlet_effectiveness_delta",
+                float(learning_metrics.get("outlet_effectiveness_delta", 0.0)),
+            )
+            _oe_tel = learning_metrics.get("oe_telemetry", {}) or {}
+            p = p.field(
+                "oe_trajectory_gradient",
+                float(_oe_tel.get("trajectory_oe_gradient", 0.0)),
+            )
+            p = p.field(
+                "oe_equilibrium_gradient",
+                float(_oe_tel.get("equilibrium_oe_gradient", 0.0)),
+            )
+            p = p.field(
+                "oe_n_stable_active",
+                int(_oe_tel.get("n_stable_active_records", 0)),
+            )
+            p = p.field("oe_n_active", int(_oe_tel.get("n_active", 0)))
+            p = p.field("oe_n_passive", int(_oe_tel.get("n_passive", 0)))
+            p = p.field("oe_mean_revert", int(bool(_oe_tel.get("oe_mean_revert", False))))
+
             self.write_api.write(bucket=write_bucket, org=write_org, record=p)
 
             logging.debug(

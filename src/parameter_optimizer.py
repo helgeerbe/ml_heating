@@ -221,6 +221,22 @@ class ParameterOptimizer:
             self.model.outlet_effectiveness,
             oe_mean_revert,
         )
+
+        # Persist the just-computed OE telemetry on the model so the per-cycle
+        # InfluxDB export (model_wrapper._export_metrics_to_influxdb -> influx
+        # service) can ship it alongside the learning metrics for the deferred
+        # stability-gate-threshold analysis. Stashed *after* the log line so it
+        # only updates on cycles that actually reach the adaptation decision
+        # (early-return / catastrophic-guard cycles keep the previous value).
+        self.model.last_oe_telemetry = {
+            "trajectory_oe_gradient": float(trajectory_oe_gradient),
+            "equilibrium_oe_gradient": float(equilibrium_oe_gradient),
+            "n_stable_active_records": int(n_stable_active_records),
+            "n_active": int(n_active),
+            "n_passive": int(n_passive),
+            "oe_mean_revert": bool(oe_mean_revert),
+        }
+
         pv_heat_weight_gradient = (
             self.model._calculate_pv_heat_weight_gradient(recent_predictions)
         )

@@ -1212,6 +1212,27 @@ class ThermalEquilibriumModel:
             outlet_effectiveness_stability = 0.0
             recent_gradients = {}
 
+        # Pull the persisted outlet_effectiveness_delta (drift-vs-heal
+        # accumulator) and the per-cycle OE telemetry stashed by
+        # ParameterOptimizer._adapt_parameters_from_recent_errors, so the
+        # InfluxDB export can chart them for the deferred stability-gate
+        # analysis. Both default safely when adaptation has not run yet.
+        oe_telemetry = getattr(self, "last_oe_telemetry", {}) or {}
+        oe_delta = 0.0
+        try:
+            try:
+                from .unified_thermal_state import get_thermal_state_manager
+            except ImportError:  # pragma: no cover - notebook fallback
+                from unified_thermal_state import get_thermal_state_manager
+            _sm = get_thermal_state_manager()
+            oe_delta = float(
+                _sm.state.get("learning_state", {})
+                .get("parameter_adjustments", {})
+                .get("outlet_effectiveness_delta", 0.0)
+            )
+        except Exception:
+            pass
+
         return {
             "total_predictions": len(self.prediction_history),
             "parameter_updates": len(self.parameter_history),
@@ -1231,6 +1252,8 @@ class ThermalEquilibriumModel:
             "heat_loss_coefficient_stability": heat_loss_coefficient_stability,
             "outlet_effectiveness_stability": outlet_effectiveness_stability,
             "recent_gradients": recent_gradients,
+            "outlet_effectiveness_delta": oe_delta,
+            "oe_telemetry": oe_telemetry,
             "current_parameters": {
                 "thermal_time_constant": self.thermal_time_constant,
                 "heat_loss_coefficient": self.heat_loss_coefficient,

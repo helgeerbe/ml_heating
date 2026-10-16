@@ -1,8 +1,32 @@
 # Active Context - Current Work & Decision State
 
+### 📊 **GRAFANA OBSERVABILITY DASHBOARD (Oct 15, 2026)**
+
+**STATUS**: Delivered. Created `grafana/` artifact with an importable Grafana 12 dashboard JSON + README. Manual browser import only (no provisioning, no push script).
+
+#### Artifacts
+- **`grafana/ml-heating-observability.json`** — importable dashboard (schemaVersion 39, uid `ml-heating-obs`). 10 rows, 48 content panels (58 total). Covers **all 8 InfluxDB measurements** in the `ml_heating_features` bucket.
+- **`grafana/README.md`** — import steps + a Flux verification query to confirm `homeflux` has read access to `ml_heating_features`.
+
+#### Key design points
+- Bound to the existing **`homeflux`** datasource (uid `59kx3nmgz`, Flux, org `erbehome`, `http://influxdb:8086`) via a dashboard variable `$DS_HOMEFLUX`. All queries `from(bucket: "ml_heating_features")`.
+- **Row 2 = OE Drift-vs-Heal** ⭐ (the new per-cycle telemetry): `outlet_effectiveness_delta` (drift accumulator), trajectory vs equilibrium gradients, OE + correction %, active/passive/stable-active stacked counts, `oe_mean_revert` state timeline. Directly supports the deferred stability-gate threshold-relaxation analysis (~Oct 29 target).
+- Rows: 1 System Health · 2 OE Drift-vs-Heal · 3 Prediction Accuracy · 4 Thermal Parameters · 5 Learning Phase · 6 Trajectory Forecast · 7 Shadow Benchmark · 8 Thermodynamics · 9 Trust State · 10 Feature Importance.
+- Built via `/tmp/gen_grafana_dashboard.py` (Python builder emitting valid JSON; not committed to repo).
+
+#### Validation
+- JSON parses cleanly (`json.load` round-trip OK). All 8 measurements present in queries. All panel targets reference `${DS_HOMEFLUX}`. OE telemetry fields confirmed present.
+- **Assumption flagged**: `homeflux` token must have read access to the `ml_heating_features` bucket — README includes the verification query.
+
+#### Next (user actions)
+1. Import via Grafana UI → Dashboards → New → Import → Upload JSON.
+2. Verify `homeflux` can read `ml_heating_features` (Explore → Flux query in README).
+
+---
+
 ### 🎯 **OE DELTA MEAN-REVERSION SAFETY NET — drift recurrence fix (Oct 15, 2026)**
 
-**STATUS**: Act-mode fix **implemented & tested** (394 passed: 387 unit + 7 integration). Closes the last open item of the 5-step OFF→ON transition spike fix plan.
+**STATUS**: Act-mode fix **implemented & tested** (394 passed: 387 unit + 7 integration). Closes the last open item of the 5-step OFF→ON transition spike fix plan. **InfluxDB persistence of OE delta + telemetry added Oct 15** (396 passed) — see task block below.
 
 #### Root cause (confirmed)
 `outlet_effectiveness_delta` (persisted in `unified_thermal_state.json`) is a **pure accumulator** in `parameter_optimizer.py::_save_learning_to_thermal_state` (legacy `:876`) with no mean-reversion path. The restoring force (equilibrium-based OE gradient) is gated out of active-heating cycles by the `0.15 °C/cycle` stability threshold (`:624-626`), while the biased trajectory gradient still fires on those cycles → one-sided permanent drift. Symmetric cold-weather damping slows the bias but does not remove it. The Oct-12 manual reset fixed the value, not the mechanism → recurrence was inevitable.
@@ -26,6 +50,48 @@
 #### Verification
 - New tests: 6/6 pass.
 - Full suite: **394 passed** (was 388; +6 new), 2.30s, zero regressions.
+
+---
+
+### 📋 **OE DELTA + TELEMETRY InfluxDB persistence (Oct 15, 2026)**
+
+**STATUS**: Implemented & tested (396 passed: 389 unit + 7 integration). Ships the per-cycle OE drift-vs-heal telemetry to InfluxDB so it can be charted and used for the deferred stability-gate analysis.
+
+#### Changes (3 source files + 1 test file)
+- **`src/parameter_optimizer.py::_adapt_parameters_from_recent_errors`**: after the `📊 OE telemetry` log line, stashes the just-computed telemetry on `self.model.last_oe_telemetry` (`trajectory_oe_gradient`, `equilibrium_oe_gradient`, `n_stable_active_records`, `n_active`, `n_passive`, `oe_mean_revert`). Placed after the log so it only updates on cycles that reach the adaptation decision (catastrophic-guard / early-return cycles keep the previous value).
+- **`src/thermal_equilibrium_model.py::get_adaptive_learning_metrics`**: reads the persisted `outlet_effectiveness_delta` from the in-memory unified thermal state manager and the stashed `last_oe_telemetry`, exposing both in the returned metrics dict as `outlet_effectiveness_delta` and `oe_telemetry` (both default safely when adaptation has not run yet).
+- **`src/influx_service.py::write_thermal_learning_metrics`**: adds the new fields to the existing `ml_thermal_parameters` point before `write_api.write(...)`: `outlet_effectiveness_delta` (float), `oe_trajectory_gradient` (float), `oe_equilibrium_gradient` (float), `oe_n_stable_active` (int), `oe_n_active` (int), `oe_n_passive` (int), `oe_mean_revert` (int 0/1). Counts/flag cast to int so InfluxDB stores them as integer fields.
+- **`tests/unit/test_oe_delta_mean_reversion.py`** (+2 tests, `TestOEDeltaInfluxPersistence`): metrics expose OE delta + telemetry after a clean-signal adapt; metrics default to `{}`/0.0 when no adaptation has run. Full suite **396 passed** (was 394), zero regressions.
+
+#### Grafana / InfluxDB result (one-glance drift-vs-heal)
+Measurement `ml_thermal_parameters`, per cycle:
+- `outlet_effectiveness_delta` — the drift-vs-heal accumulator series (decays toward 0 on no-signal cycles, accumulates on clean-signal cycles).
+- `oe_mean_revert` (0/1) — marks which cycles are healing vs. accumulating.
+- `oe_n_stable_active`, `oe_n_active`, `oe_n_passive` — signal-quality counts.
+- `oe_trajectory_gradient`, `oe_equilibrium_gradient` — the gradient signs driving the gate decision.
+
+#### Design note
+Reused the existing per-cycle export pipeline (`model_wrapper._export_metrics_to_influxdb` runs after `update_prediction_feedback`, which runs the adaptation) so the stashed telemetry is always fresh at export time. The optimizer stays free of InfluxDB imports (matches its "holds no state of its own" contract); values are passed through the model via the sanctioned `self.model` attribute pattern.
+
+---
+
+### 📋 **TASK — OE stability-gate threshold relaxation analysis (DEFERRED ~1–2 weeks)**
+
+**Target date**: ~Oct 29, 2026 (after ~2 weeks / ~672 cycles of the new telemetry at 30-min cadence).
+
+**Do**: review the InfluxDB measurement `ml_thermal_parameters` written since Oct 15 and decide whether to relax the `0.15 °C/cycle` equilibrium-stability threshold in `parameter_optimizer.py` (the gate that stops the equilibrium OE gradient from firing on active-heating cycles — the original root cause of the one-sided OE drift).
+
+**Trend to examine**:
+- `outlet_effectiveness_delta` — drift vs. heal (should hover near 0, not trend monotonically away).
+- `oe_n_stable_active` — is the equilibrium gradient ever firing on active cycles (count > 0), or pinned at 0?
+- `oe_trajectory_gradient` / `oe_equilibrium_gradient` — the gradient signs driving each gate decision.
+- `oe_mean_revert` ratio — share of cycles that are healing (no-signal) vs. accumulating (clean-signal).
+
+**Early off-ramps (don't wait the full 2 weeks)**:
+- (a) `oe_n_stable_active` pinned at 0 for 7 days → the equilibrium gradient never fires on active cycles → the threshold is too strict and should be relaxed.
+- (b) `outlet_effectiveness_delta` trends monotonically away from 0 over ~150 active cycles → drift is recurring despite the mean-reversion safety net → relax the threshold (and/or raise `OE_DELTA_MEAN_REVERSION_RATE`).
+
+**If relaxing**: lower the `0.15` constant in `parameter_optimizer.py` (search `0.15` / `indoor_temp_gradient` stability check) so the equilibrium gradient can fire on mildly-stable active cycles, restoring the two-sided restoring force. Re-run the suite; the byte-identical clean-signal tests in `test_oe_delta_mean_reversion.py` will confirm no regression.
 
 ---
 
@@ -78,12 +144,12 @@
 **Fix (step 1 — DONE)**: Added a **saturation guard** in `src/model_wrapper.py` `calculate_optimal_outlet_temp`:
 - New `_apply_saturation_guard(ml_outlet, predicted_indoor, current_indoor, target_indoor, heat_curve_temp)` method.
 - Detects saturation: heating (target>current, `ml_outlet >= CLAMP_MAX_ABS - margin`, `predicted_indoor < target - tol`) and the cooling mirror.
-- When saturated, **does NOT command the clamp extreme**. Falls back toward the heat-pump's own curve outlet, capped to `heat_curve + SATURATION_GUARD_MAX_DELTA` (default 10°C, mirroring the curve's own +shift cap).
+- When saturated, **does NOT command the clamp extreme**. Falls back to the heat-pump's own curve outlet **verbatim** (no offset). The heat-curve entity reports the APPLIED target which already includes the heat pump's shift automation; adding any offset would double-shift. (Note: there is deliberately **no** `SATURATION_GUARD_MAX_DELTA` knob — it was a dead `0.0` flag removed on Oct 16 to eliminate the double-shift footgun; see below.)
 - **Contamination rejection**: in active mode the heat-curve entity (`ACTUAL_TARGET_OUTLET_TEMP_ENTITY_ID`) echoes the ML's own previous command (observed 65°C). Reuses the passthrough bounds `[AUTO_CAL_PASSTHROUGH_MIN_OUTLET=15, PASSTHROUGH_MAX_SAFE_OUTLET=50]` to reject contaminated readings; on rejection, heating → `CONSERVATIVE_FALLBACK_TEMP` (35), cooling → `CLAMP_MIN_ABS` (floor, since the 35 fallback is heating-biased and would wrongly raise a cooling outlet).
 - Metadata: `saturation_guarded`, `saturation_reason`, `ml_outlet_temp_raw` (unguarded value preserved for diagnostics). Does **not** touch trust state (avoids demotion-spiral per prior learnings).
-- New config flags in `src/config.py`: `SATURATION_GUARD_ENABLED` (true), `SATURATION_GUARD_MARGIN` (0.5), `SATURATION_GUARD_MAX_DELTA` (10.0).
+- Config flags in `src/config.py`: `SATURATION_GUARD_ENABLED` (true), `SATURATION_GUARD_MARGIN` (0.5). **`SATURATION_GUARD_MAX_DELTA` was REMOVED on Oct 16** (it was a dead `0.0` knob; keeping it set-to-0 was a latent landmine — an operator setting it non-zero would re-introduce the +10 double-shift the guard exists to prevent). The guard now uses the heat-curve value *verbatim* with no offset. The removal is documented in `config.py` (design rationale) and guarded by a new unit test (`test_no_saturation_max_delta_knob_exists` asserts the attribute stays gone, so a re-add is deliberate/reviewed). A non-zero delta is only valid with a TRUE base/unshifted curve anchor, which does not exist yet.
 
-**Tests added** (`tests/unit/test_model_wrapper.py::TestSaturationGuard`, 5 tests): heating-saturation-caps-to-heat-curve (reproduces the incident: 65→52), contaminated-heat-curve-rejected (65→35), no-saturation-when-target-reachable (genuine cold-weather demand passes through), guard-disabled-passthrough, cooling-saturation-at-floor. Also updated `tests/unit/test_regression_scenarios.py::test_startup_overshoot_prevention` to provide a realistic `heat_curve_temp` (the guard now correctly caps the weak-OE startup to curve+delta instead of the raw 65 spike — better fulfils the "no extreme spike" intent).
+**Tests added** (`tests/unit/test_model_wrapper.py::TestSaturationGuard`, 5 tests): heating-saturation-caps-to-heat-curve (reproduces the incident: 65→42), contaminated-heat-curve-rejected (65→35), no-saturation-when-target-reachable (genuine cold-weather demand passes through), guard-disabled-passthrough, cooling-saturation-at-floor. Also updated `tests/unit/test_regression_scenarios.py::test_startup_overshoot_prevention` to provide a realistic `heat_curve_temp` (the guard now correctly caps the weak-OE startup to the heat-curve value instead of the raw 65 spike — better fulfils the "no extreme spike" intent).
 
 **Gotcha fixed during testing**: `mocker.patch('src.config.X', v)` (string-based) is vulnerable to a *transient* whole-module `patch('src.config')` from `test_regression_scenarios.py` replacing the `src.config` **package attribute** with a Mock; model_wrapper reads the real `sys.modules['src.config']` module object (bound via `from src import config` at import), so the string patch silently no-ops. Use **object-based** `mocker.patch.object(config, 'SATURATION_GUARD_ENABLED', False)` (the test's `config` is bound to the real module at collection) to patch what model_wrapper actually reads. Note: `test_regression_scenarios`'s `patch('src.config')` is effectively a no-op for model_wrapper config (model_wrapper uses real config all along); only test fields set on the mock that *happen* to match real defaults mask this.
 
@@ -1591,16 +1657,29 @@ low, high = self.min_outlet_temp, self.max_outlet_temp
     - `SensorDataManager`: Handles sensor retrieval and validation
     - `BlockingStateManager`: Manages DHW/Defrost blocking
     - `HeatingSystemStateChecker`: Monitors system status
-- **Result**: `main.py` reduced to <300 lines of high-level orchestration
 
-**Files Created**:
-```python
-# src/heating_controller.py - Heating System Management
-class HeatingController: ...
-class SensorDataManager: ...
-class BlockingStateManager: ...
-class HeatingSystemStateChecker: ...
+---
 
-# src/temperature_control.py - Temperature Management
-class TemperatureController: ...
-```
+## 2026-10-15 — Grafana boolean-field panel fix (implemented & verified)
+
+**Problem**: Several Grafana dashboard panels for boolean/state fields returned no data or 500-panicked the InfluxDB server. Root cause, determined via live InfluxDB testing against `ml_heating_features` (20.10.0.10:8086):
+
+- `is_improving` is a **true boolean** in storage — Flux `mean()` silently drops it (400/no-data), and `max()` **panics the InfluxDB server (500)**.
+- `is_trusted` is stored as **int64** — `mean()` always worked; its panel was never broken.
+- A prior `mean→max` auto-promotion fix was therefore a **regression**: `is_improving` panels (#4, #18B) went from 400 (no-data) to 500 (server panic).
+- `exported` is a **string field** (timestamp), not boolean — must not be in `BOOL_FIELDS`.
+
+**Fix** (in `/tmp/gen_grafana_dashboard.py`, the dashboard generator):
+1. Removed `exported` from `BOOL_FIELDS`.
+2. In `flux()`: auto-promote default `mean`→`last` (not `max`) for boolean-only queries; inject `|> map(fn: (r) => ({r with _value: float(v: r._value)}))` before `aggregateWindow`. The `float()` cast is type-agnostic — safe on both true booleans and int flags — so `last`/`max` operate on `{0.0,1.0}` regardless of storage type. Explicit `agg="max"` panels keep `max` but still get the cast.
+3. Regenerated `/opt/ml_heating/grafana/ml-heating-observability.json` (58 panels, valid JSON).
+
+**Live verification** (`/tmp/verify_panels.py`, `every: 5m`, `-7d..now()`): all target panels return **zero 400/500 errors** with correct `{0.0,1.0}` float values:
+- #3 `is_trusted` (last): 404 rows, {0.0,1.0}
+- #4 `is_improving` (last): 922 rows, {0.0,1.0}
+- #18B `is_improving` (last): 922 rows, {0.0,1.0}
+- #39 `overshoot_predicted` (max): 968 rows, {0.0}
+- #53 `is_trusted` (max): 404 rows, {0.0,1.0}
+
+**Next (user)**: re-import `ml-heating-observability.json` in the Grafana UI and visually confirm the boolean panels render {0,1} state.
+

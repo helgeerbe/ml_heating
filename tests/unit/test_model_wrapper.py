@@ -342,11 +342,24 @@ class TestSaturationGuard:
     absolute clamp when the predicted indoor still cannot reach the target
     (weak outlet->indoor coupling, e.g. after a long heating-off period)."""
 
+    def test_no_saturation_max_delta_knob_exists(self):
+        """Guard against silent reintroduction of the double-shift footgun.
+        SATURATION_GUARD_MAX_DELTA was removed (a dead 0.0 knob that could
+        only ever re-create the +10 double-shift bug if set non-zero). Assert
+        it stays gone so a future re-add is a deliberate, reviewed change."""
+        assert not hasattr(config, "SATURATION_GUARD_MAX_DELTA"), (
+            "SATURATION_GUARD_MAX_DELTA was re-added to config — this knob "
+            "double-shifts the heat curve (curve already includes the heat "
+            "pump's shift). Re-add only with a TRUE base/unshifted curve anchor."
+        )
+
     def test_heating_saturation_caps_to_heat_curve(self, trusted_wrapper_instance, mocker):
         """Reproduce the OFF->ON incident: binary search saturates at the
         65C ceiling but predicted indoor (20.0) still misses the 21.5C
-        target. The guard must NOT command 65C; it must fall back toward
-        the heat-curve value (42C) capped to a bounded deviation."""
+        target. The guard must NOT command 65C; it must fall back to the
+        heat-curve value (42C) VERBATIM. The heat-curve entity already
+        includes the heat pump's shift automation, so no extra offset is
+        added (would double-shift — the curve already includes the shift)."""
         mocker.patch.object(
             trusted_wrapper_instance, '_calculate_required_outlet_temp',
             return_value=65.0,
@@ -370,7 +383,7 @@ class TestSaturationGuard:
         assert optimal_temp < 65.0, (
             f"Saturation guard failed: commanded {optimal_temp}C at the clamp"
         )
-        assert optimal_temp == pytest.approx(52.0, abs=0.5)
+        assert optimal_temp == pytest.approx(42.0, abs=0.5)
         assert metadata['saturation_guarded'] is True
         assert metadata['saturation_reason'] == 'heating-saturated-at-ceiling'
         assert metadata['ml_outlet_temp_raw'] == 65.0
@@ -465,7 +478,8 @@ class TestSaturationGuard:
 
     def test_cooling_saturation_caps_at_floor(self, trusted_wrapper_instance, mocker):
         """Mirror case: cooling scenario saturates at the floor clamp while
-        predicted indoor still exceeds target -> guard caps toward curve."""
+        predicted indoor still exceeds target -> guard falls back to the
+        heat-curve value (30C) VERBATIM (no -delta: curve already shifted)."""
         mocker.patch.object(
             trusted_wrapper_instance, '_calculate_required_outlet_temp',
             return_value=config.CLAMP_MIN_ABS,
@@ -488,5 +502,5 @@ class TestSaturationGuard:
 
         assert metadata['saturation_guarded'] is True
         assert metadata['saturation_reason'] == 'cooling-saturated-at-floor'
-        assert optimal_temp == pytest.approx(20.0, abs=0.5)
+        assert optimal_temp == pytest.approx(30.0, abs=0.5)
 
